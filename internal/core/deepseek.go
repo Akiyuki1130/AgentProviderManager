@@ -62,19 +62,54 @@ func DeepSeekLoadConfig(path string) (map[string]interface{}, error) {
 	return m, nil
 }
 
+func DeepSeekProvidersMap(cfg map[string]interface{}) map[string]interface{} { return deepSeekProvidersMap(cfg) }
+
 func deepSeekProvidersMap(cfg map[string]interface{}) map[string]interface{} {
 	if cfg == nil {
 		return nil
 	}
+	merged := map[string]interface{}{}
 	if llm, ok := cfg["llm-pi-ai"].(map[string]interface{}); ok {
 		if prov, ok := llm["providers"].(map[string]interface{}); ok {
-			return prov
+			for k, v := range prov {
+				merged[k] = v
+			}
 		}
 	}
-	if p, ok := cfg["provider"].(map[string]interface{}); ok && len(p) > 0 {
-		return p
+	if p, ok := cfg["provider"].(map[string]interface{}); ok {
+		for k, v := range p {
+			if _, exists := merged[k]; !exists {
+				merged[k] = v
+			}
+		}
+	}
+	if len(merged) > 0 {
+		return merged
 	}
 	return nil
+}
+
+func deepSeekProviderSource(cfg map[string]interface{}, providerID string) (string, map[string]interface{}) {
+	if cfg == nil {
+		return "", nil
+	}
+	if llm, ok := cfg["llm-pi-ai"].(map[string]interface{}); ok {
+		if prov, ok := llm["providers"].(map[string]interface{}); ok {
+			if v, ok := prov[providerID]; ok {
+				if m, ok := v.(map[string]interface{}); ok {
+					return "llm", m
+				}
+			}
+		}
+	}
+	if prov, ok := cfg["provider"].(map[string]interface{}); ok {
+		if v, ok := prov[providerID]; ok {
+			if m, ok := v.(map[string]interface{}); ok {
+				return "provider", m
+			}
+		}
+	}
+	return "", nil
 }
 
 func isDeepSeekLLMMode(cfg map[string]interface{}) bool {
@@ -82,6 +117,9 @@ func isDeepSeekLLMMode(cfg map[string]interface{}) bool {
 		return false
 	}
 	if llm, ok := cfg["llm-pi-ai"].(map[string]interface{}); ok {
+		if prov, ok := llm["providers"].(map[string]interface{}); ok && len(prov) > 0 {
+			return true
+		}
 		if _, ok := llm["providers"].(map[string]interface{}); ok {
 			if _, hasProvider := cfg["provider"]; !hasProvider {
 				return true
@@ -267,6 +305,17 @@ func ConvertDeepSeekProvider(providerID string, raw map[string]interface{}, kind
 	baseURL, _ := raw["baseURL"].(string)
 	apiKey, _ := raw["apiKey"].(string)
 	apiKeyEnv, _ := raw["apiKeyEnv"].(string)
+	if opts, ok := raw["options"].(map[string]interface{}); ok {
+		if baseURL == "" {
+			baseURL, _ = opts["baseURL"].(string)
+		}
+		if apiKey == "" {
+			apiKey, _ = opts["apiKey"].(string)
+		}
+		if apiKeyEnv == "" {
+			apiKeyEnv, _ = opts["apiKeyEnv"].(string)
+		}
+	}
 	if apiKey == "" && apiKeyEnv != "" {
 		creds := loadCredentials("")
 		if v, ok := creds[apiKeyEnv]; ok {
@@ -383,6 +432,17 @@ func DeepSeekImportPreview(path string) ImportPreview {
 		baseURL, _ := m["baseURL"].(string)
 		apiKey, _ := m["apiKey"].(string)
 		apiKeyEnv, _ := m["apiKeyEnv"].(string)
+		if opts, ok := m["options"].(map[string]interface{}); ok {
+			if baseURL == "" {
+				baseURL, _ = opts["baseURL"].(string)
+			}
+			if apiKey == "" {
+				apiKey, _ = opts["apiKey"].(string)
+			}
+			if apiKeyEnv == "" {
+				apiKeyEnv, _ = opts["apiKeyEnv"].(string)
+			}
+		}
 		hasKey := strings.TrimSpace(apiKey) != ""
 		if !hasKey && apiKeyEnv != "" {
 			if v, ok := creds[apiKeyEnv]; ok && strings.TrimSpace(v) != "" {
@@ -425,7 +485,13 @@ func DeepSeekSaveProvider(path string, providerID string, providerCfg map[string
 	if cfg == nil {
 		cfg = map[string]interface{}{}
 	}
+	src, _ := deepSeekProviderSource(cfg, providerID)
 	llmMode := isDeepSeekLLMMode(cfg)
+	if src == "llm" {
+		llmMode = true
+	} else if src == "provider" {
+		llmMode = false
+	}
 	if llmMode {
 		llm, _ := cfg["llm-pi-ai"].(map[string]interface{})
 		if llm == nil {

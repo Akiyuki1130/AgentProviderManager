@@ -462,11 +462,7 @@ func providersFromConfig(cfg map[string]interface{}, agent string) map[string]in
 		return nil
 	}
 	if agent == string(core.AgentDeepSeek) {
-		if llm, ok := cfg["llm-pi-ai"].(map[string]interface{}); ok {
-			if prov, ok := llm["providers"].(map[string]interface{}); ok {
-				return prov
-			}
-		}
+		return core.DeepSeekProvidersMap(cfg)
 	}
 	if p, ok := cfg["provider"].(map[string]interface{}); ok {
 		return p
@@ -505,8 +501,8 @@ func (a *App) GetProvider(providerID string) map[string]interface{} {
 		if err != nil {
 			return map[string]interface{}{"success": false, "error": err.Error()}
 		}
-		providers := providersFromConfig(cfg, agent)
-		raw, ok := providers[providerID]
+		rawMap := core.DeepSeekProvidersMap(cfg)
+		raw, ok := rawMap[providerID]
 		if !ok {
 			return map[string]interface{}{"success": false, "error": fmt.Sprintf("提供商「%s」不存在", providerID)}
 		}

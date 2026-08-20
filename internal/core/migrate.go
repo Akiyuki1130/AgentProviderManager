@@ -229,10 +229,28 @@ func MigrateExecute(sourceAgent, targetAgent string, selectedIDs []string, mode 
 		// Ensure backup
 		bak, _ := BackupConfig(tgtPath)
 		// Determine llm mode
-		llmMode := isDeepSeekLLMMode(cfg)
-		// If file was empty and not llmMode, decide to use llmMode for future? Keep as is.
-		// For overwrite, clear providers
-		if llmMode {
+		// Hybrid file: keep original location per provider; new providers go to llm if it exists
+		llmModeGlobal := isDeepSeekLLMMode(cfg)
+		// For overwrite, clear both branches if they exist
+		if mode == "overwrite" {
+			if llm, ok := cfg["llm-pi-ai"].(map[string]interface{}); ok {
+				if prov, ok := llm["providers"].(map[string]interface{}); ok {
+					for k := range prov {
+						delete(prov, k)
+					}
+				}
+			}
+			if prov2, ok := cfg["provider"].(map[string]interface{}); ok {
+				for k := range prov2 {
+					delete(prov2, k)
+				}
+			}
+			// After clearing, decide: new writes should go to llm when llm branch existed
+			if llmModeGlobal {
+				llmModeGlobal = true
+			}
+		}
+		if llmModeGlobal {
 			llm, _ := cfg["llm-pi-ai"].(map[string]interface{})
 			if llm == nil {
 				llm = map[string]interface{}{}
@@ -243,11 +261,7 @@ func MigrateExecute(sourceAgent, targetAgent string, selectedIDs []string, mode 
 				providers = map[string]interface{}{}
 				llm["providers"] = providers
 			}
-			if mode == "overwrite" {
-				for k := range providers {
-					delete(providers, k)
-				}
-			}
+
 			// Insert each migrated
 			for _, item := range toMigrate {
 				opts, _ := item.cfg["options"].(map[string]interface{})
@@ -307,11 +321,7 @@ func MigrateExecute(sourceAgent, targetAgent string, selectedIDs []string, mode 
 				providers = map[string]interface{}{}
 				cfg["provider"] = providers
 			}
-			if mode == "overwrite" {
-				for k := range providers {
-					delete(providers, k)
-				}
-			}
+
 			for _, item := range toMigrate {
 				if _, exists := providers[item.pid]; exists && mode == "merge" {
 					mergedCfg, err := MergeProviderIntoConfig(map[string]interface{}{"provider": map[string]interface{}{item.pid: providers[item.pid]}}, item.pid, item.cfg, true)
