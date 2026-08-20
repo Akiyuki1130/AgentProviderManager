@@ -64,7 +64,8 @@
             <div class="editor-actions">
               <n-button type="primary" :loading="saving" @click="onSaveProvider">💾 保存提供商</n-button>
               <n-button @click="onDuplicateProvider">📋 复制提供商</n-button>
-              <n-button @click="onRefreshProvider">🔄 重新获取模型</n-button>
+              <n-button @click="onManualRefresh">📝 手动重新获取模型</n-button>
+              <n-button :loading="autoRefreshing" @click="onAutoRefresh">🔄 自动重新获取模型</n-button>
               <n-popconfirm @positive-click="confirmDeleteProvider">
                 <template #trigger><n-button type="error" ghost>🗑 删除提供商</n-button></template>
                 确定删除提供商「{{ editForm.name || editForm.id }}」吗？
@@ -83,24 +84,30 @@
               </div>
             </div>
             <div class="batch-bar">
-              <span class="label">批量编辑：</span>
-              <label class="batch-item">全选 <button class="switch" :class="{ on: allSelected }" @click="batchSelectAll(true)" /></label>
-              <n-button size="tiny" @click="batchSelectAll(false)">全不选</n-button>
-              <n-button size="tiny" type="error" ghost :disabled="!hasSelected" @click="onDeleteSelected">删除所选</n-button>
-              <label class="batch-item">思考 <button class="switch" :class="{ on: batchReasoningOn }" @click="batchToggleReasoning" /></label>
-              <span class="batch-group-label">推理档位</span>
-              <span v-for="v in variantOpts" :key="v" class="batch-pill" @click="batchToggleVariant(v)">{{ v }}</span>
-              <span class="batch-group-label">默认档位</span>
-              <n-select v-model:value="batchDefault" :options="variantSelectOpts" placeholder="—" style="width: 100px" size="small" clearable @update:value="batchSetDefault" />
-              <span class="batch-group-label">上下文长度</span>
-              <n-input v-model:value="batchContext" placeholder="回车应用" size="small" style="width: 100px" @keydown.enter="applyBatchLimit('context')" />
-              <span class="batch-group-label">输出长度</span>
-              <n-input v-model:value="batchOutput" placeholder="回车应用" size="small" style="width: 100px" @keydown.enter="applyBatchLimit('output')" />
+              <div class="batch-row">
+                <span class="label">批量编辑：</span>
+                <label class="batch-item">全选 <button class="switch" :class="{ on: allSelected }" @click="batchSelectAll(true)" /></label>
+                <n-button size="tiny" @click="batchSelectAll(false)">全不选</n-button>
+                <div class="batch-spacer" />
+                <n-button size="tiny" type="error" ghost :disabled="!hasSelected" @click="onDeleteSelected">删除所选</n-button>
+              </div>
+              <div class="batch-row batch-row--wrap">
+                <label class="batch-item">思考 <button class="switch" :class="{ on: batchReasoningOn }" @click="batchToggleReasoning" /></label>
+                <n-button size="tiny" @click="batchEnableAllVariants">一键全开思考等级</n-button>
+                <span class="batch-group-label">推理档位</span>
+                <span v-for="v in variantOpts" :key="v" class="batch-pill" @click="batchToggleVariant(v)">{{ v }}</span>
+                <span class="batch-group-label">默认档位</span>
+                <n-select v-model:value="batchDefault" :options="variantSelectOpts" placeholder="—" style="width: 100px" size="small" clearable @update:value="batchSetDefault" />
+                <span class="batch-group-label">上下文长度</span>
+                <n-input v-model:value="batchContext" placeholder="回车应用" size="small" style="width: 100px" @keydown.enter="applyBatchLimit('context')" />
+                <span class="batch-group-label">输出长度</span>
+                <n-input v-model:value="batchOutput" placeholder="回车应用" size="small" style="width: 100px" @keydown.enter="applyBatchLimit('output')" />
+              </div>
             </div>
             <div class="list-scroll">
               <div v-if="filteredCards.length === 0" class="empty-state">
                 <div class="empty-title">尚无模型</div>
-                <div class="empty-sub">点击「+ 手动添加模型」，或使用「重新获取模型」从 API 拉取。</div>
+                <div class="empty-sub">点击「+ 手动添加模型」，或使用「自动/手动重新获取模型」从 API 拉取。</div>
               </div>
               <ModelCard v-for="card in filteredCards" :key="card.model_id" :card="card" :show-select="true" @delete="removeCard(card)" @update="onCardUpdate" />
             </div>
@@ -108,16 +115,33 @@
         </div>
       </div>
     </div>
+
+    <n-modal v-model:show="showAutoConfirm" preset="card" title="确认自动重新获取" style="width: 480px" :mask-closable="false">
+      <div style="font-size: 13px; line-height: 1.6">
+        该操作将会直接覆盖现有模型配置，是否确认继续？
+      </div>
+      <label style="display:flex; gap:6px; align-items:center; font-size:12px; margin-top:12px; cursor:pointer">
+        <input type="checkbox" v-model="dontAskAgain" /> 不再提示
+      </label>
+      <template #footer>
+        <div style="display:flex; justify-content:flex-end; gap:8px">
+          <n-button @click="showAutoConfirm = false">取消</n-button>
+          <n-button type="primary" :loading="autoRefreshing" @click="confirmAutoRefresh">确认覆盖</n-button>
+        </div>
+      </template>
+    </n-modal>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
-import { NButton, NInput, NSelect, NPopconfirm } from 'naive-ui'
+import { useRouter } from 'vue-router'
+import { NButton, NInput, NSelect, NPopconfirm, NModal } from 'naive-ui'
 import ModelCard from '../components/ModelCard.vue'
 import type { ProviderSummary, ModelCard as Card, ProviderEdit } from '../types'
 import * as api from '../api'
 
+const router = useRouter()
 const providers = ref<ProviderSummary[]>([])
 const currentId = ref<string | null>(null)
 const currentProvider = ref<ProviderEdit | null>(null)
@@ -130,6 +154,9 @@ const variantOpts = ['off', 'low', 'medium', 'high', 'xhigh', 'max']
 const batchDefault = ref('')
 const batchContext = ref('')
 const batchOutput = ref('')
+const showAutoConfirm = ref(false)
+const dontAskAgain = ref(false)
+const autoRefreshing = ref(false)
 
 const kindOptions = [
   { label: 'OpenAI 兼容 (openai-compatible)', value: 'openai-compatible' },
@@ -244,6 +271,13 @@ function batchToggleReasoning() {
   const next = !batchReasoningOn.value
   for (const c of filteredCards.value) { c.reasoning = next; if (next && (!c.variants || c.variants.length === 0)) { c.variants = ['off', 'high', 'max']; c.default_variant = 'max' } else if (!next) { c.variants = []; c.default_variant = '' } }
 }
+function batchEnableAllVariants() {
+  for (const c of filteredCards.value) {
+    c.reasoning = true
+    c.variants = [...variantOpts]
+    if (!c.default_variant || !c.variants.includes(c.default_variant)) c.default_variant = 'max'
+  }
+}
 function batchToggleVariant(v: string) {
   for (const c of filteredCards.value) {
     const arr = c.variants || []
@@ -272,22 +306,56 @@ function onDeleteSelected() {
     if (idx >= 0) editForm.value.cards.splice(idx, 1)
   }
 }
-async function onRefreshProvider() {
+
+function onManualRefresh() {
+  if (!currentId.value || !currentProvider.value) { toast('error', '操作失败', '请先选择一个提供商'); return }
+  sessionStorage.setItem('zcode-pm:manualRefresh', JSON.stringify({
+    providerId: editForm.value.id,
+    providerName: editForm.value.name,
+    baseUrl: editForm.value.base_url,
+    apiKey: editForm.value.api_key,
+    kind: editForm.value.kind,
+  }))
+  router.push('/import')
+}
+
+function onAutoRefresh() {
   if (!currentId.value) return
-  const res = await api.RefreshProviderModels(currentId.value, editForm.value.base_url, editForm.value.api_key) as Record<string, unknown>
-  if (!res['success']) { toast('error', '获取失败', res['error'] as string); return }
-  const models = (res['models'] as Card[]) || []
-  toast('success', '获取成功', `成功获取 ${models.length} 个模型`)
-  // Merge into current editForm cards for user to review
-  editForm.value.cards = models
+  if (localStorage.getItem('zcode-pm:skipAutoRefreshConfirm') === '1') {
+    void doAutoRefresh()
+    return
+  }
+  dontAskAgain.value = false
+  showAutoConfirm.value = true
+}
+
+async function confirmAutoRefresh() {
+  if (dontAskAgain.value) localStorage.setItem('zcode-pm:skipAutoRefreshConfirm', '1')
+  showAutoConfirm.value = false
+  await doAutoRefresh()
+}
+
+async function doAutoRefresh() {
+  if (!currentId.value) return
+  autoRefreshing.value = true
+  try {
+    const res = await api.RefreshProviderModels(currentId.value, editForm.value.base_url, editForm.value.api_key) as Record<string, unknown>
+    if (!res['success']) { toast('error', '获取失败', res['error'] as string); return }
+    const models = (res['models'] as Card[]) || []
+    toast('success', '获取成功', `成功获取 ${models.length} 个模型，已覆盖当前列表`)
+    editForm.value.cards = models
+  } finally {
+    autoRefreshing.value = false
+  }
 }
 
 onMounted(loadProviders)
 </script>
 
 <style scoped>
-.manage-layout { display: grid; grid-template-columns: 260px 1fr; gap: 12px; flex: 1; min-height: 0; }
-.provider-sidebar { display: flex; flex-direction: column; padding: 16px; min-height: 0; overflow: hidden; }
+.manage-page { display: flex; flex-direction: column; flex: 1; min-height: 0; height: 100%; }
+.manage-layout { display: grid; grid-template-columns: 260px 1fr; gap: 12px; flex: 1; min-height: 0; height: 100%; overflow: hidden; }
+.provider-sidebar { display: flex; flex-direction: column; padding: 16px; min-height: 0; height: 100%; overflow: hidden; align-self: stretch; }
 .sidebar-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
 .sidebar-head h3 { font-size: 14px; font-weight: 600; }
 .sidebar-count { font-size: 12px; color: var(--fluent-text-soft); background: var(--fluent-border); border-radius: 999px; padding: 1px 8px; }
@@ -307,7 +375,7 @@ onMounted(loadProviders)
 .badge-kind { background: var(--fluent-bg); }
 .badge-ok { color: #107c10; border-color: #107c10; background: rgba(16,124,16,0.08); }
 .badge-warn { color: #ca5010; border-color: #ca5010; background: rgba(202,80,16,0.08); }
-.editor-pane { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; gap: 12px; overflow-y: auto; }
+.editor-pane { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; height: 100%; gap: 12px; overflow-y: auto; overscroll-behavior: contain; padding-right: 2px; }
 .editor-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; flex: 1; gap: 8px; text-align: center; color: var(--fluent-text-soft); background: var(--fluent-card-bg); border: 1px dashed var(--fluent-border); border-radius: 10px; padding: 32px; }
 .empty-title { font-size: 16px; font-weight: 600; color: var(--fluent-text); }
 .empty-sub { font-size: 12px; }
@@ -322,7 +390,10 @@ onMounted(loadProviders)
 .list-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
 .list-header h3 { font-size: 14px; font-weight: 600; }
 .count-label { font-size: 12px; color: var(--fluent-text-soft); }
-.batch-bar { display: flex; gap: 8px; align-items: center; padding: 8px 12px; background: var(--fluent-bg); border: 1px solid var(--fluent-border); border-radius: 8px; flex-wrap: wrap; }
+.batch-bar { display: flex; flex-direction: column; gap: 8px; padding: 8px 12px; background: var(--fluent-bg); border: 1px solid var(--fluent-border); border-radius: 8px; }
+.batch-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.batch-row--wrap { align-items: center; }
+.batch-spacer { flex: 1; }
 .batch-bar .label { font-size: 12px; font-weight: 600; }
 .batch-item { display: inline-flex; gap: 4px; align-items: center; font-size: 11px; }
 .batch-group-label { font-size: 11px; color: var(--fluent-text-soft); font-weight: 600; }
@@ -336,5 +407,5 @@ onMounted(loadProviders)
 .switch::after { content: ""; position: absolute; top: 4px; left: 4px; width: 12px; height: 12px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.3); transition: transform 0.2s; }
 .switch.on { background: var(--accent); }
 .switch.on::after { transform: translateX(20px); }
-@media (max-width: 900px) { .manage-layout { grid-template-columns: 1fr; } }
+@media (max-width: 900px) { .manage-layout { grid-template-columns: 1fr; } .provider-sidebar { height: auto; max-height: 40vh; } }
 </style>

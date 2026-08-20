@@ -1,15 +1,15 @@
 <template>
   <div class="import-page">
-    <div v-if="refreshMode" class="refresh-banner">
-      <span>🔄</span> 正在为提供商 <b>{{ refreshMode.name }}</b> 重新获取模型列表
-      <n-button size="tiny" @click="cancelRefresh">取消</n-button>
+    <div v-if="manualRefreshInfo" class="refresh-banner">
+      <span>📝</span> 正在为提供商 <b>{{ manualRefreshInfo.name }}</b> 手动重新获取模型（可挑选后导入）
+      <n-button size="tiny" @click="clearManualRefresh">返回普通导入</n-button>
     </div>
 
     <div class="fluent-card card-pad">
       <div class="card-title">连接配置</div>
       <div class="conn-grid">
         <label class="form-label">Base URL</label>
-        <n-input v-model:value="baseUrl" placeholder="https://api.example.com/v1" />
+        <n-input v-model:value="baseUrl" placeholder="https://api.example.com/v1" @update:value="onBaseUrlInput" />
         <label class="form-label">协议类型 (kind)</label>
         <n-select v-model:value="kind" :options="kindOptions" style="min-width: 180px" />
         <label class="form-label">API Key</label>
@@ -45,18 +45,25 @@
         </div>
       </div>
       <div class="batch-bar">
-        <span class="label">批量编辑：</span>
-        <label class="batch-item">全选 <button class="switch" :class="{ on: allSelected }" @click="batchSelectAll(true)" /></label>
-        <n-button size="tiny" @click="batchSelectAll(false)">全不选</n-button>
-        <label class="batch-item">思考 <button class="switch" :class="{ on: batchReasoning }" @click="batchToggleReasoning" /></label>
-        <span class="batch-group-label">推理档位</span>
-        <span v-for="v in variantOpts" :key="v" class="batch-pill" @click="batchToggleVariant(v)">{{ v }}</span>
-        <span class="batch-group-label">默认档位</span>
-        <n-select v-model:value="batchDefault" :options="variantSelectOpts" placeholder="—" style="width: 100px" size="small" clearable @update:value="batchSetDefault" />
-        <span class="batch-group-label">上下文长度</span>
-        <n-input v-model:value="batchContext" size="small" style="width: 100px" placeholder="回车应用" @keydown.enter="applyBatchLimit('context')" />
-        <span class="batch-group-label">输出长度</span>
-        <n-input v-model:value="batchOutput" size="small" style="width: 100px" placeholder="回车应用" @keydown.enter="applyBatchLimit('output')" />
+        <div class="batch-row">
+          <span class="label">批量编辑：</span>
+          <label class="batch-item">全选 <button class="switch" :class="{ on: allSelected }" @click="batchSelectAll(true)" /></label>
+          <n-button size="tiny" @click="batchSelectAll(false)">全不选</n-button>
+          <div class="batch-spacer" />
+          <n-button size="tiny" type="error" ghost :disabled="!hasSelected" @click="onDeleteSelected">删除所选</n-button>
+        </div>
+        <div class="batch-row batch-row--wrap">
+          <label class="batch-item">思考 <button class="switch" :class="{ on: batchReasoning }" @click="batchToggleReasoning" /></label>
+          <n-button size="tiny" @click="batchEnableAllVariants">一键全开思考等级</n-button>
+          <span class="batch-group-label">推理档位</span>
+          <span v-for="v in variantOpts" :key="v" class="batch-pill" @click="batchToggleVariant(v)">{{ v }}</span>
+          <span class="batch-group-label">默认档位</span>
+          <n-select v-model:value="batchDefault" :options="variantSelectOpts" placeholder="—" style="width: 100px" size="small" clearable @update:value="batchSetDefault" />
+          <span class="batch-group-label">上下文长度</span>
+          <n-input v-model:value="batchContext" size="small" style="width: 100px" placeholder="回车应用" @keydown.enter="applyBatchLimit('context')" />
+          <span class="batch-group-label">输出长度</span>
+          <n-input v-model:value="batchOutput" size="small" style="width: 100px" placeholder="回车应用" @keydown.enter="applyBatchLimit('output')" />
+        </div>
       </div>
       <div class="list-scroll">
         <div v-if="filteredCards.length === 0 && cards.length === 0" class="empty-state">
@@ -93,11 +100,12 @@ const statusKind = ref('')
 const fetching = ref(false)
 const importing = ref(false)
 const mergeChk = ref(true)
-const refreshMode = ref<{ id: string; name: string } | null>(null)
+const manualRefreshInfo = ref<{ id: string; name: string } | null>(null)
 const variantOpts = ['off', 'low', 'medium', 'high', 'xhigh', 'max']
 const batchDefault = ref('')
 const batchContext = ref('')
 const batchOutput = ref('')
+const hasSelected = computed(() => filteredCards.value.some((c) => c.select))
 
 const kindOptions = [
   { label: 'OpenAI 兼容 (openai-compatible)', value: 'openai-compatible' },
@@ -147,7 +155,10 @@ async function onFetch() {
 }
 
 function onClear() { cards.value = []; searchQuery.value = ''; statusText.value = '就绪。请输入地址和密钥后点击获取。'; statusKind.value = '' }
-function cancelRefresh() { refreshMode.value = null }
+function clearManualRefresh() {
+  manualRefreshInfo.value = null
+  sessionStorage.removeItem('zcode-pm:manualRefresh')
+}
 function onAddModel() {
   const mid = prompt('请输入模型 ID：', 'gpt-4o-mini')
   if (!mid || !mid.trim()) return
@@ -155,6 +166,15 @@ function onAddModel() {
   cards.value.push({ model_id: mid.trim(), name: mid.trim(), reasoning: false, variants: [], default_variant: '', context: '', output: '', select: true })
 }
 function removeCard(card: Card) { const idx = cards.value.indexOf(card); if (idx >= 0) cards.value.splice(idx, 1) }
+function onDeleteSelected() {
+  const selected = filteredCards.value.filter((c) => c.select)
+  if (selected.length === 0) return
+  if (!confirm(`确定删除选中的 ${selected.length} 个模型吗？`)) return
+  for (const c of selected) {
+    const idx = cards.value.indexOf(c)
+    if (idx >= 0) cards.value.splice(idx, 1)
+  }
+}
 async function onImport() {
   const selected = cards.value.filter((c) => c.select)
   if (selected.length === 0) { toast('error', '导入失败', '请至少选择一个模型'); return }
@@ -162,7 +182,13 @@ async function onImport() {
   try {
     const payload = { provider_id: providerId.value || providerName.value, provider_name: providerName.value || providerId.value, base_url: baseUrl.value, api_key: apiKey.value, kind: kind.value, cards: selected, merge_models: mergeChk.value }
     const res = await api.ImportProvider(payload) as Record<string, unknown>
-    if (res['success']) toast('success', '导入成功', `成功导入 ${res['count']} 个模型到 ${res['provider_id']}`)
+    if (res['success']) {
+      toast('success', '导入成功', `成功导入 ${res['count']} 个模型到 ${res['provider_id']}`)
+      if (manualRefreshInfo.value) {
+        manualRefreshInfo.value = null
+        sessionStorage.removeItem('zcode-pm:manualRefresh')
+      }
+    }
     else toast('error', '导入失败', res['error'] as string)
   } finally { importing.value = false }
 }
@@ -171,6 +197,13 @@ function batchToggleReasoning() {
   const next = !batchReasoning.value
   for (const c of filteredCards.value) { c.reasoning = next; if (next && (!c.variants || c.variants.length === 0)) { c.variants = ['off', 'high', 'max']; c.default_variant = 'max' } else if (!next) { c.variants = []; c.default_variant = '' } }
 }
+function batchEnableAllVariants() {
+  for (const c of filteredCards.value) {
+    c.reasoning = true
+    c.variants = [...variantOpts]
+    if (!c.default_variant || !c.variants.includes(c.default_variant)) c.default_variant = 'max'
+  }
+}
 function batchToggleVariant(v: string) {
   for (const c of filteredCards.value) { const arr = c.variants || []; const idx = arr.indexOf(v); if (idx >= 0) arr.splice(idx, 1); else { arr.push(v); c.reasoning = true }; c.variants = [...arr]; if (c.default_variant && !arr.includes(c.default_variant)) c.default_variant = arr[0] || '' }
 }
@@ -178,7 +211,23 @@ function batchSetDefault(v: string) { if (!v) return; for (const c of filteredCa
 function applyBatchLimit(field: 'context' | 'output') { const val = field === 'context' ? batchContext.value : batchOutput.value; for (const c of filteredCards.value) (c as Record<string, unknown>)[field] = val }
 
 onMounted(async () => {
-  try { const id = await api.NewProviderID() as string; if (!providerId.value) providerId.value = id } catch { /* ignore */ }
+  const raw = sessionStorage.getItem('zcode-pm:manualRefresh')
+  if (raw) {
+    try {
+      const data = JSON.parse(raw) as { providerId: string; providerName: string; baseUrl: string; apiKey: string; kind: string }
+      if (data.baseUrl) baseUrl.value = data.baseUrl
+      if (data.apiKey) apiKey.value = data.apiKey
+      if (data.providerId) providerId.value = data.providerId
+      if (data.providerName) providerName.value = data.providerName
+      if (data.kind) kind.value = data.kind
+      manualRefreshInfo.value = { id: data.providerId || data.providerName || '', name: data.providerName || data.providerId || '' }
+      statusText.value = '已自动填入提供商信息，点击「获取模型列表」后可挑选模型并导入。'
+      statusKind.value = ''
+    } catch { /* ignore parse error */ }
+  }
+  if (!providerId.value) {
+    try { const id = await api.NewProviderID() as string; if (!providerId.value) providerId.value = id } catch { /* ignore */ }
+  }
 })
 </script>
 
@@ -200,7 +249,10 @@ onMounted(async () => {
 .list-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
 .list-header h3 { font-size: 14px; font-weight: 600; }
 .count-label { font-size: 12px; color: var(--fluent-text-soft); }
-.batch-bar { display: flex; gap: 8px; align-items: center; padding: 8px 12px; background: var(--fluent-bg); border: 1px solid var(--fluent-border); border-radius: 8px; flex-wrap: wrap; }
+.batch-bar { display: flex; flex-direction: column; gap: 8px; padding: 8px 12px; background: var(--fluent-bg); border: 1px solid var(--fluent-border); border-radius: 8px; }
+.batch-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.batch-row--wrap { align-items: center; }
+.batch-spacer { flex: 1; }
 .batch-bar .label { font-size: 12px; font-weight: 600; }
 .batch-item { display: inline-flex; gap: 4px; align-items: center; font-size: 11px; }
 .batch-group-label { font-size: 11px; color: var(--fluent-text-soft); font-weight: 600; }

@@ -4,8 +4,6 @@ const dict: Record<string, Record<Lang, string>> = {
   'subtitle': { zh: '管理 ZCode 的第三方模型提供商', en: 'Manages ZCode custom providers' },
   'tab.manage': { zh: '管理配置', en: 'Manage' },
   'tab.import': { zh: '导入提供商', en: 'Import Provider' },
-  'tab.opencode': { zh: '从 OpenCode 导入', en: 'Import from OpenCode' },
-  'tab.merge': { zh: '合并配置文件', en: 'Merge Config' },
   'tab.keychain': { zh: 'API Key 钥匙串', en: 'API Key Keychain' },
   'btn.fetch': { zh: '🔄 获取模型列表', en: '🔄 Fetch models' },
   'btn.clear': { zh: '清空', en: 'Clear' },

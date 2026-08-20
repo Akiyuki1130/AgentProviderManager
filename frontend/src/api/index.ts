@@ -2,10 +2,8 @@ type WailsApp = Record<string, (...args: unknown[]) => Promise<unknown>>
 
 function getApp(): WailsApp | null {
   const w = window as unknown as Record<string, unknown>
-  // Wails v2 binds under window.go.<module>.App
   const go = w['go'] as Record<string, unknown> | undefined
   if (go) {
-    // Try common module paths
     for (const key of Object.keys(go)) {
       const mod = go[key] as Record<string, unknown>
       if (mod && typeof mod === 'object' && 'App' in mod) {
@@ -96,24 +94,6 @@ export async function BuildSingleCard(modelId: string): Promise<Record<string, u
 export async function ImportProvider(payload: unknown): Promise<Record<string, unknown>> {
   return call('ImportProvider', payload)
 }
-export async function PreviewOpencodeImport(path: string): Promise<Record<string, unknown>> {
-  return call('PreviewOpencodeImport', path)
-}
-export async function ChooseOpencodeFile(): Promise<Record<string, unknown>> {
-  return call('ChooseOpencodeFile')
-}
-export async function ImportOpencode(payload: unknown): Promise<Record<string, unknown>> {
-  return call('ImportOpencode', payload)
-}
-export async function PreviewConfigMerge(path: string): Promise<Record<string, unknown>> {
-  return call('PreviewConfigMerge', path)
-}
-export async function ChooseMergeFile(): Promise<Record<string, unknown>> {
-  return call('ChooseMergeFile')
-}
-export async function MergeConfig(payload: unknown): Promise<Record<string, unknown>> {
-  return call('MergeConfig', payload)
-}
 export async function ListKeychain(): Promise<Record<string, unknown>> {
   return call('ListKeychain')
 }
@@ -124,6 +104,5 @@ export async function SaveKeychainEntry(entry: unknown): Promise<Record<string, 
   return call('SaveKeychainEntry', entry)
 }
 export async function DeleteKeychainEntries(ids: string[]): Promise<Record<string, unknown>> {
-  // Wails expects []interface{} for slice param
   return call('DeleteKeychainEntries', ids)
 }

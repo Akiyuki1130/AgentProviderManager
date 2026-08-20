@@ -37,8 +37,6 @@ import type { Component } from 'vue'
 import {
   SettingsOutline,
   CloudDownloadOutline,
-  DocumentTextOutline,
-  GitMergeOutline,
   KeyOutline,
   ChevronBackOutline,
   ChevronForwardOutline,
@@ -58,8 +56,6 @@ interface NavItem { key: string; label: string; icon: Component }
 const navItems: NavItem[] = [
   { key: '/manage', label: '管理配置', icon: SettingsOutline },
   { key: '/import', label: '导入提供商', icon: CloudDownloadOutline },
-  { key: '/opencode', label: '从 OpenCode 导入', icon: DocumentTextOutline },
-  { key: '/merge', label: '合并配置文件', icon: GitMergeOutline },
   { key: '/keychain', label: 'API Key 钥匙串', icon: KeyOutline },
 ]
 const activeKey = computed(() => route.path)

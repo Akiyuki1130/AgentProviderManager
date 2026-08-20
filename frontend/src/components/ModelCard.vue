@@ -20,9 +20,16 @@
       <div v-if="card.reasoning" class="mc-effort">
         <label>推理档位</label>
         <div class="mc-effort-opts">
-          <label v-for="v in variantOptions" :key="v" class="effort-opt" :class="{ checked: (card.variants || []).includes(v) }" @click="toggleVariant(v)">
-            <input type="checkbox" :checked="(card.variants || []).includes(v)" @click.stop /> <span>{{ v }}</span>
-          </label>
+          <button
+            v-for="v in variantOptions"
+            :key="v"
+            type="button"
+            class="effort-opt"
+            :class="{ checked: (card.variants || []).includes(v) }"
+            @click="toggleVariant(v)"
+          >
+            <span>{{ v }}</span>
+          </button>
         </div>
       </div>
       <div v-if="card.reasoning" class="mc-effort">
@@ -100,8 +107,11 @@ function onOutputInput(e: Event) { props.card.output = (e.target as HTMLInputEle
 .mc-effort { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; background: color-mix(in srgb, var(--accent, #0067c0) 8%, transparent); border: 1px solid var(--fluent-border); border-radius: 8px; padding: 8px 12px; }
 .mc-effort label { font-size: 11px; color: var(--fluent-text-soft); white-space: nowrap; }
 .mc-effort-opts { display: flex; flex-wrap: wrap; gap: 6px; flex: 1; }
-.effort-opt { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; border: 1px solid var(--fluent-border); border-radius: 999px; padding: 3px 10px; background: var(--fluent-card-bg); cursor: pointer; }
+.effort-opt { display: inline-flex; align-items: center; justify-content: center; gap: 4px; font-size: 11px; border: 1px solid var(--fluent-border); border-radius: 999px; padding: 3px 10px; background: var(--fluent-card-bg); cursor: pointer; color: inherit; font-family: inherit; line-height: 1; appearance: none; -webkit-appearance: none; outline: none; }
+.effort-opt:hover { border-color: var(--accent); }
+.effort-opt:focus-visible { outline: none; box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent); }
 .effort-opt.checked { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); }
+.effort-opt.checked:hover { border-color: var(--accent); }
 .field { width: 100%; height: 32px; border-radius: 6px; border: 1px solid var(--fluent-border); background: var(--fluent-card-bg); padding: 0 10px; font-size: 13px; color: var(--fluent-text); }
 .field:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 20%, transparent); }
 .select-sm { min-width: 100px; height: 26px; font-size: 12px; }
