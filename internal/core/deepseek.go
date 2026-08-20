@@ -28,7 +28,7 @@ func loadDeepSeekRaw(path string) (map[string]interface{}, string, error) {
 	if isYAMLPath(path) {
 		var result map[string]interface{}
 		if err := yaml.Unmarshal(data, &result); err != nil {
-			return nil, "", &ConfigParseError{Msg: fmt.Sprintf("DeepSeek 配置解析失败（YAML）：%v", err)}
+			return nil, "", &ConfigParseError{Msg: fmt.Sprintf("DeepSeek Harness 配置解析失败（YAML）：%v", err)}
 		}
 		if result == nil {
 			result = map[string]interface{}{}
@@ -42,7 +42,7 @@ func loadDeepSeekRaw(path string) (map[string]interface{}, string, error) {
 		if err2 := yaml.Unmarshal(data, &yResult); err2 == nil && yResult != nil {
 			return yResult, "yaml", nil
 		}
-		return nil, "", &ConfigParseError{Msg: fmt.Sprintf("DeepSeek 配置解析失败（JSON）：%v", err)}
+		return nil, "", &ConfigParseError{Msg: fmt.Sprintf("DeepSeek Harness 配置解析失败（JSON）：%v", err)}
 	}
 	m, ok := raw.(map[string]interface{})
 	if !ok {
@@ -66,13 +66,13 @@ func deepSeekProvidersMap(cfg map[string]interface{}) map[string]interface{} {
 	if cfg == nil {
 		return nil
 	}
-	if p, ok := cfg["provider"].(map[string]interface{}); ok && len(p) > 0 {
-		return p
-	}
 	if llm, ok := cfg["llm-pi-ai"].(map[string]interface{}); ok {
 		if prov, ok := llm["providers"].(map[string]interface{}); ok {
 			return prov
 		}
+	}
+	if p, ok := cfg["provider"].(map[string]interface{}); ok && len(p) > 0 {
+		return p
 	}
 	return nil
 }
@@ -140,66 +140,77 @@ func ConvertDeepSeekModel(mid string, modelCfg map[string]interface{}, kind stri
 		}
 		out["name"] = n
 	}
-	variants := []string{}
-	if re, ok := modelCfg["reasoningEfforts"].(map[string]interface{}); ok && len(re) > 0 {
-		for k := range re {
-			lk := strings.ToLower(strings.TrimSpace(k))
-			if ZCodeVariantSet[lk] {
-				variants = append(variants, lk)
-			} else if v, ok := OpencodeEffortToVariant[lk]; ok {
-				variants = append(variants, v)
-			}
-		}
-	}
-	if len(variants) > 0 {
-		var offPart, rest []string
-		for _, v := range variants {
-			if v == "off" {
-				offPart = append(offPart, v)
-			} else {
-				rest = append(rest, v)
-			}
-		}
-		ordered := []string{}
-		for _, v := range OpencodeEffortOrder {
-			for _, r := range rest {
-				if r == v {
-					ordered = append(ordered, r)
-					break
+	if re := modelCfg["reasoningEfforts"]; re != nil {
+		if re == false {
+			// Explicit non-reasoning marker – do not emit reasoning block.
+		} else if m, ok := re.(map[string]interface{}); ok && len(m) > 0 {
+			variants := []string{}
+			for k, v := range m {
+				if v == nil && strings.ToLower(strings.TrimSpace(k)) == "off" {
+					variants = append(variants, "off")
+					continue
+				}
+				if v == nil {
+					continue
+				}
+				lk := strings.ToLower(strings.TrimSpace(k))
+				if ZCodeVariantSet[lk] {
+					variants = append(variants, lk)
+				} else if vv, ok := OpencodeEffortToVariant[lk]; ok {
+					variants = append(variants, vv)
 				}
 			}
-		}
-		for _, r := range rest {
-			found := false
-			for _, o := range ordered {
-				if o == r {
-					found = true
-					break
+			if len(variants) > 0 {
+				var offPart, rest []string
+				for _, v := range variants {
+					if v == "off" {
+						offPart = append(offPart, v)
+					} else {
+						rest = append(rest, v)
+					}
 				}
-			}
-			if !found {
-				ordered = append(ordered, r)
-			}
-		}
-		variants = append(offPart, ordered...)
-		if len(variants) == 0 {
-			variants = DefaultVariantsFor(kind)
-		}
-		defaultVariant := ""
-		for _, pref := range DefaultVariantPreference {
-			if containsStr(variants, pref) {
-				defaultVariant = pref
-				break
-			}
-		}
-		if defaultVariant == "" && len(variants) > 0 {
-			defaultVariant = variants[0]
-		}
-		if !(len(variants) == 1 && variants[0] == "off") {
-			out["reasoning"] = map[string]interface{}{
-				"enabled":        true,
-				"variants":       variants,
-				"defaultVariant": defaultVariant,
+				ordered := []string{}
+				for _, v := range OpencodeEffortOrder {
+					for _, r := range rest {
+						if r == v {
+							ordered = append(ordered, r)
+							break
+						}
+					}
+				}
+				for _, r := range rest {
+					found := false
+					for _, o := range ordered {
+						if o == r {
+							found = true
+							break
+						}
+					}
+					if !found {
+						ordered = append(ordered, r)
+					}
+				}
+				variants = append(offPart, ordered...)
+				if len(variants) == 0 {
+					variants = DefaultVariantsFor(kind)
+				}
+				defaultVariant := ""
+				for _, pref := range DefaultVariantPreference {
+					if containsStr(variants, pref) {
+						defaultVariant = pref
+						break
+					}
+				}
+				if defaultVariant == "" && len(variants) > 0 {
+					defaultVariant = variants[0]
+				}
+				if !(len(variants) == 1 && variants[0] == "off") {
+					out["reasoning"] = map[string]interface{}{
+						"enabled":        true,
+						"variants":       variants,
+						"defaultVariant": defaultVariant,
+					}
+				}
 			}
 		}
 	}
@@ -449,6 +460,10 @@ func DeepSeekSaveProvider(path string, providerID string, providerCfg map[string
 			entry["apiKeyEnv"] = envName
 			_ = saveDeepSeekCredential(envName, apiKey)
 			delete(entry, "apiKey")
+		} else if v, ok := entry["apiKeyEnv"].(string); ok && strings.TrimSpace(v) != "" {
+			// Keep existing credential reference when key omitted on edit.
+		} else {
+			delete(entry, "apiKey")
 		}
 		if uiKind == "anthropic" {
 			entry["api"] = "anthropic"
@@ -482,6 +497,10 @@ func dshModelToRaw(card ModelCard, _ string) map[string]interface{} {
 			}
 		}
 		m["reasoningEfforts"] = re
+	} else if card.Reasoning {
+		m["reasoningEfforts"] = map[string]interface{}{"off": nil, "high": "high", "max": "max"}
+	} else {
+		m["reasoningEfforts"] = false
 	}
 	if card.Context != nil || card.Output != nil {
 		ctx := ParseTokens(card.Context)

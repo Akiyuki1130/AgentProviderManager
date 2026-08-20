@@ -1,6 +1,6 @@
 # Agent Provider Manager
 
-> 管理多 Agent（ZCode / OpenCode / DeepSeek Harnessed）第三方模型提供商（provider）配置的 Windows 桌面工具。
+> 管理多 Agent（ZCode / OpenCode / DeepSeek Harness）第三方模型提供商（provider）配置的 Windows 桌面工具。
 > Go 后端 + Vue 3 前端（Wails），UI 参照 [VrcFrameLimit](https://github.com/OneCat2015/VrcFrameLimit) 的 Fluent 风格重构。
 
 原 Python 版：`ZCodeProviderManager-src/`（`core.py` + `main.py` + `ui/`）已完整保留在源码库中。
@@ -15,10 +15,10 @@
 
 ## 功能
 
-- **多 Agent 切换**：顶部选择框在 ZCode / OpenCode / DeepSeek Harnessed 间切换，自动切换到各自原生配置文件并以对应格式读写（直接管理原文件）
+- **多 Agent 切换**：顶部选择框在 ZCode / OpenCode / DeepSeek Harness 间切换，自动切换到各自原生配置文件并以对应格式读写（直接管理原文件）
   - ZCode：`%USERPROFILE%\.zcode\v2\config.json`
   - OpenCode：`%USERPROFILE%\.config\opencode\opencode.json`
-  - DeepSeek Harnessed：`%USERPROFILE%\.dsh\settings.yaml`（或 `.yml`/`.json`）`llm-pi-ai.providers`，API Key 入 `~/.dsh/.credentials.yaml`
+  - DeepSeek Harness：`%USERPROFILE%\.dsh\settings.yaml`（或 `.yml`/`.json`）`llm-pi-ai.providers`，API Key 入 `~/.dsh/.credentials.yaml`
 - **管理配置**：Provider 增删改查、ID 重命名、kind / baseURL / apiKey / options_json、模型批量编辑、重新获取模型列表
 - **导入提供商**：输入 Base URL + API Key 拉取 `/v1/models`，智能推断 reasoning / token 长度，批量编辑后导入到当前 Agent
 - **API Key 钥匙串**：本地 CRUD、DPAPI 加密、跨页签一键填入

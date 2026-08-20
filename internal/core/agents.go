@@ -25,7 +25,7 @@ func AllAgents() []AgentDef {
 	return []AgentDef{
 		{ID: AgentZCode, Label: "ZCode", LabelEn: "ZCode", DetectLabel: "ZCode 全局配置"},
 		{ID: AgentOpenCode, Label: "OpenCode", LabelEn: "OpenCode", DetectLabel: "OpenCode 配置"},
-		{ID: AgentDeepSeek, Label: "DeepSeek Harnessed", LabelEn: "DeepSeek Harnessed", DetectLabel: "DeepSeek 配置"},
+		{ID: AgentDeepSeek, Label: "DeepSeek Harness", LabelEn: "DeepSeek Harness", DetectLabel: "DeepSeek 配置"},
 	}
 }
 

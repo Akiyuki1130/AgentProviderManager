@@ -44,7 +44,7 @@ const emit = defineEmits<{
 const agentOptions = [
   { label: 'ZCode', value: 'zcode' },
   { label: 'OpenCode', value: 'opencode' },
-  { label: 'DeepSeek Harnessed', value: 'deepseek' },
+  { label: 'DeepSeek Harness', value: 'deepseek' },
 ]
 </script>
 
