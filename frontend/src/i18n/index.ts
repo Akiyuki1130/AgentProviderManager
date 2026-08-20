@@ -1,13 +1,13 @@
 export type Lang = 'zh' | 'en'
 
 const dict: Record<string, Record<Lang, string>> = {
-  'subtitle': { zh: '管理 ZCode 的第三方模型提供商', en: 'Manages ZCode custom providers' },
+  'subtitle': { zh: '管理多 Agent 的第三方模型提供商', en: 'Manages providers for multiple agents' },
   'tab.manage': { zh: '管理配置', en: 'Manage' },
   'tab.import': { zh: '导入提供商', en: 'Import Provider' },
   'tab.keychain': { zh: 'API Key 钥匙串', en: 'API Key Keychain' },
   'btn.fetch': { zh: '🔄 获取模型列表', en: '🔄 Fetch models' },
   'btn.clear': { zh: '清空', en: 'Clear' },
-  'btn.import': { zh: '⬇ 导入到 ZCode', en: '⬇ Import to ZCode' },
+  'btn.import': { zh: '⬇ 导入到当前 Agent', en: '⬇ Import to current agent' },
   'btn.saveProvider': { zh: '💾 保存提供商', en: '💾 Save provider' },
   'btn.deleteProvider': { zh: '🗑 删除提供商', en: '🗑 Delete provider' },
   'btn.duplicateProvider': { zh: '📋 复制提供商', en: '📋 Duplicate' },

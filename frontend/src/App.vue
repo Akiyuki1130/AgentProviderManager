@@ -10,11 +10,13 @@
               :has-backup="hasBackup"
               :is-dark="isDark"
               :lang="settingStore.lang"
+              :agent="settingStore.agent"
               @toggleLang="toggleLang"
               @toggleTheme="toggleTheme"
               @chooseCfg="onChooseCfg"
               @openDir="onOpenDir"
               @restore="onRestore"
+              @changeAgent="onChangeAgent"
             />
             <main class="app-content">
               <router-view v-slot="{ Component }">
@@ -33,9 +35,10 @@
 
 <script setup lang="ts">
 import { computed, ref, onMounted, watch } from 'vue'
-import { NConfigProvider, NDialogProvider, useDialog } from 'naive-ui'
+import { NConfigProvider, NDialogProvider } from 'naive-ui'
 import type { GlobalTheme } from 'naive-ui'
 import { useSettingStore } from './stores/setting'
+import type { AgentID } from './stores/setting'
 import { buildThemeOverrides, isDark as isDarkFn, darkTheme } from './styles/theme'
 import AppSidebar from './layout/AppSidebar.vue'
 import AppTopbar from './layout/AppTopbar.vue'
@@ -68,6 +71,19 @@ function toggleTheme() {
   settingStore.setTheme(next as 'light' | 'dark')
   api.SetTheme(next)
   document.documentElement.setAttribute('data-theme', next)
+}
+
+async function onChangeAgent(agent: string) {
+  const res = await api.SetCurrentAgent(agent) as Record<string, unknown>
+  if (res['success']) {
+    settingStore.setAgent(agent as AgentID)
+    targetPath.value = (res['path'] as string) || targetPath.value
+    await refreshBackup()
+    window.dispatchEvent(new CustomEvent('agent-changed', { detail: agent }))
+    toast('success', '已切换 Agent', `${agent} → ${targetPath.value}`)
+  } else {
+    toast('error', '切换失败', res['error'] as string)
+  }
 }
 
 async function onChooseCfg() {
@@ -107,8 +123,19 @@ onMounted(async () => {
     }
   } catch { /* ignore */ }
   try {
+    const ag = await api.GetCurrentAgent() as Record<string, unknown>
+    const cur = ag['agent'] as string
+    if (cur === 'zcode' || cur === 'opencode' || cur === 'deepseek') {
+      settingStore.setAgent(cur as AgentID)
+    }
+  } catch { /* ignore */ }
+  try {
     const info = await api.GetTargetConfig() as Record<string, unknown>
     targetPath.value = (info['path'] as string) || ''
+    if (info['agent'] && typeof info['agent'] === 'string') {
+      const ag = info['agent'] as string
+      if (ag === 'zcode' || ag === 'opencode' || ag === 'deepseek') settingStore.setAgent(ag as AgentID)
+    }
     await refreshBackup()
   } catch { /* ignore */ }
 })

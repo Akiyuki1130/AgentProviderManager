@@ -1,7 +1,14 @@
 <template>
   <header class="app-topbar">
     <div class="topbar-left">
-      <span class="topbar-title">ZCode Provider Manager</span>
+      <span class="topbar-title">Agent Provider Manager</span>
+      <n-select
+        :value="agent"
+        :options="agentOptions"
+        size="small"
+        style="width: 200px"
+        @update:value="(v: string) => emit('changeAgent', v)"
+      />
       <span v-if="targetPath" class="topbar-path" :title="targetPath">{{ targetPath }}</span>
     </div>
     <div class="topbar-right">
@@ -17,12 +24,13 @@
 </template>
 
 <script setup lang="ts">
-import { NButton } from 'naive-ui'
+import { NButton, NSelect } from 'naive-ui'
 defineProps<{
   targetPath: string
   hasBackup: boolean
   isDark: boolean
   lang: string
+  agent: string
 }>()
 const emit = defineEmits<{
   (e: 'toggleLang'): void
@@ -30,7 +38,14 @@ const emit = defineEmits<{
   (e: 'chooseCfg'): void
   (e: 'openDir'): void
   (e: 'restore'): void
+  (e: 'changeAgent', v: string): void
 }>()
+
+const agentOptions = [
+  { label: 'ZCode', value: 'zcode' },
+  { label: 'OpenCode', value: 'opencode' },
+  { label: 'DeepSeek Harnessed', value: 'deepseek' },
+]
 </script>
 
 <style scoped>
@@ -41,6 +56,6 @@ const emit = defineEmits<{
 }
 .topbar-left { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .topbar-title { font-size: 14px; font-weight: 700; white-space: nowrap; }
-.topbar-path { font-size: 11px; color: var(--fluent-text-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 400px; }
+.topbar-path { font-size: 11px; color: var(--fluent-text-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 320px; }
 .topbar-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; flex-wrap: wrap; }
 </style>

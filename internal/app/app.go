@@ -10,34 +10,104 @@ import (
 	"sync"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
-	"zcodeprovidermanager/internal/core"
+	"agentprovidermanager/internal/core"
 )
 
 type App struct {
-	ctx               context.Context
-	mu                sync.Mutex
-	targetConfigPath  string
-	lastDialogPath    string
-	settingsPath      string
+	ctx              context.Context
+	mu               sync.Mutex
+	targetConfigPath string
+	currentAgent     string
+	agentPaths       map[string]string
+	lastDialogPath   string
+	settingsPath     string
 }
 
 func NewApp() *App {
+	migrateLegacyAppData()
 	p := core.DefaultConfigPath()
-	// Cleanup stale tmp on startup
 	_ = core.CleanupStaleTmp(p)
 	return &App{
 		targetConfigPath: p,
+		currentAgent:     string(core.AgentZCode),
+		agentPaths:       map[string]string{},
 		settingsPath:     core.SettingsPath(),
+	}
+}
+
+func migrateLegacyAppData() {
+	newDir := core.AppDataDir()
+	if _, err := os.Stat(newDir); err == nil {
+		return
+	}
+	oldDir := core.LegacyAppDataDir()
+	if _, err := os.Stat(oldDir); os.IsNotExist(err) {
+		return
+	}
+	_ = os.MkdirAll(filepath.Dir(newDir), 0755)
+	_ = os.Rename(oldDir, newDir)
+	if _, err := os.Stat(newDir); os.IsNotExist(err) {
+		_ = os.MkdirAll(newDir, 0755)
+		entries, _ := os.ReadDir(oldDir)
+		for _, e := range entries {
+			src := filepath.Join(oldDir, e.Name())
+			dst := filepath.Join(newDir, e.Name())
+			if _, err := os.Stat(dst); os.IsNotExist(err) {
+				data, err := os.ReadFile(src)
+				if err == nil {
+					_ = os.WriteFile(dst, data, 0644)
+				}
+			}
+		}
 	}
 }
 
 func (a *App) Startup(ctx context.Context) {
 	a.ctx = ctx
+	a.loadAgentState()
 }
 
 func (a *App) Shutdown(_ context.Context) {}
 
 func (a *App) DomReady(_ context.Context) {}
+
+func (a *App) loadAgentState() {
+	s := a.loadSettings()
+	agent := ""
+	if v, ok := s["agent"].(string); ok {
+		agent = strings.TrimSpace(v)
+	}
+	if !core.IsValidAgent(agent) {
+		agent = string(core.AgentZCode)
+	}
+	a.currentAgent = agent
+	paths := map[string]string{}
+	if raw, ok := s["agentPaths"].(map[string]interface{}); ok {
+		for k, v := range raw {
+			if sv, ok := v.(string); ok && strings.TrimSpace(sv) != "" {
+				paths[strings.ToLower(k)] = sv
+			}
+		}
+	}
+	a.agentPaths = paths
+	if p, ok := paths[a.currentAgent]; ok && strings.TrimSpace(p) != "" {
+		a.targetConfigPath = p
+	} else {
+		a.targetConfigPath = core.AgentDefaultPath(core.NormalizeAgentID(a.currentAgent))
+	}
+	_ = core.CleanupStaleTmp(a.targetConfigPath)
+}
+
+func (a *App) persistAgentStateLocked() {
+	s := a.loadSettings()
+	s["agent"] = a.currentAgent
+	m := map[string]interface{}{}
+	for k, v := range a.agentPaths {
+		m[k] = v
+	}
+	s["agentPaths"] = m
+	_ = a.saveSettings(s)
+}
 
 // loadSettings reads settings.json.
 func (a *App) loadSettings() map[string]interface{} {
@@ -78,12 +148,52 @@ func (a *App) saveSettings(m map[string]interface{}) bool {
 // GetAppInfo returns app metadata.
 func (a *App) GetAppInfo() map[string]interface{} {
 	return map[string]interface{}{
-		"name":               core.AppName,
-		"version":            core.AppVersion,
-		"kinds":              core.Kinds,
-		"variants":           core.ZCodeVariantOptions,
+		"name":                core.AppName,
+		"version":             core.AppVersion,
+		"kinds":               core.Kinds,
+		"variants":            core.ZCodeVariantOptions,
 		"ui_variants_by_kind": core.UIVariantOptionsByKind,
+		"agents":              core.AllAgents(),
+		"current_agent":       a.currentAgent,
 	}
+}
+
+func (a *App) ListAgents() map[string]interface{} {
+	return map[string]interface{}{
+		"success": true,
+		"agents":  core.AllAgents(),
+		"current": a.currentAgent,
+		"paths":   a.agentPaths,
+	}
+}
+
+func (a *App) GetCurrentAgent() map[string]interface{} {
+	return map[string]interface{}{
+		"success": true,
+		"agent":   a.currentAgent,
+		"path":    a.targetConfigPath,
+		"paths":   a.agentPaths,
+	}
+}
+
+func (a *App) SetCurrentAgent(agentID string) map[string]interface{} {
+	agentID = strings.TrimSpace(agentID)
+	if !core.IsValidAgent(agentID) {
+		return map[string]interface{}{"success": false, "error": "不支持的 Agent 类型"}
+	}
+	norm := string(core.NormalizeAgentID(agentID))
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.currentAgent = norm
+	if p, ok := a.agentPaths[norm]; ok && strings.TrimSpace(p) != "" {
+		a.targetConfigPath = p
+	} else {
+		a.targetConfigPath = core.AgentDefaultPath(core.AgentID(norm))
+		a.agentPaths[norm] = a.targetConfigPath
+	}
+	_ = core.CleanupStaleTmp(a.targetConfigPath)
+	a.persistAgentStateLocked()
+	return map[string]interface{}{"success": true, "agent": a.currentAgent, "path": a.targetConfigPath}
 }
 
 func (a *App) GetTargetConfig() map[string]interface{} {
@@ -97,12 +207,13 @@ func (a *App) GetTargetConfig() map[string]interface{} {
 	return map[string]interface{}{
 		"path": p, "exists": !os.IsNotExist(exists),
 		"backups": backups, "latest_backup": latest,
+		"agent": a.currentAgent,
 	}
 }
 
 func (a *App) ListConfigLocations() map[string]interface{} {
 	return map[string]interface{}{
-		"success": true, "locations": core.DetectConfigLocations(), "current": a.targetConfigPath,
+		"success": true, "locations": core.DetectConfigLocationsForAgent(a.currentAgent), "current": a.targetConfigPath, "agent": a.currentAgent,
 	}
 }
 
@@ -116,7 +227,7 @@ func (a *App) ChooseConfigFile() map[string]interface{} {
 	}
 	result, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
 		DefaultDirectory: initDir,
-		Filters: []runtime.FileFilter{{DisplayName: "JSON 文件 (*.json)", Pattern: "*.json;*.jsonc"}, {DisplayName: "所有文件 (*.*)", Pattern: "*.*"}},
+		Filters: []runtime.FileFilter{{DisplayName: "JSON/YAML 文件", Pattern: "*.json;*.jsonc;*.yaml;*.yml"}, {DisplayName: "所有文件 (*.*)", Pattern: "*.*"}},
 	})
 	if err != nil {
 		return map[string]interface{}{"success": false, "path": "", "error": core.ShortText(err.Error(), 300)}
@@ -127,14 +238,22 @@ func (a *App) ChooseConfigFile() map[string]interface{} {
 	if _, err := os.Stat(result); err != nil {
 		return map[string]interface{}{"success": false, "path": "", "error": "请选择有效的配置文件"}
 	}
-	if _, err := core.LoadConfig(result); err != nil {
-		return map[string]interface{}{"success": false, "path": "", "error": err.Error()}
+	if a.currentAgent == string(core.AgentDeepSeek) {
+		if _, err := core.DeepSeekLoadConfig(result); err != nil {
+			return map[string]interface{}{"success": false, "path": "", "error": err.Error()}
+		}
+	} else {
+		if _, err := core.LoadConfig(result); err != nil {
+			return map[string]interface{}{"success": false, "path": "", "error": err.Error()}
+		}
 	}
 	a.mu.Lock()
 	a.targetConfigPath = result
 	a.lastDialogPath = result
+	a.agentPaths[a.currentAgent] = result
+	a.persistAgentStateLocked()
 	a.mu.Unlock()
-	return map[string]interface{}{"success": true, "path": a.targetConfigPath}
+	return map[string]interface{}{"success": true, "path": a.targetConfigPath, "agent": a.currentAgent}
 }
 
 func (a *App) OpenConfigDir() map[string]interface{} {
@@ -162,7 +281,7 @@ func (a *App) SetConfigPath(path string) map[string]interface{} {
 	}
 	norm := strings.ToLower(abs)
 	detected := map[string]bool{}
-	for _, loc := range core.DetectConfigLocations() {
+	for _, loc := range core.DetectConfigLocationsForAgent(a.currentAgent) {
 		if p, err := filepath.Abs(loc.Path); err == nil {
 			detected[strings.ToLower(p)] = true
 		}
@@ -176,11 +295,19 @@ func (a *App) SetConfigPath(path string) map[string]interface{} {
 	if !allowed {
 		return map[string]interface{}{"success": false, "error": "该路径不在已探测的配置位置中，请通过「浏览」选择配置文件"}
 	}
-	if _, err := core.LoadConfig(path); err != nil {
-		return map[string]interface{}{"success": false, "error": err.Error()}
+	if a.currentAgent == string(core.AgentDeepSeek) {
+		if _, err := core.DeepSeekLoadConfig(path); err != nil {
+			return map[string]interface{}{"success": false, "error": err.Error()}
+		}
+	} else {
+		if _, err := core.LoadConfig(path); err != nil {
+			return map[string]interface{}{"success": false, "error": err.Error()}
+		}
 	}
 	a.mu.Lock()
 	a.targetConfigPath = path
+	a.agentPaths[a.currentAgent] = path
+	a.persistAgentStateLocked()
 	a.mu.Unlock()
 	return map[string]interface{}{"success": true, "path": a.targetConfigPath}
 }
@@ -285,22 +412,118 @@ func (a *App) GuessKind(baseURL string) interface{} {
 
 func (a *App) NewProviderID() string { return core.NewProviderID() }
 
+func loadConfigForAgent(path, agent string) (map[string]interface{}, error) {
+	if agent == string(core.AgentDeepSeek) {
+		return core.DeepSeekLoadConfig(path)
+	}
+	return core.LoadConfig(path)
+}
+
+func loadConfigWithFingerprintForAgent(path, agent string) (map[string]interface{}, string, error) {
+	if agent == string(core.AgentDeepSeek) {
+		before, _ := core.FileFingerprint(path)
+		cfg, err := core.DeepSeekLoadConfig(path)
+		if err != nil {
+			return nil, "", err
+		}
+		after, _ := core.FileFingerprint(path)
+		if before != after {
+			return nil, "", fmt.Errorf("配置文件在读取期间被其他程序修改，请重试")
+		}
+		return cfg, after, nil
+	}
+	return core.LoadConfigWithFingerprint(path)
+}
+
+func writeConfigForAgent(path string, cfg map[string]interface{}, fingerprint, agent string) error {
+	if agent == string(core.AgentDeepSeek) {
+		return writeDeepSeekConfigCompat(path, cfg, fingerprint)
+	}
+	return core.WriteConfig(path, cfg, fingerprint)
+}
+
+func writeDeepSeekConfigCompat(path string, cfg map[string]interface{}, fingerprint string) error {
+	if cfg == nil {
+		cfg = map[string]interface{}{}
+	}
+	format := "json"
+	low := strings.ToLower(path)
+	if strings.HasSuffix(low, ".yaml") || strings.HasSuffix(low, ".yml") {
+		format = "yaml"
+	}
+	if format == "yaml" {
+		return core.WriteDeepSeekYAML(path, cfg, fingerprint)
+	}
+	return core.WriteConfig(path, cfg, fingerprint)
+}
+
+func providersFromConfig(cfg map[string]interface{}, agent string) map[string]interface{} {
+	if cfg == nil {
+		return nil
+	}
+	if agent == string(core.AgentDeepSeek) {
+		if llm, ok := cfg["llm-pi-ai"].(map[string]interface{}); ok {
+			if prov, ok := llm["providers"].(map[string]interface{}); ok {
+				return prov
+			}
+		}
+	}
+	if p, ok := cfg["provider"].(map[string]interface{}); ok {
+		return p
+	}
+	return nil
+}
+
 func (a *App) ListProviders() map[string]interface{} {
 	target := a.targetConfigPath
+	agent := a.currentAgent
 	if target == "" {
 		return map[string]interface{}{"success": false, "error": "请先选择目标配置文件"}
+	}
+	if agent == string(core.AgentDeepSeek) {
+		preview := core.DeepSeekImportPreview(target)
+		if preview.Error != "" {
+			return map[string]interface{}{"success": false, "error": preview.Error}
+		}
+		return map[string]interface{}{"success": true, "providers": preview.Providers, "target": target, "agent": agent}
 	}
 	cfg, err := core.LoadConfig(target)
 	if err != nil {
 		return map[string]interface{}{"success": false, "error": err.Error()}
 	}
-	return map[string]interface{}{"success": true, "providers": core.BuildProviderSummary(cfg), "target": target}
+	return map[string]interface{}{"success": true, "providers": core.BuildProviderSummary(cfg), "target": target, "agent": agent}
 }
 
 func (a *App) GetProvider(providerID string) map[string]interface{} {
 	target := a.targetConfigPath
+	agent := a.currentAgent
 	if target == "" {
 		return map[string]interface{}{"success": false, "error": "请先选择目标配置文件"}
+	}
+	if agent == string(core.AgentDeepSeek) {
+		cfg, err := core.DeepSeekLoadConfig(target)
+		if err != nil {
+			return map[string]interface{}{"success": false, "error": err.Error()}
+		}
+		providers := providersFromConfig(cfg, agent)
+		raw, ok := providers[providerID]
+		if !ok {
+			return map[string]interface{}{"success": false, "error": fmt.Sprintf("提供商「%s」不存在", providerID)}
+		}
+		m, _ := raw.(map[string]interface{})
+		if m == nil {
+			return map[string]interface{}{"success": false, "error": fmt.Sprintf("提供商「%s」配置格式错误", providerID)}
+		}
+		pid, normalized, err := core.ConvertDeepSeekProvider(providerID, m, nil)
+		if err != nil {
+			return map[string]interface{}{"success": false, "error": err.Error()}
+		}
+		fake := map[string]interface{}{"provider": map[string]interface{}{pid: normalized}}
+		pe, err := core.ProviderToEdit(fake, pid)
+		if err != nil {
+			return map[string]interface{}{"success": false, "error": err.Error()}
+		}
+		return map[string]interface{}{"success": true, "provider": pe, "agent": agent}
 	}
 	cfg, err := core.LoadConfig(target)
 	if err != nil {
@@ -310,7 +533,7 @@ func (a *App) GetProvider(providerID string) map[string]interface{} {
 	if err != nil {
 		return map[string]interface{}{"success": false, "error": err.Error()}
 	}
-	return map[string]interface{}{"success": true, "provider": provider}
+	return map[string]interface{}{"success": true, "provider": provider, "agent": agent}
 }
 
 func (a *App) SaveProvider(providerID string, provider map[string]interface{}) map[string]interface{} {
@@ -328,8 +551,37 @@ func (a *App) SaveProvider(providerID string, provider map[string]interface{}) m
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	target := a.targetConfigPath
+	agent := a.currentAgent
 	if target == "" {
 		return map[string]interface{}{"success": false, "error": "请先选择目标配置文件"}
+	}
+	if agent == string(core.AgentDeepSeek) {
+		cfg, fingerprint, err := loadConfigWithFingerprintForAgent(target, agent)
+		if err != nil {
+			return map[string]interface{}{"success": false, "error": fmt.Sprintf("写入配置文件时出错：\n%s", core.ShortText(err.Error(), 300))}
+		}
+		providers := providersFromConfig(cfg, agent)
+		existsDeepSeek := false
+		if providers != nil {
+			_, existsDeepSeek = providers[newID]
+		}
+		if existsDeepSeek && newID != providerID {
+			return map[string]interface{}{"success": false, "error": fmt.Sprintf("提供商「%s」已存在", newID)}
+		}
+		bak, _ := core.BackupConfig(target)
+		if newID != providerID && providers != nil {
+			if _, exists := providers[providerID]; exists {
+				delete(providers, providerID)
+			}
+		}
+		if err := core.DeepSeekSaveProvider(target, newID, providerCfg, fingerprint); err != nil {
+			return map[string]interface{}{"success": false, "error": fmt.Sprintf("写入配置文件时出错：\n%s", core.ShortText(err.Error(), 300))}
+		}
+		latestBak := bak
+		if latestBak == "" {
+			latestBak = core.FindLatestBackup(target)
+		}
+		return map[string]interface{}{"success": true, "count": count, "provider_id": newID, "backup": latestBak, "target": target, "agent": agent}
 	}
 	config, fingerprint, err := core.LoadConfigWithFingerprint(target)
 	if err != nil {
@@ -377,15 +629,36 @@ func (a *App) SaveProvider(providerID string, provider map[string]interface{}) m
 	if latestBak == "" {
 		latestBak = core.FindLatestBackup(target)
 	}
-	return map[string]interface{}{"success": true, "count": count, "provider_id": newID, "backup": latestBak, "target": target}
+	return map[string]interface{}{"success": true, "count": count, "provider_id": newID, "backup": latestBak, "target": target, "agent": agent}
 }
 
 func (a *App) DeleteProvider(providerID string) map[string]interface{} {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	target := a.targetConfigPath
+	agent := a.currentAgent
 	if target == "" {
 		return map[string]interface{}{"success": false, "error": "请先选择目标配置文件"}
+	}
+	if agent == string(core.AgentDeepSeek) {
+		cfg, fingerprint, err := loadConfigWithFingerprintForAgent(target, agent)
+		if err != nil {
+			return map[string]interface{}{"success": false, "error": fmt.Sprintf("删除提供商时出错：\n%s", core.ShortText(err.Error(), 300))}
+		}
+		providers := providersFromConfig(cfg, agent)
+		if providers == nil || providers[providerID] == nil {
+			return map[string]interface{}{"success": false, "error": fmt.Sprintf("提供商「%s」不存在", providerID)}
+		}
+		bak, _ := core.BackupConfig(target)
+		delete(providers, providerID)
+		if err := writeConfigForAgent(target, cfg, fingerprint, agent); err != nil {
+			return map[string]interface{}{"success": false, "error": fmt.Sprintf("删除提供商时出错：\n%s", core.ShortText(err.Error(), 300))}
+		}
+		latestBak := bak
+		if latestBak == "" {
+			latestBak = core.FindLatestBackup(target)
+		}
+		return map[string]interface{}{"success": true, "provider_id": providerID, "backup": latestBak, "target": target}
 	}
 	config, fingerprint, err := core.LoadConfigWithFingerprint(target)
 	if err != nil {
@@ -412,8 +685,60 @@ func (a *App) DeleteModel(providerID, modelID string) map[string]interface{} {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	target := a.targetConfigPath
+	agent := a.currentAgent
 	if target == "" {
 		return map[string]interface{}{"success": false, "error": "请先选择目标配置文件"}
+	}
+	if agent == string(core.AgentDeepSeek) {
+		cfg, fingerprint, err := loadConfigWithFingerprintForAgent(target, agent)
+		if err != nil {
+			return map[string]interface{}{"success": false, "error": fmt.Sprintf("删除模型时出错：\n%s", core.ShortText(err.Error(), 300))}
+		}
+		providers := providersFromConfig(cfg, agent)
+		if providers == nil || providers[providerID] == nil {
+			return map[string]interface{}{"success": false, "error": fmt.Sprintf("提供商「%s」不存在", providerID)}
+		}
+		prov, _ := providers[providerID].(map[string]interface{})
+		if arr, ok := prov["models"].([]interface{}); ok {
+			newArr := []interface{}{}
+			found := false
+			for _, e := range arr {
+				mm, _ := e.(map[string]interface{})
+				id, _ := mm["id"].(string)
+				if id == modelID {
+					found = true
+					continue
+				}
+				newArr = append(newArr, e)
+			}
+			if !found {
+				return map[string]interface{}{"success": false, "error": fmt.Sprintf("模型「%s」不存在", modelID)}
+			}
+			bak, _ := core.BackupConfig(target)
+			prov["models"] = newArr
+			if err := writeConfigForAgent(target, cfg, fingerprint, agent); err != nil {
+				return map[string]interface{}{"success": false, "error": fmt.Sprintf("删除模型时出错：\n%s", core.ShortText(err.Error(), 300))}
+			}
+			latestBak := bak
+			if latestBak == "" {
+				latestBak = core.FindLatestBackup(target)
+			}
+			return map[string]interface{}{"success": true, "provider_id": providerID, "model_id": modelID, "backup": latestBak, "target": target}
+		}
+		models, _ := prov["models"].(map[string]interface{})
+		if models == nil || models[modelID] == nil {
+			return map[string]interface{}{"success": false, "error": fmt.Sprintf("模型「%s」不存在", modelID)}
+		}
+		bak, _ := core.BackupConfig(target)
+		delete(models, modelID)
+		if err := writeConfigForAgent(target, cfg, fingerprint, agent); err != nil {
+			return map[string]interface{}{"success": false, "error": fmt.Sprintf("删除模型时出错：\n%s", core.ShortText(err.Error(), 300))}
+		}
+		latestBak := bak
+		if latestBak == "" {
+			latestBak = core.FindLatestBackup(target)
+		}
+		return map[string]interface{}{"success": true, "provider_id": providerID, "model_id": modelID, "backup": latestBak, "target": target}
 	}
 	config, fingerprint, err := core.LoadConfigWithFingerprint(target)
 	if err != nil {
@@ -458,8 +783,43 @@ func (a *App) FetchModels(baseURL, apiKey string) map[string]interface{} {
 
 func (a *App) RefreshProviderModels(providerID, baseURLOverride, apiKeyOverride string) map[string]interface{} {
 	target := a.targetConfigPath
+	agent := a.currentAgent
 	if target == "" {
 		return map[string]interface{}{"success": false, "error": "请先选择目标配置文件"}
+	}
+	if agent == string(core.AgentDeepSeek) {
+		cfg, err := core.DeepSeekLoadConfig(target)
+		if err != nil {
+			return map[string]interface{}{"success": false, "error": err.Error()}
+		}
+		providers := providersFromConfig(cfg, agent)
+		raw, ok := providers[providerID]
+		if !ok {
+			return map[string]interface{}{"success": false, "error": fmt.Sprintf("提供商「%s」不存在", providerID)}
+		}
+		m, _ := raw.(map[string]interface{})
+		baseURL := strings.TrimSpace(baseURLOverride)
+		if baseURL == "" {
+			baseURL, _ = m["baseURL"].(string)
+		}
+		apiKey := strings.TrimSpace(apiKeyOverride)
+		if apiKey == "" {
+			apiKey, _ = m["apiKey"].(string)
+			if apiKey == "" {
+				if envName, ok := m["apiKeyEnv"].(string); ok && envName != "" {
+					creds := core.LoadCredentialsForPreview()
+					if v, ok := creds[envName]; ok {
+						apiKey = v
+					} else {
+						apiKey = os.Getenv(envName)
+					}
+				}
+			}
+		}
+		if baseURL == "" {
+			return map[string]interface{}{"success": false, "error": "该提供商未配置 Base URL，请先在管理页填写"}
+		}
+		return a.FetchModels(baseURL, apiKey)
 	}
 	cfg, err := core.LoadConfig(target)
 	if err != nil {
@@ -519,6 +879,7 @@ func (a *App) ImportProvider(payload map[string]interface{}) map[string]interfac
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	target := a.targetConfigPath
+	agent := a.currentAgent
 	if target == "" {
 		return map[string]interface{}{"success": false, "error": "请先选择目标配置文件"}
 	}
@@ -528,6 +889,45 @@ func (a *App) ImportProvider(payload map[string]interface{}) map[string]interfac
 				return map[string]interface{}{"success": false, "error": "目标配置已发生变化，请确认后重试"}
 			}
 		}
+	}
+	if agent == string(core.AgentDeepSeek) {
+		cfg, fingerprint, err := loadConfigWithFingerprintForAgent(target, agent)
+		if err != nil {
+			return map[string]interface{}{"success": false, "error": err.Error()}
+		}
+		if !mergeModels {
+			providers := providersFromConfig(cfg, agent)
+			if providers != nil {
+				if _, exists := providers[pid]; exists {
+					if incoming, _ := providerCfg["models"].(map[string]interface{}); len(incoming) == 0 {
+						if existingRaw, ok := providers[pid].(map[string]interface{}); ok {
+							hasExistingModels := false
+							if arr, ok := existingRaw["models"].([]interface{}); ok && len(arr) > 0 {
+								hasExistingModels = true
+							} else if mp, ok := existingRaw["models"].(map[string]interface{}); ok && len(mp) > 0 {
+								hasExistingModels = true
+							}
+							if hasExistingModels {
+								return map[string]interface{}{"success": false, "error": "检测到模型列表为空。为避免误删已有模型，已取消导入；如需清空模型，请逐个删除。"}
+							}
+						}
+					}
+				}
+			}
+		}
+		bak, _ := core.BackupConfig(target)
+		if err := core.DeepSeekSaveProvider(target, pid, providerCfg, fingerprint); err != nil {
+			return map[string]interface{}{"success": false, "error": fmt.Sprintf("写入配置文件时出错：\n%s", core.ShortText(err.Error(), 300))}
+		}
+		latestBak := bak
+		if latestBak == "" {
+			latestBak = core.FindLatestBackup(target)
+		}
+		count := 0
+		if m, ok := providerCfg["models"].(map[string]interface{}); ok {
+			count = len(m)
+		}
+		return map[string]interface{}{"success": true, "count": count, "provider_id": pid, "target": target, "backup": latestBak, "latest_backup": latestBak, "agent": agent}
 	}
 	if !mergeModels {
 		if cfg, _ := core.LoadConfig(target); cfg != nil {
@@ -563,7 +963,7 @@ func (a *App) ImportProvider(payload map[string]interface{}) map[string]interfac
 	if m, ok := providerCfg["models"].(map[string]interface{}); ok {
 		count = len(m)
 	}
-	return map[string]interface{}{"success": true, "count": count, "provider_id": pid, "target": target, "backup": latestBak, "latest_backup": latestBak}
+	return map[string]interface{}{"success": true, "count": count, "provider_id": pid, "target": target, "backup": latestBak, "latest_backup": latestBak, "agent": agent}
 }
 
 // Opencode import
@@ -623,6 +1023,7 @@ func (a *App) ImportOpencode(payload map[string]interface{}) map[string]interfac
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	target := a.targetConfigPath
+	agent := a.currentAgent
 	if target == "" {
 		return map[string]interface{}{"success": false, "error": "请先选择目标配置文件"}
 	}
@@ -632,6 +1033,9 @@ func (a *App) ImportOpencode(payload map[string]interface{}) map[string]interfac
 				return map[string]interface{}{"success": false, "error": "目标配置已发生变化，请确认后重试"}
 			}
 		}
+	}
+	if agent == string(core.AgentDeepSeek) {
+		return map[string]interface{}{"success": false, "error": "当前 Agent 为 DeepSeek，请直接在管理页保存提供商"}
 	}
 	existing, fingerprint, err := core.LoadConfigWithFingerprint(target)
 	if err != nil {
@@ -710,6 +1114,7 @@ func (a *App) MergeConfig(payload map[string]interface{}) map[string]interface{}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	target := a.targetConfigPath
+	agent := a.currentAgent
 	if target == "" {
 		return map[string]interface{}{"success": false, "error": "请先选择目标配置文件"}
 	}
@@ -719,6 +1124,9 @@ func (a *App) MergeConfig(payload map[string]interface{}) map[string]interface{}
 				return map[string]interface{}{"success": false, "error": "目标配置已发生变化，请确认后重试"}
 			}
 		}
+	}
+	if agent == string(core.AgentDeepSeek) {
+		return map[string]interface{}{"success": false, "error": "当前 Agent 为 DeepSeek，暂不支持合并配置文件"}
 	}
 	existing, fingerprint, err := core.LoadConfigWithFingerprint(target)
 	if err != nil {
@@ -779,7 +1187,6 @@ func (a *App) SaveKeychainEntry(entry map[string]interface{}) map[string]interfa
 		Note:   stringOr(entry["note"], ""),
 	}
 	if ke.APIKey == "" {
-		// try snake case variants
 		if v, ok := entry["api_key"].(string); ok {
 			ke.APIKey = v
 		}

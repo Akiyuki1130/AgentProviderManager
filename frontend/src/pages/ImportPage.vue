@@ -32,7 +32,7 @@
     <div class="footer-bar fluent-card">
       <label style="display:flex; gap:6px; align-items:center; font-size:12px; cursor:pointer"><input type="checkbox" v-model="mergeChk" /> 若 Provider 已存在则合并模型（否则覆盖）</label>
       <div style="flex:1" />
-      <n-button type="primary" color="#107c10" :disabled="cards.length === 0" :loading="importing" @click="onImport">⬇ 导入到 ZCode</n-button>
+      <n-button type="primary" color="#107c10" :disabled="cards.length === 0" :loading="importing" @click="onImport">⬇ 导入到当前 Agent</n-button>
     </div>
 
     <div class="fluent-card card-pad list-wrap">

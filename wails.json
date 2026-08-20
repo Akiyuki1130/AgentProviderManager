@@ -1,19 +1,19 @@
 {
   "$schema": "https://wails.io/schemas/config.v2.json",
-  "name": "ZCodeProviderManager",
-  "outputfilename": "ZCodeProviderManager",
+  "name": "AgentProviderManager",
+  "outputfilename": "AgentProviderManager",
   "frontend:install": "npm install",
   "frontend:build": "npm run build",
   "frontend:dev:watcher": "npm run dev",
   "frontend:dev:serverUrl": "auto",
   "author": {
-    "name": "ZCodeProviderManager"
+    "name": "AgentProviderManager"
   },
   "info": {
-    "companyName": "ZCodeProviderManager",
-    "productName": "ZCode Provider Manager",
+    "companyName": "AgentProviderManager",
+    "productName": "Agent Provider Manager",
     "productVersion": "1.0.1",
-    "copyright": "Copyright (c) 2026 ZCodeProviderManager",
-    "comments": "Manage ZCode third-party model providers"
+    "copyright": "Copyright (c) 2026 AgentProviderManager",
+    "comments": "Manage third-party model providers for multiple agents"
   }
 }

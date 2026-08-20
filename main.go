@@ -8,7 +8,7 @@ import (
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
-	"zcodeprovidermanager/internal/app"
+	"agentprovidermanager/internal/app"
 )
 
 var (
@@ -21,14 +21,14 @@ var assets embed.FS
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "--version" {
-		fmt.Printf("ZCodeProviderManager %s (built %s)\n", version, buildTime)
+		fmt.Printf("AgentProviderManager %s (built %s)\n", version, buildTime)
 		os.Exit(0)
 	}
 
 	appBinding := app.NewApp()
 
 	err := wails.Run(&options.App{
-		Title:     fmt.Sprintf("ZCode Provider Manager v%s", version),
+		Title:     fmt.Sprintf("Agent Provider Manager v%s", version),
 		Width:     1280,
 		Height:    800,
 		MinWidth:  1100,

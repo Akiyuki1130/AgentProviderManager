@@ -1,22 +1,22 @@
 package core
 
 const (
-	AppName    = "ZCode Provider Manager"
+	AppName    = "Agent Provider Manager"
 	AppVersion = "1.0.1"
 
-	MaxModels            = 2000
-	MaxModelIDLength     = 512
-	MaxTokenLimit        = 10_000_000
-	MaxBackups           = 2
-	MaxProviderNameLen   = 256
-	MaxAPIKeyLength      = 8192
-	MaxKeychainEntries   = 500
-	MaxKeychainNameLen   = 256
-	MaxKeychainNoteLen   = 2048
-	MaxKeychainIDLen     = 128
-	KeychainFormatVer    = 2
-	KeychainFilename     = "keychain.json"
-	MaxOptionsLength     = 64 * 1024
+	MaxModels          = 2000
+	MaxModelIDLength   = 512
+	MaxTokenLimit      = 10_000_000
+	MaxBackups         = 2
+	MaxProviderNameLen = 256
+	MaxAPIKeyLength    = 8192
+	MaxKeychainEntries = 500
+	MaxKeychainNameLen = 256
+	MaxKeychainNoteLen = 2048
+	MaxKeychainIDLen   = 128
+	KeychainFormatVer  = 2
+	KeychainFilename   = "keychain.json"
+	MaxOptionsLength   = 64 * 1024
 )
 
 var Kinds = []string{"openai-compatible", "anthropic", "responses"}

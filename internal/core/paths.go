@@ -23,6 +23,15 @@ func AppDataDir() string {
 		home, _ := os.UserHomeDir()
 		dir = home
 	}
+	return filepath.Join(dir, "AgentProviderManager")
+}
+
+func LegacyAppDataDir() string {
+	dir := os.Getenv("LOCALAPPDATA")
+	if dir == "" {
+		home, _ := os.UserHomeDir()
+		dir = home
+	}
 	return filepath.Join(dir, "ZCodeProviderManager")
 }
 

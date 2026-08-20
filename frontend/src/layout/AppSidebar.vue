@@ -5,7 +5,7 @@
     </button>
     <div class="app-brand">
       <span class="brand-icon">⚡</span>
-      <span class="brand-text">ZCode Provider Manager</span>
+      <span class="brand-text">Agent Provider Manager</span>
     </div>
     <nav class="app-nav" ref="navEl">
       <div

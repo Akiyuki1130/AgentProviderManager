@@ -58,6 +58,15 @@ export async function GetLanguage(): Promise<string | null> {
 export async function SetLanguage(lang: string): Promise<Record<string, unknown>> {
   return call('SetLanguage', lang)
 }
+export async function ListAgents(): Promise<Record<string, unknown>> {
+  return call('ListAgents')
+}
+export async function GetCurrentAgent(): Promise<Record<string, unknown>> {
+  return call('GetCurrentAgent')
+}
+export async function SetCurrentAgent(agent: string): Promise<Record<string, unknown>> {
+  return call('SetCurrentAgent', agent)
+}
 export async function GuessProviderID(baseUrl: string): Promise<string> {
   try { return (await call('GuessProviderID', baseUrl)) as string } catch { return '' }
 }

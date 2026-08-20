@@ -519,6 +519,10 @@ func RenameProviderInConfig(config map[string]interface{}, oldID, newID string) 
 }
 
 func DetectConfigLocations() []ConfigLocation {
+	return DetectConfigLocationsForAgent("")
+}
+
+func DetectConfigLocationsForAgent(agentID string) []ConfigLocation {
 	var locations []ConfigLocation
 	seen := map[string]bool{}
 	add := func(label, path string) {
@@ -544,7 +548,7 @@ func DetectConfigLocations() []ConfigLocation {
 		}
 		loc := ConfigLocation{Label: label, Path: path, Exists: exists, Accessible: accessible, Error: errStr}
 		if exists && accessible {
-			summary := ConfigProviderSummary(path)
+			summary := ConfigProviderSummaryForAgent(path, agentID)
 			loc.ProviderCount = len(summary.Providers)
 			ids := make([]string, len(summary.Providers))
 			for i, p := range summary.Providers {
@@ -558,22 +562,58 @@ func DetectConfigLocations() []ConfigLocation {
 	if home == "" {
 		home, _ = os.UserHomeDir()
 	}
-	add("ZCode 全局配置", ZCodeConfig())
-	add("ZCode 旧版配置位置", filepath.Join(home, ".zcode", "config.json"))
+	normAgent := NormalizeAgentID(agentID)
+	if normAgent == AgentDeepSeek {
+		add("DeepSeek 配置 (settings.yaml)", filepath.Join(DshHome(), "settings.yaml"))
+		add("DeepSeek 配置 (settings.yml)", filepath.Join(DshHome(), "settings.yml"))
+		add("DeepSeek 配置 (settings.json)", filepath.Join(DshHome(), "settings.json"))
+	} else if normAgent == AgentOpenCode {
+		add("OpenCode 配置", OpencodeConfig())
+	} else if agentID == "" {
+		add("ZCode 全局配置", ZCodeConfig())
+		add("ZCode 旧版配置位置", filepath.Join(home, ".zcode", "config.json"))
+		add("OpenCode 配置", OpencodeConfig())
+		add("DeepSeek 配置 (settings.yaml)", filepath.Join(DshHome(), "settings.yaml"))
+		add("DeepSeek 配置 (settings.json)", filepath.Join(DshHome(), "settings.json"))
+	} else {
+		add("ZCode 全局配置", ZCodeConfig())
+		add("ZCode 旧版配置位置", filepath.Join(home, ".zcode", "config.json"))
+	}
 	return locations
 }
 
 func ConfigProviderSummary(path string) ImportPreview {
+	return ConfigProviderSummaryForAgent(path, "")
+}
+
+func ConfigProviderSummaryForAgent(path string, agentID string) ImportPreview {
 	item := ImportPreview{Path: path}
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return item
 	}
-	item.Exists = true
+	normAgent := ""
+	if agentID != "" {
+		normAgent = string(NormalizeAgentID(agentID))
+	} else {
+		low := strings.ToLower(path)
+		if strings.Contains(low, ".dsh") {
+			normAgent = string(AgentDeepSeek)
+		} else if strings.Contains(low, "opencode") {
+			normAgent = string(AgentOpenCode)
+		}
+	}
+	if normAgent == string(AgentDeepSeek) {
+		preview := DeepSeekImportPreview(path)
+		preview.Path = path
+		return preview
+	}
 	cfg, err := LoadConfig(path)
 	if err != nil {
 		item.Error = err.Error()
+		item.Exists = true
 		return item
 	}
+	item.Exists = true
 	item.Providers = BuildProviderSummary(cfg)
 	return item
 }
