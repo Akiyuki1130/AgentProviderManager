@@ -115,3 +115,9 @@ export async function SaveKeychainEntry(entry: unknown): Promise<Record<string, 
 export async function DeleteKeychainEntries(ids: string[]): Promise<Record<string, unknown>> {
   return call('DeleteKeychainEntries', ids)
 }
+export async function MigratePreview(source: string, target: string): Promise<Record<string, unknown>> {
+  return call('MigratePreview', source, target)
+}
+export async function MigrateExecute(payload: unknown): Promise<Record<string, unknown>> {
+  return call('MigrateExecute', payload)
+}

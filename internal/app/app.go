@@ -1148,6 +1148,41 @@ func (a *App) MergeConfig(payload map[string]interface{}) map[string]interface{}
 	return map[string]interface{}{"success": true, "imported": imported, "merged": merged, "target": target, "backup": latestBak, "latest_backup": latestBak}
 }
 
+// Migrate
+func (a *App) MigratePreview(sourceAgent, targetAgent string) map[string]interface{} {
+	preview := core.MigratePreviewForAgents(sourceAgent, targetAgent)
+	return map[string]interface{}{"success": true, "preview": preview}
+}
+
+func (a *App) MigrateExecute(payload map[string]interface{}) map[string]interface{} {
+	if payload == nil {
+		return map[string]interface{}{"success": false, "error": "参数格式错误"}
+	}
+	source, _ := payload["source"].(string)
+	target, _ := payload["target"].(string)
+	mode, _ := payload["mode"].(string)
+	var selectedIDs []string
+	if raw, ok := payload["selected_ids"]; ok {
+		switch v := raw.(type) {
+		case []string:
+			selectedIDs = v
+		case []interface{}:
+			for _, e := range v {
+				if s, ok := e.(string); ok {
+					selectedIDs = append(selectedIDs, s)
+				}
+			}
+		}
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	result, err := core.MigrateExecute(source, target, selectedIDs, mode)
+	if err != nil {
+		return map[string]interface{}{"success": false, "error": core.ShortText(err.Error(), 400)}
+	}
+	return result
+}
+
 // Keychain
 func (a *App) ListKeychain() map[string]interface{} {
 	entries, err := core.LoadKeychain("")

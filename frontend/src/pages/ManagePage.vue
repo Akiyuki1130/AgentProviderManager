@@ -93,11 +93,13 @@
               </div>
               <div class="batch-row batch-row--wrap">
                 <label class="batch-item">思考 <button class="switch" :class="{ on: batchReasoningOn }" @click="batchToggleReasoning" /></label>
-                <n-button size="tiny" @click="batchEnableAllVariants">一键全开思考等级</n-button>
+                <n-button size="tiny" @click="batchEnableAllVariants">一键全开</n-button>
                 <span class="batch-group-label">推理档位</span>
                 <span v-for="v in variantOpts" :key="v" class="batch-pill" @click="batchToggleVariant(v)">{{ v }}</span>
                 <span class="batch-group-label">默认档位</span>
                 <n-select v-model:value="batchDefault" :options="variantSelectOpts" placeholder="—" style="width: 100px" size="small" clearable @update:value="batchSetDefault" />
+              </div>
+              <div class="batch-row batch-row--wrap">
                 <span class="batch-group-label">上下文长度</span>
                 <n-input v-model:value="batchContext" placeholder="回车应用" size="small" style="width: 100px" @keydown.enter="applyBatchLimit('context')" />
                 <span class="batch-group-label">输出长度</span>

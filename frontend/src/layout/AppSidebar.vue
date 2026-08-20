@@ -38,6 +38,7 @@ import {
   SettingsOutline,
   CloudDownloadOutline,
   KeyOutline,
+  SwapHorizontalOutline,
   ChevronBackOutline,
   ChevronForwardOutline,
 } from '@vicons/ionicons5'
@@ -56,6 +57,7 @@ interface NavItem { key: string; label: string; icon: Component }
 const navItems: NavItem[] = [
   { key: '/manage', label: '管理配置', icon: SettingsOutline },
   { key: '/import', label: '导入提供商', icon: CloudDownloadOutline },
+  { key: '/migrate', label: '配置文件迁移', icon: SwapHorizontalOutline },
   { key: '/keychain', label: 'API Key 钥匙串', icon: KeyOutline },
 ]
 const activeKey = computed(() => route.path)
