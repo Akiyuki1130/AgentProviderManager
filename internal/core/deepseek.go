@@ -89,6 +89,8 @@ func deepSeekProvidersMap(cfg map[string]interface{}) map[string]interface{} {
 	return nil
 }
 
+func DeepSeekProviderSource(cfg map[string]interface{}, providerID string) (string, map[string]interface{}) { return deepSeekProviderSource(cfg, providerID) }
+
 func deepSeekProviderSource(cfg map[string]interface{}, providerID string) (string, map[string]interface{}) {
 	if cfg == nil {
 		return "", nil
@@ -522,7 +524,7 @@ func DeepSeekSaveProvider(path string, providerID string, providerCfg map[string
 		entry["displayName"] = providerCfg["name"]
 		entry["baseURL"] = baseURL
 		if strings.TrimSpace(apiKey) != "" {
-			envName := strings.ToUpper(strings.ReplaceAll(providerID, "-", "_")) + "_API_KEY"
+			envName := strings.ToUpper(strings.ReplaceAll(strings.ReplaceAll(providerID, "-", "_"), ":", "_")) + "_API_KEY"
 			entry["apiKeyEnv"] = envName
 			_ = saveDeepSeekCredential(envName, apiKey)
 			delete(entry, "apiKey")

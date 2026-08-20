@@ -556,18 +556,23 @@ func (a *App) SaveProvider(providerID string, provider map[string]interface{}) m
 		if err != nil {
 			return map[string]interface{}{"success": false, "error": fmt.Sprintf("写入配置文件时出错：\n%s", core.ShortText(err.Error(), 300))}
 		}
-		providers := providersFromConfig(cfg, agent)
+		allProviders := core.DeepSeekProvidersMap(cfg)
 		existsDeepSeek := false
-		if providers != nil {
-			_, existsDeepSeek = providers[newID]
+		if allProviders != nil {
+			_, existsDeepSeek = allProviders[newID]
 		}
 		if existsDeepSeek && newID != providerID {
 			return map[string]interface{}{"success": false, "error": fmt.Sprintf("提供商「%s」已存在", newID)}
 		}
 		bak, _ := core.BackupConfig(target)
-		if newID != providerID && providers != nil {
-			if _, exists := providers[providerID]; exists {
-				delete(providers, providerID)
+		if newID != providerID {
+			if llm, ok := cfg["llm-pi-ai"].(map[string]interface{}); ok {
+				if prov, ok := llm["providers"].(map[string]interface{}); ok {
+					delete(prov, providerID)
+				}
+			}
+			if prov2, ok := cfg["provider"].(map[string]interface{}); ok {
+				delete(prov2, providerID)
 			}
 		}
 		if err := core.DeepSeekSaveProvider(target, newID, providerCfg, fingerprint); err != nil {
@@ -641,12 +646,32 @@ func (a *App) DeleteProvider(providerID string) map[string]interface{} {
 		if err != nil {
 			return map[string]interface{}{"success": false, "error": fmt.Sprintf("删除提供商时出错：\n%s", core.ShortText(err.Error(), 300))}
 		}
-		providers := providersFromConfig(cfg, agent)
-		if providers == nil || providers[providerID] == nil {
+		allProviders := core.DeepSeekProvidersMap(cfg)
+		if allProviders == nil || allProviders[providerID] == nil {
 			return map[string]interface{}{"success": false, "error": fmt.Sprintf("提供商「%s」不存在", providerID)}
 		}
 		bak, _ := core.BackupConfig(target)
-		delete(providers, providerID)
+		src, _ := core.DeepSeekProviderSource(cfg, providerID)
+		if src == "llm" {
+			if llm, ok := cfg["llm-pi-ai"].(map[string]interface{}); ok {
+				if prov, ok := llm["providers"].(map[string]interface{}); ok {
+					delete(prov, providerID)
+				}
+			}
+		} else if src == "provider" {
+			if prov2, ok := cfg["provider"].(map[string]interface{}); ok {
+				delete(prov2, providerID)
+			}
+		} else {
+			if llm, ok := cfg["llm-pi-ai"].(map[string]interface{}); ok {
+				if prov, ok := llm["providers"].(map[string]interface{}); ok {
+					delete(prov, providerID)
+				}
+			}
+			if prov2, ok := cfg["provider"].(map[string]interface{}); ok {
+				delete(prov2, providerID)
+			}
+		}
 		if err := writeConfigForAgent(target, cfg, fingerprint, agent); err != nil {
 			return map[string]interface{}{"success": false, "error": fmt.Sprintf("删除提供商时出错：\n%s", core.ShortText(err.Error(), 300))}
 		}
@@ -690,11 +715,34 @@ func (a *App) DeleteModel(providerID, modelID string) map[string]interface{} {
 		if err != nil {
 			return map[string]interface{}{"success": false, "error": fmt.Sprintf("删除模型时出错：\n%s", core.ShortText(err.Error(), 300))}
 		}
-		providers := providersFromConfig(cfg, agent)
-		if providers == nil || providers[providerID] == nil {
-			return map[string]interface{}{"success": false, "error": fmt.Sprintf("提供商「%s」不存在", providerID)}
+		src, _ := core.DeepSeekProviderSource(cfg, providerID)
+		var prov map[string]interface{}
+		if src == "llm" {
+			if llm, ok := cfg["llm-pi-ai"].(map[string]interface{}); ok {
+				if llmProv, ok := llm["providers"].(map[string]interface{}); ok {
+					if p, ok := llmProv[providerID].(map[string]interface{}); ok {
+						prov = p
+					}
+				}
+			}
+		} else if src == "provider" {
+			if p2, ok := cfg["provider"].(map[string]interface{}); ok {
+				if p, ok := p2[providerID].(map[string]interface{}); ok {
+					prov = p
+				}
+			}
 		}
-		prov, _ := providers[providerID].(map[string]interface{})
+		if prov == nil {
+			allProviders := core.DeepSeekProvidersMap(cfg)
+			if allProviders == nil || allProviders[providerID] == nil {
+				return map[string]interface{}{"success": false, "error": fmt.Sprintf("提供商「%s」不存在", providerID)}
+			}
+			if p, ok := allProviders[providerID].(map[string]interface{}); ok {
+				prov = p
+			} else {
+				return map[string]interface{}{"success": false, "error": fmt.Sprintf("提供商「%s」配置格式错误", providerID)}
+			}
+		}
 		if arr, ok := prov["models"].([]interface{}); ok {
 			newArr := []interface{}{}
 			found := false
@@ -797,12 +845,30 @@ func (a *App) RefreshProviderModels(providerID, baseURLOverride, apiKeyOverride 
 		baseURL := strings.TrimSpace(baseURLOverride)
 		if baseURL == "" {
 			baseURL, _ = m["baseURL"].(string)
+			if baseURL == "" {
+				if opts, ok := m["options"].(map[string]interface{}); ok {
+					baseURL, _ = opts["baseURL"].(string)
+				}
+			}
 		}
 		apiKey := strings.TrimSpace(apiKeyOverride)
 		if apiKey == "" {
 			apiKey, _ = m["apiKey"].(string)
 			if apiKey == "" {
-				if envName, ok := m["apiKeyEnv"].(string); ok && envName != "" {
+				if opts, ok := m["options"].(map[string]interface{}); ok {
+					apiKey, _ = opts["apiKey"].(string)
+				}
+			}
+			if apiKey == "" {
+				envName := ""
+				if v, ok := m["apiKeyEnv"].(string); ok && v != "" {
+					envName = v
+				} else if opts, ok := m["options"].(map[string]interface{}); ok {
+					if v, ok := opts["apiKeyEnv"].(string); ok {
+						envName = v
+					}
+				}
+				if envName != "" {
 					creds := core.LoadCredentialsForPreview()
 					if v, ok := creds[envName]; ok {
 						apiKey = v

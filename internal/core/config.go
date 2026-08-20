@@ -334,6 +334,13 @@ func FileFingerprint(path string) (string, error) {
 	return fmt.Sprintf("%d:%d:%s", stat.ModTime().UnixNano(), stat.Size(), hex.EncodeToString(h[:])), nil
 }
 
+func LoadConfigForRestore(path string) (map[string]interface{}, error) {
+	if isYAMLPath(path) {
+		return DeepSeekLoadConfig(path)
+	}
+	return LoadConfig(path)
+}
+
 func LoadConfigWithFingerprint(path string) (map[string]interface{}, string, error) {
 	before, _ := FileFingerprint(path)
 	cfg, err := LoadConfig(path)
@@ -448,7 +455,7 @@ func snapshotPaths(target string) []string {
 }
 
 func RestoreBackup(target, bakPath string) (string, error) {
-	if _, err := LoadConfig(bakPath); err != nil {
+	if _, err := LoadConfigForRestore(bakPath); err != nil {
 		return "", err
 	}
 	targetFP, _ := FileFingerprint(target)

@@ -289,9 +289,7 @@ func MigrateExecute(sourceAgent, targetAgent string, selectedIDs []string, mode 
 				entry["displayName"] = item.cfg["name"]
 				entry["baseURL"] = baseURL
 				if strings.TrimSpace(apiKey) != "" {
-					envName := strings.ToUpper(strings.ReplaceAll(item.pid, "-", "_")) + "_API_KEY"
-					// also replace colon
-					envName = strings.ReplaceAll(envName, ":", "_")
+					envName := strings.ToUpper(strings.ReplaceAll(strings.ReplaceAll(item.pid, "-", "_"), ":", "_")) + "_API_KEY"
 					entry["apiKeyEnv"] = envName
 					if err := saveDeepSeekCredential(envName, apiKey); err != nil {
 						return nil, fmt.Errorf("写入 DeepSeek 凭证失败：%v", err)
