@@ -21,7 +21,7 @@
             <main class="app-content">
               <router-view v-slot="{ Component }">
                 <Transition name="fade-slide" mode="out-in">
-                  <component :is="Component" />
+                  <component :is="Component" :key="settingStore.agent" />
                 </Transition>
               </router-view>
             </main>

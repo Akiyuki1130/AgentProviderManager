@@ -134,7 +134,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { NButton, NInput, NSelect, NPopconfirm, NModal } from 'naive-ui'
 import ModelCard from '../components/ModelCard.vue'
@@ -349,7 +349,14 @@ async function doAutoRefresh() {
   }
 }
 
-onMounted(loadProviders)
+function onAgentChanged() {
+  currentId.value = null
+  currentProvider.value = null
+  editForm.value = { id: '', name: '', kind: 'openai-compatible', base_url: '', api_key: '', api_key_required: false, options_json: '', cards: [] }
+  void loadProviders()
+}
+onMounted(() => { void loadProviders(); window.addEventListener('agent-changed', onAgentChanged) })
+onUnmounted(() => { window.removeEventListener('agent-changed', onAgentChanged) })
 </script>
 
 <style scoped>
