@@ -1,0 +1,19 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "ZCodeProviderManager",
+  "outputfilename": "ZCodeProviderManager",
+  "frontend:install": "npm install",
+  "frontend:build": "npm run build",
+  "frontend:dev:watcher": "npm run dev",
+  "frontend:dev:serverUrl": "auto",
+  "author": {
+    "name": "ZCodeProviderManager"
+  },
+  "info": {
+    "companyName": "ZCodeProviderManager",
+    "productName": "ZCode Provider Manager",
+    "productVersion": "1.0.1",
+    "copyright": "Copyright (c) 2026 ZCodeProviderManager",
+    "comments": "Manage ZCode third-party model providers"
+  }
+}

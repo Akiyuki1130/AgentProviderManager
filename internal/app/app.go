@@ -1,0 +1,820 @@
+package app
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+
+	"github.com/wailsapp/wails/v2/pkg/runtime"
+	"zcodeprovidermanager/internal/core"
+)
+
+type App struct {
+	ctx               context.Context
+	mu                sync.Mutex
+	targetConfigPath  string
+	lastDialogPath    string
+	settingsPath      string
+}
+
+func NewApp() *App {
+	p := core.DefaultConfigPath()
+	// Cleanup stale tmp on startup
+	_ = core.CleanupStaleTmp(p)
+	return &App{
+		targetConfigPath: p,
+		settingsPath:     core.SettingsPath(),
+	}
+}
+
+func (a *App) Startup(ctx context.Context) {
+	a.ctx = ctx
+}
+
+func (a *App) Shutdown(_ context.Context) {}
+
+func (a *App) DomReady(_ context.Context) {}
+
+// loadSettings reads settings.json.
+func (a *App) loadSettings() map[string]interface{} {
+	data, err := os.ReadFile(a.settingsPath)
+	if err != nil {
+		return map[string]interface{}{}
+	}
+	var m map[string]interface{}
+	if err := json.Unmarshal(data, &m); err != nil {
+		_ = os.Rename(a.settingsPath, a.settingsPath+".bak")
+		return map[string]interface{}{}
+	}
+	if m == nil {
+		return map[string]interface{}{}
+	}
+	return m
+}
+
+func (a *App) saveSettings(m map[string]interface{}) bool {
+	dir := filepath.Dir(a.settingsPath)
+	_ = os.MkdirAll(dir, 0755)
+	data, _ := json.MarshalIndent(m, "", "  ")
+	tmp, err := os.CreateTemp(dir, "settings.tmp_*")
+	if err != nil {
+		return false
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		_ = os.Remove(tmpName)
+		return false
+	}
+	_ = tmp.Sync()
+	tmp.Close()
+	return os.Rename(tmpName, a.settingsPath) == nil
+}
+
+// GetAppInfo returns app metadata.
+func (a *App) GetAppInfo() map[string]interface{} {
+	return map[string]interface{}{
+		"name":               core.AppName,
+		"version":            core.AppVersion,
+		"kinds":              core.Kinds,
+		"variants":           core.ZCodeVariantOptions,
+		"ui_variants_by_kind": core.UIVariantOptionsByKind,
+	}
+}
+
+func (a *App) GetTargetConfig() map[string]interface{} {
+	p := a.targetConfigPath
+	backups := core.ListBackups(p)
+	latest := ""
+	if len(backups) > 0 {
+		latest = backups[0]
+	}
+	_, exists := os.Stat(p)
+	return map[string]interface{}{
+		"path": p, "exists": !os.IsNotExist(exists),
+		"backups": backups, "latest_backup": latest,
+	}
+}
+
+func (a *App) ListConfigLocations() map[string]interface{} {
+	return map[string]interface{}{
+		"success": true, "locations": core.DetectConfigLocations(), "current": a.targetConfigPath,
+	}
+}
+
+func (a *App) ChooseConfigFile() map[string]interface{} {
+	if a.ctx == nil {
+		return map[string]interface{}{"success": false, "path": "", "error": "窗口未就绪"}
+	}
+	initDir := filepath.Dir(a.targetConfigPath)
+	if initDir == "" {
+		initDir = core.ZCodeDir()
+	}
+	result, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
+		DefaultDirectory: initDir,
+		Filters: []runtime.FileFilter{{DisplayName: "JSON 文件 (*.json)", Pattern: "*.json;*.jsonc"}, {DisplayName: "所有文件 (*.*)", Pattern: "*.*"}},
+	})
+	if err != nil {
+		return map[string]interface{}{"success": false, "path": "", "error": core.ShortText(err.Error(), 300)}
+	}
+	if result == "" {
+		return map[string]interface{}{"success": false, "path": "", "cancelled": true}
+	}
+	if _, err := os.Stat(result); err != nil {
+		return map[string]interface{}{"success": false, "path": "", "error": "请选择有效的配置文件"}
+	}
+	if _, err := core.LoadConfig(result); err != nil {
+		return map[string]interface{}{"success": false, "path": "", "error": err.Error()}
+	}
+	a.mu.Lock()
+	a.targetConfigPath = result
+	a.lastDialogPath = result
+	a.mu.Unlock()
+	return map[string]interface{}{"success": true, "path": a.targetConfigPath}
+}
+
+func (a *App) OpenConfigDir() map[string]interface{} {
+	d := filepath.Dir(a.targetConfigPath)
+	if d == "" {
+		d = core.ZCodeDir()
+	}
+	if _, err := os.Stat(d); os.IsNotExist(err) {
+		_ = os.MkdirAll(d, 0755)
+	}
+	runtime.BrowserOpenURL(a.ctx, "file:///"+filepath.ToSlash(d))
+	return map[string]interface{}{"success": true}
+}
+
+func (a *App) SetConfigPath(path string) map[string]interface{} {
+	if path == "" {
+		return map[string]interface{}{"success": false, "error": "参数格式错误"}
+	}
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return map[string]interface{}{"success": false, "error": "配置文件不存在"}
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return map[string]interface{}{"success": false, "error": "配置路径格式错误"}
+	}
+	norm := strings.ToLower(abs)
+	detected := map[string]bool{}
+	for _, loc := range core.DetectConfigLocations() {
+		if p, err := filepath.Abs(loc.Path); err == nil {
+			detected[strings.ToLower(p)] = true
+		}
+	}
+	allowed := detected[norm]
+	if !allowed && a.lastDialogPath != "" {
+		if d, err := filepath.Abs(a.lastDialogPath); err == nil && strings.ToLower(d) == norm {
+			allowed = true
+		}
+	}
+	if !allowed {
+		return map[string]interface{}{"success": false, "error": "该路径不在已探测的配置位置中，请通过「浏览」选择配置文件"}
+	}
+	if _, err := core.LoadConfig(path); err != nil {
+		return map[string]interface{}{"success": false, "error": err.Error()}
+	}
+	a.mu.Lock()
+	a.targetConfigPath = path
+	a.mu.Unlock()
+	return map[string]interface{}{"success": true, "path": a.targetConfigPath}
+}
+
+func (a *App) GetBackupInfo() map[string]interface{} {
+	p := a.targetConfigPath
+	core.PruneBackups(p)
+	backups := core.ListBackups(p)
+	return map[string]interface{}{"has_backup": len(backups) > 0, "backups": backups, "backup_path": firstOr(backups, ""), "target": p}
+}
+
+func (a *App) RestoreLastBackup(expectedBackup, expectedTarget string) map[string]interface{} {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	target := a.targetConfigPath
+	if expectedTarget != "" {
+		if abs1, _ := filepath.Abs(expectedTarget); abs1 != "" {
+			if abs2, _ := filepath.Abs(target); strings.ToLower(abs1) != strings.ToLower(abs2) {
+				return map[string]interface{}{"success": false, "error": "目标配置已发生变化，请重新确认"}
+			}
+		}
+	}
+	core.PruneBackups(target)
+	backups := core.ListBackups(target)
+	if len(backups) == 0 {
+		return map[string]interface{}{"success": false, "error": "没有可用的备份文件"}
+	}
+	bak := backups[0]
+	if expectedBackup != "" {
+		allowed := map[string]bool{}
+		for _, b := range backups {
+			if abs, err := filepath.Abs(b); err == nil {
+				allowed[strings.ToLower(abs)] = true
+			}
+		}
+		if abs, err := filepath.Abs(expectedBackup); err == nil && !allowed[strings.ToLower(abs)] {
+			return map[string]interface{}{"success": false, "error": "备份列表已发生变化，请重新确认"}
+		}
+		bak = expectedBackup
+	}
+	if _, err := os.Stat(bak); os.IsNotExist(err) {
+		return map[string]interface{}{"success": false, "error": "备份文件已不存在，请重新确认"}
+	}
+	snap, err := core.RestoreBackup(target, bak)
+	if err != nil {
+		return map[string]interface{}{"success": false, "error": fmt.Sprintf("恢复备份时出错：\n%s", core.ShortText(err.Error(), 300))}
+	}
+	return map[string]interface{}{"success": true, "backup": bak, "target": target, "snapshot": snap}
+}
+
+func (a *App) GetTheme() interface{} {
+	return a.loadSettings()["theme"]
+}
+
+func (a *App) SetTheme(theme string) map[string]interface{} {
+	if theme != "light" && theme != "dark" {
+		theme = ""
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	settings := a.loadSettings()
+	if theme == "" {
+		delete(settings, "theme")
+	} else {
+		settings["theme"] = theme
+	}
+	if !a.saveSettings(settings) {
+		return map[string]interface{}{"success": false, "error": "主题设置保存失败"}
+	}
+	return map[string]interface{}{"success": true}
+}
+
+func (a *App) GetLanguage() interface{} {
+	return a.loadSettings()["language"]
+}
+
+func (a *App) SetLanguage(lang string) map[string]interface{} {
+	if lang != "zh" && lang != "en" {
+		lang = ""
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	settings := a.loadSettings()
+	if lang == "" {
+		delete(settings, "language")
+	} else {
+		settings["language"] = lang
+	}
+	if !a.saveSettings(settings) {
+		return map[string]interface{}{"success": false, "error": "语言设置保存失败"}
+	}
+	return map[string]interface{}{"success": true}
+}
+
+func (a *App) GuessProviderID(baseURL string) interface{} {
+	return core.AutoProviderID(baseURL)
+}
+
+func (a *App) GuessKind(baseURL string) interface{} {
+	return core.InferKind(baseURL)
+}
+
+func (a *App) NewProviderID() string { return core.NewProviderID() }
+
+func (a *App) ListProviders() map[string]interface{} {
+	target := a.targetConfigPath
+	if target == "" {
+		return map[string]interface{}{"success": false, "error": "请先选择目标配置文件"}
+	}
+	cfg, err := core.LoadConfig(target)
+	if err != nil {
+		return map[string]interface{}{"success": false, "error": err.Error()}
+	}
+	return map[string]interface{}{"success": true, "providers": core.BuildProviderSummary(cfg), "target": target}
+}
+
+func (a *App) GetProvider(providerID string) map[string]interface{} {
+	target := a.targetConfigPath
+	if target == "" {
+		return map[string]interface{}{"success": false, "error": "请先选择目标配置文件"}
+	}
+	cfg, err := core.LoadConfig(target)
+	if err != nil {
+		return map[string]interface{}{"success": false, "error": err.Error()}
+	}
+	provider, err := core.ProviderToEdit(cfg, providerID)
+	if err != nil {
+		return map[string]interface{}{"success": false, "error": err.Error()}
+	}
+	return map[string]interface{}{"success": true, "provider": provider}
+}
+
+func (a *App) SaveProvider(providerID string, provider map[string]interface{}) map[string]interface{} {
+	if providerID == "" || provider == nil {
+		return map[string]interface{}{"success": false, "error": "参数格式错误"}
+	}
+	newID, providerCfg, err := core.BuildProviderCfgEditor(provider)
+	if err != nil {
+		return map[string]interface{}{"success": false, "error": err.Error()}
+	}
+	count := 0
+	if m, ok := providerCfg["models"].(map[string]interface{}); ok {
+		count = len(m)
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	target := a.targetConfigPath
+	if target == "" {
+		return map[string]interface{}{"success": false, "error": "请先选择目标配置文件"}
+	}
+	config, fingerprint, err := core.LoadConfigWithFingerprint(target)
+	if err != nil {
+		return map[string]interface{}{"success": false, "error": fmt.Sprintf("写入配置文件时出错：\n%s", core.ShortText(err.Error(), 300))}
+	}
+	core.NormalizeConfigKinds(config)
+	providers, _ := config["provider"].(map[string]interface{})
+	if providers == nil {
+		providers = map[string]interface{}{}
+	}
+	if _, exists := providers[newID]; exists && newID != providerID {
+		return map[string]interface{}{"success": false, "error": fmt.Sprintf("提供商「%s」已存在", newID)}
+	}
+	incomingModels, _ := providerCfg["models"].(map[string]interface{})
+	for _, key := range []string{newID, providerID} {
+		raw, _ := providers[key].(map[string]interface{})
+		if raw == nil {
+			continue
+		}
+		em, _ := raw["models"].(map[string]interface{})
+		if em != nil && len(em) > 0 && len(incomingModels) == 0 {
+			return map[string]interface{}{"success": false, "error": "检测到模型列表为空。为避免误删已有模型，已取消保存；如需清空模型，请逐个删除。"}
+		}
+	}
+	bak, _ := core.BackupConfig(target)
+	if newID != providerID {
+		if _, exists := providers[providerID]; exists {
+			_, _ = core.RenameProviderInConfig(config, providerID, newID)
+		} else {
+			if _, ok := config["provider"]; !ok {
+				config["provider"] = map[string]interface{}{}
+			}
+			config["provider"].(map[string]interface{})[newID] = map[string]interface{}{}
+		}
+	}
+	var merged map[string]interface{}
+	merged, err = core.MergeProviderIntoConfig(config, newID, providerCfg, false)
+	if err != nil {
+		return map[string]interface{}{"success": false, "error": fmt.Sprintf("写入配置文件时出错：\n%s", core.ShortText(err.Error(), 300))}
+	}
+	if err := core.WriteConfig(target, merged, fingerprint); err != nil {
+		return map[string]interface{}{"success": false, "error": fmt.Sprintf("写入配置文件时出错：\n%s", core.ShortText(err.Error(), 300))}
+	}
+	latestBak := bak
+	if latestBak == "" {
+		latestBak = core.FindLatestBackup(target)
+	}
+	return map[string]interface{}{"success": true, "count": count, "provider_id": newID, "backup": latestBak, "target": target}
+}
+
+func (a *App) DeleteProvider(providerID string) map[string]interface{} {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	target := a.targetConfigPath
+	if target == "" {
+		return map[string]interface{}{"success": false, "error": "请先选择目标配置文件"}
+	}
+	config, fingerprint, err := core.LoadConfigWithFingerprint(target)
+	if err != nil {
+		return map[string]interface{}{"success": false, "error": fmt.Sprintf("删除提供商时出错：\n%s", core.ShortText(err.Error(), 300))}
+	}
+	core.NormalizeConfigKinds(config)
+	providers, _ := config["provider"].(map[string]interface{})
+	if providers == nil || providers[providerID] == nil {
+		return map[string]interface{}{"success": false, "error": fmt.Sprintf("提供商「%s」不存在", providerID)}
+	}
+	bak, _ := core.BackupConfig(target)
+	delete(providers, providerID)
+	if err := core.WriteConfig(target, config, fingerprint); err != nil {
+		return map[string]interface{}{"success": false, "error": fmt.Sprintf("删除提供商时出错：\n%s", core.ShortText(err.Error(), 300))}
+	}
+	latestBak := bak
+	if latestBak == "" {
+		latestBak = core.FindLatestBackup(target)
+	}
+	return map[string]interface{}{"success": true, "provider_id": providerID, "backup": latestBak, "target": target}
+}
+
+func (a *App) DeleteModel(providerID, modelID string) map[string]interface{} {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	target := a.targetConfigPath
+	if target == "" {
+		return map[string]interface{}{"success": false, "error": "请先选择目标配置文件"}
+	}
+	config, fingerprint, err := core.LoadConfigWithFingerprint(target)
+	if err != nil {
+		return map[string]interface{}{"success": false, "error": fmt.Sprintf("删除模型时出错：\n%s", core.ShortText(err.Error(), 300))}
+	}
+	core.NormalizeConfigKinds(config)
+	providers, _ := config["provider"].(map[string]interface{})
+	if providers == nil || providers[providerID] == nil {
+		return map[string]interface{}{"success": false, "error": fmt.Sprintf("提供商「%s」不存在", providerID)}
+	}
+	prov, _ := providers[providerID].(map[string]interface{})
+	models, _ := prov["models"].(map[string]interface{})
+	if models == nil || models[modelID] == nil {
+		return map[string]interface{}{"success": false, "error": fmt.Sprintf("模型「%s」不存在", modelID)}
+	}
+	bak, _ := core.BackupConfig(target)
+	delete(models, modelID)
+	if err := core.WriteConfig(target, config, fingerprint); err != nil {
+		return map[string]interface{}{"success": false, "error": fmt.Sprintf("删除模型时出错：\n%s", core.ShortText(err.Error(), 300))}
+	}
+	latestBak := bak
+	if latestBak == "" {
+		latestBak = core.FindLatestBackup(target)
+	}
+	return map[string]interface{}{"success": true, "provider_id": providerID, "model_id": modelID, "backup": latestBak, "target": target}
+}
+
+func (a *App) FetchModels(baseURL, apiKey string) map[string]interface{} {
+	raw, err := core.FetchModelsRaw(baseURL, apiKey, 40*1e9)
+	if err != nil {
+		if mfe, ok := err.(*core.ModelFetchError); ok {
+			return map[string]interface{}{"success": false, "error": mfe.Msg, "error_code": mfe.ErrorCode}
+		}
+		return map[string]interface{}{"success": false, "error": core.ShortText(err.Error(), 300), "error_code": "OTHER"}
+	}
+	cards := core.BuildModelCards(raw)
+	if len(cards) == 0 {
+		return map[string]interface{}{"success": false, "error": "API 返回了空模型列表"}
+	}
+	return map[string]interface{}{"success": true, "models": cards, "count": len(cards)}
+}
+
+func (a *App) RefreshProviderModels(providerID, baseURLOverride, apiKeyOverride string) map[string]interface{} {
+	target := a.targetConfigPath
+	if target == "" {
+		return map[string]interface{}{"success": false, "error": "请先选择目标配置文件"}
+	}
+	cfg, err := core.LoadConfig(target)
+	if err != nil {
+		return map[string]interface{}{"success": false, "error": err.Error()}
+	}
+	provider, err := core.ProviderToEdit(cfg, providerID)
+	if err != nil {
+		return map[string]interface{}{"success": false, "error": err.Error()}
+	}
+	baseURL := strings.TrimSpace(baseURLOverride)
+	if baseURL == "" {
+		baseURL = provider.BaseURL
+	}
+	apiKey := strings.TrimSpace(apiKeyOverride)
+	if apiKey == "" {
+		apiKey = provider.APIKey
+	}
+	if baseURL == "" {
+		return map[string]interface{}{"success": false, "error": "该提供商未配置 Base URL，请先在管理页填写"}
+	}
+	return a.FetchModels(baseURL, apiKey)
+}
+
+func (a *App) BuildSingleCard(modelID string) map[string]interface{} {
+	card, err := core.BuildSingleCard(modelID)
+	if err != nil {
+		return map[string]interface{}{"success": false, "error": err.Error()}
+	}
+	return map[string]interface{}{"success": true, "card": card}
+}
+
+func (a *App) ImportProvider(payload map[string]interface{}) map[string]interface{} {
+	if payload == nil {
+		return map[string]interface{}{"success": false, "error": "参数格式错误"}
+	}
+	mergeModels := true
+	if v, ok := payload["merge_models"].(bool); ok {
+		mergeModels = v
+	}
+	providerID, _ := payload["provider_id"].(string)
+	providerName, _ := payload["provider_name"].(string)
+	baseURL, _ := payload["base_url"].(string)
+	apiKey, _ := payload["api_key"].(string)
+	kind, _ := payload["kind"].(string)
+	if kind == "" {
+		kind = "openai-compatible"
+	}
+	var cards []core.ModelCard
+	if raw, ok := payload["cards"]; ok {
+		b, _ := json.Marshal(raw)
+		_ = json.Unmarshal(b, &cards)
+	}
+	pid, providerCfg, _, err := core.BuildProviderCfg(providerID, providerName, baseURL, apiKey, cards, kind)
+	if err != nil {
+		return map[string]interface{}{"success": false, "error": err.Error()}
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	target := a.targetConfigPath
+	if target == "" {
+		return map[string]interface{}{"success": false, "error": "请先选择目标配置文件"}
+	}
+	if expectedTarget, ok := payload["target_path"].(string); ok && expectedTarget != "" {
+		if abs1, _ := filepath.Abs(expectedTarget); abs1 != "" {
+			if abs2, _ := filepath.Abs(target); strings.ToLower(abs1) != strings.ToLower(abs2) {
+				return map[string]interface{}{"success": false, "error": "目标配置已发生变化，请确认后重试"}
+			}
+		}
+	}
+	if !mergeModels {
+		if cfg, _ := core.LoadConfig(target); cfg != nil {
+			if providers, ok := cfg["provider"].(map[string]interface{}); ok {
+				if raw, ok := providers[pid].(map[string]interface{}); ok {
+					if em, ok := raw["models"].(map[string]interface{}); ok && len(em) > 0 {
+						if incoming, _ := providerCfg["models"].(map[string]interface{}); len(incoming) == 0 {
+							return map[string]interface{}{"success": false, "error": "检测到模型列表为空。为避免误删已有模型，已取消导入；如需清空模型，请逐个删除。"}
+						}
+					}
+				}
+			}
+		}
+	}
+	existing, fingerprint, err := core.LoadConfigWithFingerprint(target)
+	if err != nil {
+		return map[string]interface{}{"success": false, "error": err.Error()}
+	}
+	core.NormalizeConfigKinds(existing)
+	bak, _ := core.BackupConfig(target)
+	merged, err := core.MergeProviderIntoConfig(existing, pid, providerCfg, mergeModels)
+	if err != nil {
+		return map[string]interface{}{"success": false, "error": err.Error()}
+	}
+	if err := core.WriteConfig(target, merged, fingerprint); err != nil {
+		return map[string]interface{}{"success": false, "error": fmt.Sprintf("写入配置文件时出错：\n%s", core.ShortText(err.Error(), 300))}
+	}
+	latestBak := bak
+	if latestBak == "" {
+		latestBak = core.FindLatestBackup(target)
+	}
+	count := 0
+	if m, ok := providerCfg["models"].(map[string]interface{}); ok {
+		count = len(m)
+	}
+	return map[string]interface{}{"success": true, "count": count, "provider_id": pid, "target": target, "backup": latestBak, "latest_backup": latestBak}
+}
+
+// Opencode import
+func (a *App) PreviewOpencodeImport(path string) map[string]interface{} {
+	if strings.TrimSpace(path) == "" {
+		path = core.OpencodeConfig()
+	}
+	item := core.OpencodeImportPreview(path)
+	return map[string]interface{}{"success": true, "path": item.Path, "exists": item.Exists, "error": item.Error, "providers": item.Providers}
+}
+
+func (a *App) ChooseOpencodeFile() map[string]interface{} {
+	if a.ctx == nil {
+		return map[string]interface{}{"success": false, "path": "", "error": "窗口未就绪"}
+	}
+	result, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
+		Filters: []runtime.FileFilter{{DisplayName: "JSON 文件 (*.json;*.jsonc)", Pattern: "*.json;*.jsonc"}, {DisplayName: "所有文件 (*.*)", Pattern: "*.*"}},
+	})
+	if err != nil {
+		return map[string]interface{}{"success": false, "path": "", "error": core.ShortText(err.Error(), 300)}
+	}
+	if result == "" {
+		return map[string]interface{}{"success": false, "path": "", "cancelled": true}
+	}
+	if _, err := core.LoadConfig(result); err != nil {
+		return map[string]interface{}{"success": false, "path": "", "error": err.Error()}
+	}
+	return map[string]interface{}{"success": true, "path": result}
+}
+
+func (a *App) ImportOpencode(payload map[string]interface{}) map[string]interface{} {
+	if payload == nil {
+		return map[string]interface{}{"success": false, "error": "参数格式错误"}
+	}
+	path, _ := payload["path"].(string)
+	if strings.TrimSpace(path) == "" {
+		path = core.OpencodeConfig()
+	}
+	selected, _ := payload["selected_ids"].([]interface{})
+	var selectedIDs []string
+	for _, v := range selected {
+		if s, ok := v.(string); ok {
+			selectedIDs = append(selectedIDs, s)
+		}
+	}
+	merge := true
+	if v, ok := payload["merge"].(bool); ok {
+		merge = v
+	}
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return map[string]interface{}{"success": false, "error": "opencode 配置文件不存在"}
+	}
+	opencodeCfg, err := core.LoadConfig(path)
+	if err != nil {
+		return map[string]interface{}{"success": false, "error": err.Error()}
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	target := a.targetConfigPath
+	if target == "" {
+		return map[string]interface{}{"success": false, "error": "请先选择目标配置文件"}
+	}
+	if expectedTarget, ok := payload["target_path"].(string); ok && expectedTarget != "" {
+		if abs1, _ := filepath.Abs(expectedTarget); abs1 != "" {
+			if abs2, _ := filepath.Abs(target); strings.ToLower(abs1) != strings.ToLower(abs2) {
+				return map[string]interface{}{"success": false, "error": "目标配置已发生变化，请确认后重试"}
+			}
+		}
+	}
+	existing, fingerprint, err := core.LoadConfigWithFingerprint(target)
+	if err != nil {
+		return map[string]interface{}{"success": false, "error": err.Error()}
+	}
+	core.NormalizeConfigKinds(existing)
+	result, imported, merged, err := core.ImportOpencodeProviders(existing, opencodeCfg, selectedIDs, merge)
+	if err != nil {
+		return map[string]interface{}{"success": false, "error": err.Error()}
+	}
+	bak, _ := core.BackupConfig(target)
+	if err := core.WriteConfig(target, result, fingerprint); err != nil {
+		return map[string]interface{}{"success": false, "error": fmt.Sprintf("写入配置文件时出错：\n%s", core.ShortText(err.Error(), 300))}
+	}
+	latestBak := bak
+	if latestBak == "" {
+		latestBak = core.FindLatestBackup(target)
+	}
+	return map[string]interface{}{"success": true, "imported": imported, "merged": merged, "target": target, "backup": latestBak, "latest_backup": latestBak}
+}
+
+// Config merge
+func (a *App) PreviewConfigMerge(path string) map[string]interface{} {
+	if strings.TrimSpace(path) == "" {
+		return map[string]interface{}{"success": false, "error": "请先选择要合并的配置文件"}
+	}
+	item := core.ZCodeConfigMergePreview(path)
+	return map[string]interface{}{"success": true, "path": item.Path, "exists": item.Exists, "error": item.Error, "providers": item.Providers}
+}
+
+func (a *App) ChooseMergeFile() map[string]interface{} {
+	if a.ctx == nil {
+		return map[string]interface{}{"success": false, "path": "", "error": "窗口未就绪"}
+	}
+	result, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
+		Filters: []runtime.FileFilter{{DisplayName: "JSON 文件 (*.json;*.jsonc)", Pattern: "*.json;*.jsonc"}, {DisplayName: "所有文件 (*.*)", Pattern: "*.*"}},
+	})
+	if err != nil {
+		return map[string]interface{}{"success": false, "path": "", "error": core.ShortText(err.Error(), 300)}
+	}
+	if result == "" {
+		return map[string]interface{}{"success": false, "path": "", "cancelled": true}
+	}
+	if _, err := core.LoadConfig(result); err != nil {
+		return map[string]interface{}{"success": false, "path": "", "error": err.Error()}
+	}
+	return map[string]interface{}{"success": true, "path": result}
+}
+
+func (a *App) MergeConfig(payload map[string]interface{}) map[string]interface{} {
+	if payload == nil {
+		return map[string]interface{}{"success": false, "error": "参数格式错误"}
+	}
+	path, _ := payload["path"].(string)
+	if strings.TrimSpace(path) == "" {
+		return map[string]interface{}{"success": false, "error": "请先选择要合并的配置文件"}
+	}
+	selected, _ := payload["selected_ids"].([]interface{})
+	var selectedIDs []string
+	for _, v := range selected {
+		if s, ok := v.(string); ok {
+			selectedIDs = append(selectedIDs, s)
+		}
+	}
+	merge := true
+	if v, ok := payload["merge"].(bool); ok {
+		merge = v
+	}
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return map[string]interface{}{"success": false, "error": "源配置文件不存在"}
+	}
+	sourceCfg, err := core.LoadConfig(path)
+	if err != nil {
+		return map[string]interface{}{"success": false, "error": err.Error()}
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	target := a.targetConfigPath
+	if target == "" {
+		return map[string]interface{}{"success": false, "error": "请先选择目标配置文件"}
+	}
+	if expectedTarget, ok := payload["target_path"].(string); ok && expectedTarget != "" {
+		if abs1, _ := filepath.Abs(expectedTarget); abs1 != "" {
+			if abs2, _ := filepath.Abs(target); strings.ToLower(abs1) != strings.ToLower(abs2) {
+				return map[string]interface{}{"success": false, "error": "目标配置已发生变化，请确认后重试"}
+			}
+		}
+	}
+	existing, fingerprint, err := core.LoadConfigWithFingerprint(target)
+	if err != nil {
+		return map[string]interface{}{"success": false, "error": err.Error()}
+	}
+	core.NormalizeConfigKinds(existing)
+	result, imported, merged, err := core.ImportZCodeProviders(existing, sourceCfg, selectedIDs, merge)
+	if err != nil {
+		return map[string]interface{}{"success": false, "error": err.Error()}
+	}
+	bak, _ := core.BackupConfig(target)
+	if err := core.WriteConfig(target, result, fingerprint); err != nil {
+		return map[string]interface{}{"success": false, "error": fmt.Sprintf("写入配置文件时出错：\n%s", core.ShortText(err.Error(), 300))}
+	}
+	latestBak := bak
+	if latestBak == "" {
+		latestBak = core.FindLatestBackup(target)
+	}
+	return map[string]interface{}{"success": true, "imported": imported, "merged": merged, "target": target, "backup": latestBak, "latest_backup": latestBak}
+}
+
+// Keychain
+func (a *App) ListKeychain() map[string]interface{} {
+	entries, err := core.LoadKeychain("")
+	if err != nil {
+		return map[string]interface{}{"success": false, "error": core.ShortText(err.Error(), 300)}
+	}
+	var meta []map[string]interface{}
+	for _, e := range entries {
+		hint := "••••••••"
+		if len(e.APIKey) > 8 {
+			hint = "••••••••" + e.APIKey[len(e.APIKey)-4:]
+		}
+		meta = append(meta, map[string]interface{}{"id": e.ID, "name": e.Name, "note": e.Note, "created_at": e.CreatedAt, "updated_at": e.UpdatedAt, "key_hint": hint})
+	}
+	if meta == nil {
+		meta = []map[string]interface{}{}
+	}
+	return map[string]interface{}{"success": true, "entries": meta, "path": core.KeychainPath()}
+}
+
+func (a *App) GetKeychainEntry(entryID string) map[string]interface{} {
+	entry := core.GetKeychainEntry("", entryID)
+	if entry == nil {
+		return map[string]interface{}{"success": false, "error": "钥匙串条目不存在，请刷新后重试"}
+	}
+	return map[string]interface{}{"success": true, "entry": entry}
+}
+
+func (a *App) SaveKeychainEntry(entry map[string]interface{}) map[string]interface{} {
+	if entry == nil {
+		return map[string]interface{}{"success": false, "error": "参数格式错误"}
+	}
+	ke := core.KeychainEntry{
+		ID:     stringOr(entry["id"], ""),
+		Name:   stringOr(entry["name"], ""),
+		APIKey: stringOr(entry["api_key"], stringOr(entry["apiKey"], "")),
+		Note:   stringOr(entry["note"], ""),
+	}
+	if ke.APIKey == "" {
+		// try snake case variants
+		if v, ok := entry["api_key"].(string); ok {
+			ke.APIKey = v
+		}
+	}
+	ok, msg, saved := core.UpsertKeychainEntry("", ke)
+	if !ok {
+		return map[string]interface{}{"success": false, "error": msg}
+	}
+	return map[string]interface{}{"success": true, "entry": map[string]interface{}{"id": saved.ID, "name": saved.Name, "note": saved.Note, "created_at": saved.CreatedAt, "updated_at": saved.UpdatedAt}}
+}
+
+func (a *App) DeleteKeychainEntries(ids []interface{}) map[string]interface{} {
+	var strIDs []string
+	for _, v := range ids {
+		if s, ok := v.(string); ok {
+			strIDs = append(strIDs, s)
+		}
+	}
+	ok, msg, deleted, _ := core.DeleteKeychainEntries("", strIDs)
+	if !ok {
+		return map[string]interface{}{"success": false, "error": msg}
+	}
+	return map[string]interface{}{"success": true, "deleted": deleted}
+}
+
+func firstOr(arr []string, fallback string) string {
+	if len(arr) > 0 {
+		return arr[0]
+	}
+	return fallback
+}
+
+func stringOr(v interface{}, fallback string) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return fallback
+}

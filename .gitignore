@@ -1,0 +1,9 @@
+frontend/dist
+frontend/node_modules
+frontend/wailsjs
+build/bin
+*.exe
+*.log
+.DS_Store
+.env
+.mimosa/

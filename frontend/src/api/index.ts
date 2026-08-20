@@ -1,0 +1,129 @@
+type WailsApp = Record<string, (...args: unknown[]) => Promise<unknown>>
+
+function getApp(): WailsApp | null {
+  const w = window as unknown as Record<string, unknown>
+  // Wails v2 binds under window.go.<module>.App
+  const go = w['go'] as Record<string, unknown> | undefined
+  if (go) {
+    // Try common module paths
+    for (const key of Object.keys(go)) {
+      const mod = go[key] as Record<string, unknown>
+      if (mod && typeof mod === 'object' && 'App' in mod) {
+        return (mod as Record<string, unknown>)['App'] as WailsApp
+      }
+    }
+  }
+  return null
+}
+
+async function call<T>(method: string, ...args: unknown[]): Promise<T> {
+  const app = getApp()
+  if (app && typeof app[method] === 'function') {
+    return (await app[method](...args)) as T
+  }
+  throw new Error(`Wails binding not ready: ${method}`)
+}
+
+export async function GetAppInfo(): Promise<Record<string, unknown>> {
+  return call('GetAppInfo')
+}
+export async function GetTargetConfig(): Promise<Record<string, unknown>> {
+  return call('GetTargetConfig')
+}
+export async function ListConfigLocations(): Promise<Record<string, unknown>> {
+  return call('ListConfigLocations')
+}
+export async function ChooseConfigFile(): Promise<Record<string, unknown>> {
+  return call('ChooseConfigFile')
+}
+export async function OpenConfigDir(): Promise<Record<string, unknown>> {
+  return call('OpenConfigDir')
+}
+export async function SetConfigPath(path: string): Promise<Record<string, unknown>> {
+  return call('SetConfigPath', path)
+}
+export async function GetBackupInfo(): Promise<Record<string, unknown>> {
+  return call('GetBackupInfo')
+}
+export async function RestoreLastBackup(backup: string, target: string): Promise<Record<string, unknown>> {
+  return call('RestoreLastBackup', backup, target)
+}
+export async function GetTheme(): Promise<string | null> {
+  try { return (await call('GetTheme')) as string | null } catch { return null }
+}
+export async function SetTheme(theme: string): Promise<Record<string, unknown>> {
+  return call('SetTheme', theme)
+}
+export async function GetLanguage(): Promise<string | null> {
+  try { return (await call('GetLanguage')) as string | null } catch { return null }
+}
+export async function SetLanguage(lang: string): Promise<Record<string, unknown>> {
+  return call('SetLanguage', lang)
+}
+export async function GuessProviderID(baseUrl: string): Promise<string> {
+  try { return (await call('GuessProviderID', baseUrl)) as string } catch { return '' }
+}
+export async function GuessKind(baseUrl: string): Promise<string> {
+  try { return (await call('GuessKind', baseUrl)) as string } catch { return 'openai-compatible' }
+}
+export async function NewProviderID(): Promise<string> {
+  return call('NewProviderID') as Promise<string>
+}
+export async function ListProviders(): Promise<Record<string, unknown>> {
+  return call('ListProviders')
+}
+export async function GetProvider(id: string): Promise<Record<string, unknown>> {
+  return call('GetProvider', id)
+}
+export async function SaveProvider(id: string, provider: unknown): Promise<Record<string, unknown>> {
+  return call('SaveProvider', id, provider)
+}
+export async function DeleteProvider(id: string): Promise<Record<string, unknown>> {
+  return call('DeleteProvider', id)
+}
+export async function DeleteModel(providerId: string, modelId: string): Promise<Record<string, unknown>> {
+  return call('DeleteModel', providerId, modelId)
+}
+export async function FetchModels(baseUrl: string, apiKey: string): Promise<Record<string, unknown>> {
+  return call('FetchModels', baseUrl, apiKey)
+}
+export async function RefreshProviderModels(providerId: string, baseUrl: string, apiKey: string): Promise<Record<string, unknown>> {
+  return call('RefreshProviderModels', providerId, baseUrl, apiKey)
+}
+export async function BuildSingleCard(modelId: string): Promise<Record<string, unknown>> {
+  return call('BuildSingleCard', modelId)
+}
+export async function ImportProvider(payload: unknown): Promise<Record<string, unknown>> {
+  return call('ImportProvider', payload)
+}
+export async function PreviewOpencodeImport(path: string): Promise<Record<string, unknown>> {
+  return call('PreviewOpencodeImport', path)
+}
+export async function ChooseOpencodeFile(): Promise<Record<string, unknown>> {
+  return call('ChooseOpencodeFile')
+}
+export async function ImportOpencode(payload: unknown): Promise<Record<string, unknown>> {
+  return call('ImportOpencode', payload)
+}
+export async function PreviewConfigMerge(path: string): Promise<Record<string, unknown>> {
+  return call('PreviewConfigMerge', path)
+}
+export async function ChooseMergeFile(): Promise<Record<string, unknown>> {
+  return call('ChooseMergeFile')
+}
+export async function MergeConfig(payload: unknown): Promise<Record<string, unknown>> {
+  return call('MergeConfig', payload)
+}
+export async function ListKeychain(): Promise<Record<string, unknown>> {
+  return call('ListKeychain')
+}
+export async function GetKeychainEntry(id: string): Promise<Record<string, unknown>> {
+  return call('GetKeychainEntry', id)
+}
+export async function SaveKeychainEntry(entry: unknown): Promise<Record<string, unknown>> {
+  return call('SaveKeychainEntry', entry)
+}
+export async function DeleteKeychainEntries(ids: string[]): Promise<Record<string, unknown>> {
+  // Wails expects []interface{} for slice param
+  return call('DeleteKeychainEntries', ids)
+}
