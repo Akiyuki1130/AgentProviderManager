@@ -5,14 +5,14 @@ import (
 	"fmt"
 	"os"
 
+	"agentprovidermanager/internal/app"
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
-	"agentprovidermanager/internal/app"
 )
 
 var (
-	version   = "1.0.1"
+	version   = "2.0.0"
 	buildTime = "unknown"
 )
 
@@ -36,9 +36,10 @@ func main() {
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
-		BackgroundColour: &options.RGBA{R: 243, G: 243, B: 243, A: 1},
-		OnStartup:  appBinding.Startup,
-		OnShutdown: appBinding.Shutdown,
+		BackgroundColour:         &options.RGBA{R: 243, G: 243, B: 243, A: 1},
+		EnableDefaultContextMenu: false,
+		OnStartup:                appBinding.Startup,
+		OnShutdown:               appBinding.Shutdown,
 		Bind: []interface{}{
 			appBinding,
 		},

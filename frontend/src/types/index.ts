@@ -8,8 +8,12 @@ export interface ModelCard {
   context: string | number
   output: string | number
   select: boolean
-  _raw_reasoning_enabled?: boolean | null
-  _raw_cfg?: Record<string, unknown>
+	_raw_reasoning_enabled?: boolean | null
+	attachment?: boolean
+	modalities?: Record<string, unknown>
+	headers?: Record<string, string>
+	options?: Record<string, unknown>
+	_raw_cfg?: Record<string, unknown>
 }
 
 export interface ProviderSummary {

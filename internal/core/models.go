@@ -2,17 +2,21 @@ package core
 
 // ModelCard mirrors the frontend-friendly model card.
 type ModelCard struct {
-	ModelID        string   `json:"model_id"`
-	APIReturned    bool     `json:"api_returned"`
-	Name           string   `json:"name"`
-	Reasoning      bool     `json:"reasoning"`
-	Variants       []string `json:"variants"`
-	DefaultVariant string   `json:"default_variant"`
-	Context        interface{} `json:"context"`
-	Output         interface{} `json:"output"`
-	Select         bool     `json:"select"`
-	RawReasoningEnabled *bool                `json:"_raw_reasoning_enabled,omitempty"`
-	RawCfg         map[string]interface{} `json:"_raw_cfg,omitempty"`
+	ModelID             string                 `json:"model_id"`
+	APIReturned         bool                   `json:"api_returned"`
+	Name                string                 `json:"name"`
+	Reasoning           bool                   `json:"reasoning"`
+	Variants            []string               `json:"variants"`
+	DefaultVariant      string                 `json:"default_variant"`
+	Context             interface{}            `json:"context"`
+	Output              interface{}            `json:"output"`
+	Select              bool                   `json:"select"`
+	RawReasoningEnabled *bool                  `json:"_raw_reasoning_enabled,omitempty"`
+	Attachment          bool                   `json:"attachment,omitempty"`
+	Modalities          map[string]interface{} `json:"modalities,omitempty"`
+	Headers             map[string]string      `json:"headers,omitempty"`
+	Options             map[string]interface{} `json:"options,omitempty"`
+	RawCfg              map[string]interface{} `json:"_raw_cfg,omitempty"`
 }
 
 // ProviderSummary mirrors provider_summary entries.
@@ -27,15 +31,15 @@ type ProviderSummary struct {
 
 // ProviderEdit mirrors the editor provider object.
 type ProviderEdit struct {
-	ID            string      `json:"id"`
-	Name          string      `json:"name"`
-	Kind          string      `json:"kind"`
-	BaseURL       string      `json:"base_url"`
-	APIKey        string      `json:"api_key"`
-	APIKeyRequired bool       `json:"api_key_required"`
-	OptionsJSON   string      `json:"options_json"`
-	Cards         []ModelCard `json:"cards"`
-	RawProvider   map[string]interface{} `json:"_raw_provider,omitempty"`
+	ID             string                 `json:"id"`
+	Name           string                 `json:"name"`
+	Kind           string                 `json:"kind"`
+	BaseURL        string                 `json:"base_url"`
+	APIKey         string                 `json:"api_key"`
+	APIKeyRequired bool                   `json:"api_key_required"`
+	OptionsJSON    string                 `json:"options_json"`
+	Cards          []ModelCard            `json:"cards"`
+	RawProvider    map[string]interface{} `json:"_raw_provider,omitempty"`
 }
 
 // OpencodePreview mirrors opencode_import_preview.

@@ -58,6 +58,27 @@ export async function GetLanguage(): Promise<string | null> {
 export async function SetLanguage(lang: string): Promise<Record<string, unknown>> {
   return call('SetLanguage', lang)
 }
+export async function GetOptions(): Promise<Record<string, unknown>> {
+  return call('GetOptions')
+}
+export async function GetAccent(): Promise<string | null> {
+  try { return (await call('GetAccent')) as string | null } catch { return null }
+}
+export async function SetAccent(accent: string): Promise<Record<string, unknown>> {
+  return call('SetAccent', accent)
+}
+export async function GetHttpEnabled(): Promise<boolean> {
+  try { return (await call('GetHttpEnabled')) as boolean } catch { return false }
+}
+export async function SetHttpEnabled(v: boolean): Promise<Record<string, unknown>> {
+  return call('SetHttpEnabled', v)
+}
+export async function GetAutoFillLimits(): Promise<boolean> {
+  try { return (await call('GetAutoFillLimits')) as boolean } catch { return true }
+}
+export async function SetAutoFillLimits(v: boolean): Promise<Record<string, unknown>> {
+  return call('SetAutoFillLimits', v)
+}
 export async function ListAgents(): Promise<Record<string, unknown>> {
   return call('ListAgents')
 }
@@ -99,6 +120,9 @@ export async function RefreshProviderModels(providerId: string, baseUrl: string,
 }
 export async function BuildSingleCard(modelId: string): Promise<Record<string, unknown>> {
   return call('BuildSingleCard', modelId)
+}
+export async function ApplyModelPresets(cards: unknown): Promise<Record<string, unknown>> {
+  return call('ApplyModelPresets', cards)
 }
 export async function ImportProvider(payload: unknown): Promise<Record<string, unknown>> {
   return call('ImportProvider', payload)

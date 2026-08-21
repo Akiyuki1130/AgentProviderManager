@@ -2,7 +2,7 @@ package core
 
 const (
 	AppName    = "Agent Provider Manager"
-	AppVersion = "1.0.1"
+	AppVersion = "2.0.0"
 
 	MaxModels          = 2000
 	MaxModelIDLength   = 512
@@ -73,9 +73,9 @@ var DefaultVariantsByKind = map[string][]string{
 }
 
 var DefaultVariantByKind = map[string]string{
-	"openai-compatible": "max",
-	"anthropic":         "max",
-	"responses":         "max",
+	"openai-compatible": "high",
+	"anthropic":         "high",
+	"responses":         "high",
 }
 
 var OpencodeEffortToVariant = map[string]string{

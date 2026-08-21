@@ -6,7 +6,30 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 )
+
+// httpPolicy guards the "allow http://" option. Default is off: only https is
+// accepted. SSRF host checks (localhost / loopback / private / reserved) are
+// always applied regardless of this policy.
+var (
+	httpPolicyMu sync.RWMutex
+	httpPolicyOn bool
+)
+
+// SetHTTPAllowed controls whether plain http:// URLs are accepted.
+func SetHTTPAllowed(v bool) {
+	httpPolicyMu.Lock()
+	httpPolicyOn = v
+	httpPolicyMu.Unlock()
+}
+
+// HTTPAllowed reports whether plain http:// URLs are accepted.
+func HTTPAllowed() bool {
+	httpPolicyMu.RLock()
+	defer httpPolicyMu.RUnlock()
+	return httpPolicyOn
+}
 
 func isPrivateOrReservedHost(host string) bool {
 	low := strings.ToLower(host)
@@ -42,6 +65,9 @@ func ValidateBaseURL(raw string) (bool, string) {
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
 		return false, "Base URL 仅支持 http/https 协议"
 	}
+	if parsed.Scheme == "http" && !HTTPAllowed() {
+		return false, "Base URL 仅支持 https 协议（如需使用 http 请在选项中开启 HTTP 支持）"
+	}
 	host := strings.ToLower(parsed.Hostname())
 	if host == "" {
 		return false, "Base URL 缺少有效主机名"
@@ -55,10 +81,6 @@ func ValidateBaseURL(raw string) (bool, string) {
 	if parsed.RawQuery != "" || parsed.Fragment != "" {
 		return false, "Base URL 不允许包含查询参数或片段"
 	}
-	isLocal := host == "localhost" || host == "127.0.0.1" || host == "::1" || strings.HasSuffix(host, ".localhost")
-	if parsed.Scheme != "https" && !isLocal {
-		return false, "为保护 API Key，非本机地址必须使用 https://"
-	}
 	return true, ""
 }
 
@@ -66,6 +88,9 @@ func ValidateFetchURL(raw string) error {
 	parsed, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
 		return fmt.Errorf("仅允许 http/https 协议")
+	}
+	if parsed.Scheme == "http" && !HTTPAllowed() {
+		return fmt.Errorf("仅允许 https 协议（如需使用 http 请在选项中开启 HTTP 支持）")
 	}
 	host := parsed.Hostname()
 	if host == "" {

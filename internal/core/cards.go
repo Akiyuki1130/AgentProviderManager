@@ -6,8 +6,13 @@ import (
 	"strings"
 )
 
-// BuildModelCards turns raw model pairs into frontend cards.
-func BuildModelCards(models []struct{ ID string; Meta map[string]interface{} }) []ModelCard {
+// BuildModelCards turns raw model pairs into frontend cards. When autoFill is
+// true, empty context/output fall back to the common-model preset table
+// (provider-returned values always win).
+func BuildModelCards(models []struct {
+	ID   string
+	Meta map[string]interface{}
+}, autoFill bool) []ModelCard {
 	cards := make([]ModelCard, 0, len(models))
 	for _, m := range models {
 		meta := m.Meta
@@ -16,6 +21,18 @@ func BuildModelCards(models []struct{ ID string; Meta map[string]interface{} }) 
 		}
 		ctx := metaToken(meta, []string{"context_length", "max_context_length", "max_model_len", "context_window", "context"})
 		out := metaToken(meta, []string{"max_completion_tokens", "max_output_tokens", "max_tokens", "output_length", "output"})
+		// Provider-returned values win; fall back to the common-model preset
+		// only when the provider did not report a value.
+		if autoFill {
+			if p, ok := LookupModelLimits(m.ID); ok {
+				if emptyToken(ctx) && p.Context > 0 {
+					ctx = p.Context
+				}
+				if emptyToken(out) && p.Output > 0 {
+					out = p.Output
+				}
+			}
+		}
 		cards = append(cards, ModelCard{
 			ModelID:     m.ID,
 			APIReturned: len(meta) > 0,
@@ -41,7 +58,7 @@ func metaToken(meta map[string]interface{}, keys []string) interface{} {
 	return ""
 }
 
-func BuildSingleCard(modelID string) (ModelCard, error) {
+func BuildSingleCard(modelID string, autoFill bool) (ModelCard, error) {
 	mid := strings.TrimSpace(modelID)
 	if mid == "" {
 		return ModelCard{}, fmt.Errorf("模型 ID 不能为空")
@@ -49,7 +66,10 @@ func BuildSingleCard(modelID string) (ModelCard, error) {
 	if len(mid) > MaxModelIDLength {
 		return ModelCard{}, fmt.Errorf("模型 ID 不能超过 %d 个字符", MaxModelIDLength)
 	}
-	cards := BuildModelCards([]struct{ ID string; Meta map[string]interface{} }{{ID: mid, Meta: map[string]interface{}{}}})
+	cards := BuildModelCards([]struct {
+		ID   string
+		Meta map[string]interface{}
+	}{{ID: mid, Meta: map[string]interface{}{}}}, autoFill)
 	return cards[0], nil
 }
 
@@ -80,24 +100,73 @@ func CfgToCard(modelID string, modelCfg map[string]interface{}) ModelCard {
 				defaultVariant = dv
 			}
 		}
+	} else if enabledRaw, ok := modelCfg["reasoning"].(bool); ok {
+		enabled = enabledRaw
+		b := enabledRaw
+		rawEnabled = &b
+		if vm, ok := modelCfg["variants"].(map[string]interface{}); ok {
+			for key, value := range vm {
+				if item, ok := value.(map[string]interface{}); ok && item["disabled"] == true {
+					continue
+				}
+				key = strings.ToLower(strings.TrimSpace(key))
+				if key == "none" {
+					key = "off"
+				}
+				if ZCodeVariantSet[key] && !containsStr(variants, key) {
+					variants = append(variants, key)
+				}
+			}
+		}
+	}
+	if len(variants) == 0 {
+		if efforts, ok := modelCfg["reasoningEfforts"].(map[string]interface{}); ok {
+			for key, value := range efforts {
+				key = strings.ToLower(strings.TrimSpace(key))
+				if key == "none" {
+					key = "off"
+				}
+				if key == "off" || value != nil {
+					if ZCodeVariantSet[key] && !containsStr(variants, key) {
+						variants = append(variants, key)
+					}
+				}
+			}
+			enabled = len(variants) > 0
+			if enabled {
+				b := true
+				rawEnabled = &b
+			}
+		}
 	}
 	name := modelID
 	if n, ok := modelCfg["name"].(string); ok && strings.TrimSpace(n) != "" {
 		name = n
 	}
-	return ModelCard{
-		ModelID:             modelID,
-		APIReturned:         false,
-		Name:                name,
-		Reasoning:           enabled || len(variants) > 0,
-		RawReasoningEnabled: rawEnabled,
-		Variants:            variants,
-		DefaultVariant:      defaultVariant,
-		Context:             limit["context"],
-		Output:              limit["output"],
-		Select:              true,
-		RawCfg:              deepCopyMap(modelCfg),
+	card := ModelCard{
+		ModelID: modelID, APIReturned: false, Name: name,
+		Reasoning: enabled || len(variants) > 0, RawReasoningEnabled: rawEnabled,
+		Variants: variants, DefaultVariant: defaultVariant, Context: limit["context"],
+		Output: limit["output"], Select: false, RawCfg: deepCopyMap(modelCfg),
 	}
+	if v, ok := modelCfg["attachment"].(bool); ok {
+		card.Attachment = v
+	}
+	if mm, ok := modelCfg["modalities"].(map[string]interface{}); ok {
+		card.Modalities = deepCopyMap(mm)
+	}
+	if h, ok := modelCfg["headers"].(map[string]interface{}); ok {
+		card.Headers = map[string]string{}
+		for k, v := range h {
+			if s, ok := v.(string); ok {
+				card.Headers[k] = s
+			}
+		}
+	}
+	if o, ok := modelCfg["options"].(map[string]interface{}); ok {
+		card.Options = deepCopyMap(o)
+	}
+	return card
 }
 
 func CardToCfg(card ModelCard, kind string) (map[string]interface{}, string, error) {
@@ -121,11 +190,35 @@ func CardToCfg(card ModelCard, kind string) (map[string]interface{}, string, err
 		rawCfg = map[string]interface{}{}
 	}
 	cfg := deepCopyMap(rawCfg)
+	isOpenCode := kind == "opencode" || rawCfg["_opencode_raw"] != nil
 	delete(cfg, "reasoning")
 	delete(cfg, "limit")
-	delete(cfg, "modalities")
+	if !isOpenCode {
+		delete(cfg, "modalities")
+		delete(cfg, "headers")
+		delete(cfg, "temperature")
+		delete(cfg, "tool_call")
+		delete(cfg, "attachment")
+		delete(cfg, "options")
+	}
 	delete(cfg, "name")
 	cfg["name"] = name
+	if isOpenCode {
+		cfg["attachment"] = card.Attachment
+		if card.Modalities != nil {
+			cfg["modalities"] = deepCopyMap(card.Modalities)
+		}
+		if card.Headers != nil {
+			h := map[string]interface{}{}
+			for k, v := range card.Headers {
+				h[k] = v
+			}
+			cfg["headers"] = h
+		}
+		if card.Options != nil {
+			cfg["options"] = deepCopyMap(card.Options)
+		}
+	}
 
 	if card.Reasoning {
 		variants := NormalizeVariants(card.Variants)

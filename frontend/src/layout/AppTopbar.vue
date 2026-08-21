@@ -12,34 +12,34 @@
       <span v-if="targetPath" class="topbar-path" :title="targetPath">{{ targetPath }}</span>
     </div>
     <div class="topbar-right">
-      <n-button size="small" @click="emit('toggleLang')">{{ lang === 'zh' ? 'EN' : '中文' }}</n-button>
-      <n-button size="small" @click="emit('toggleTheme')">{{ isDark ? '☀️ 浅色' : '🌙 深色' }}</n-button>
-      <n-button size="small" @click="emit('chooseCfg')">选择配置文件...</n-button>
-      <n-button size="small" @click="emit('openDir')">打开配置目录</n-button>
+      <n-button size="small" @click="emit('chooseCfg')">{{ t('topbar.chooseCfg', lang) }}</n-button>
+      <n-button size="small" @click="emit('openDir')">{{ t('topbar.openDir', lang) }}</n-button>
       <n-button size="small" :disabled="!hasBackup" @click="emit('restore')">
-        {{ hasBackup ? '恢复最近备份' : '无备份可恢复' }}
+        {{ hasBackup ? t('topbar.restore', lang) : t('topbar.noBackup', lang) }}
       </n-button>
     </div>
   </header>
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import { NButton, NSelect } from 'naive-ui'
+import { useSettingStore } from '../stores/setting'
+import { t } from '../i18n'
+
+const settingStore = useSettingStore()
 defineProps<{
   targetPath: string
   hasBackup: boolean
-  isDark: boolean
-  lang: string
   agent: string
 }>()
 const emit = defineEmits<{
-  (e: 'toggleLang'): void
-  (e: 'toggleTheme'): void
   (e: 'chooseCfg'): void
   (e: 'openDir'): void
   (e: 'restore'): void
   (e: 'changeAgent', v: string): void
 }>()
+const lang = computed(() => settingStore.resolvedLang)
 
 const agentOptions = [
   { label: 'ZCode', value: 'zcode' },

@@ -119,9 +119,9 @@ func BuildProviderCfgEditor(provider map[string]interface{}) (string, map[string
 		return "", nil, err
 	}
 	var models map[string]interface{}
+	var cards []ModelCard
 	if cardsRaw, ok := provider["cards"]; ok {
 		// cards can be []ModelCard or []interface{}
-		var cards []ModelCard
 		switch v := cardsRaw.(type) {
 		case []ModelCard:
 			cards = v

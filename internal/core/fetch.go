@@ -51,7 +51,10 @@ func serverErrorMessage(raw []byte) string {
 }
 
 // FetchModelsRaw fetches model list from baseURL.
-func FetchModelsRaw(baseURL, apiKey string, timeout time.Duration) ([]struct{ ID string; Meta map[string]interface{} }, error) {
+func FetchModelsRaw(baseURL, apiKey string, timeout time.Duration) ([]struct {
+	ID   string
+	Meta map[string]interface{}
+}, error) {
 	if ok, msg := ValidateBaseURL(baseURL); !ok {
 		return nil, NewModelFetchError(msg, "BAD_URL")
 	}
@@ -173,7 +176,10 @@ func FetchModelsRaw(baseURL, apiKey string, timeout time.Duration) ([]struct{ ID
 		} else if arr, ok := data.([]interface{}); ok {
 			items = arr
 		}
-		result := []struct{ ID string; Meta map[string]interface{} }{}
+		result := []struct {
+			ID   string
+			Meta map[string]interface{}
+		}{}
 		for _, item := range items {
 			switch v := item.(type) {
 			case map[string]interface{}:
@@ -188,13 +194,19 @@ func FetchModelsRaw(baseURL, apiKey string, timeout time.Duration) ([]struct{ ID
 				if len(mid) > MaxModelIDLength {
 					return nil, NewModelFetchError(fmt.Sprintf("模型 ID 过长（上限 %d 个字符）", MaxModelIDLength), "BAD_RESPONSE")
 				}
-				result = append(result, struct{ ID string; Meta map[string]interface{} }{ID: mid, Meta: v})
+				result = append(result, struct {
+					ID   string
+					Meta map[string]interface{}
+				}{ID: mid, Meta: v})
 			case string:
 				mid := strings.TrimSpace(v)
 				if mid == "" {
 					continue
 				}
-				result = append(result, struct{ ID string; Meta map[string]interface{} }{ID: mid, Meta: map[string]interface{}{}})
+				result = append(result, struct {
+					ID   string
+					Meta map[string]interface{}
+				}{ID: mid, Meta: map[string]interface{}{}})
 			}
 			if len(result) > MaxModels {
 				return nil, NewModelFetchError(fmt.Sprintf("模型数量过多（上限 %d 个）", MaxModels), "BAD_RESPONSE")
@@ -202,7 +214,10 @@ func FetchModelsRaw(baseURL, apiKey string, timeout time.Duration) ([]struct{ ID
 		}
 		// deduplicate and sort
 		seen := map[string]bool{}
-		var unique []struct{ ID string; Meta map[string]interface{} }
+		var unique []struct {
+			ID   string
+			Meta map[string]interface{}
+		}
 		for _, r := range result {
 			if !seen[r.ID] {
 				seen[r.ID] = true

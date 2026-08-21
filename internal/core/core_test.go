@@ -9,6 +9,8 @@ import (
 )
 
 func TestValidateBaseURL(t *testing.T) {
+	SetHTTPAllowed(false)
+	t.Cleanup(func() { SetHTTPAllowed(false) })
 	cases := []struct {
 		url     string
 		wantOK  bool
@@ -16,10 +18,10 @@ func TestValidateBaseURL(t *testing.T) {
 	}{
 		{"", false, "请填写"},
 		{"ftp://example.com/v1", false, "仅支持 http/https"},
-		{"http://example.com/v1", false, "必须使用 https"},
+		{"http://example.com/v1", false, "https"},
 		{"https://example.com/v1", true, ""},
-		{"http://localhost:8000/v1", true, ""},
-		{"http://127.0.0.1/v1", true, ""},
+		{"http://localhost:8000/v1", false, "https"},
+		{"http://127.0.0.1/v1", false, "https"},
 		{"https://user:pass@example.com/v1", false, "用户名"},
 		{"https://example.com/v1?q=1", false, "查询参数"},
 		{"https://", false, ""},
@@ -35,13 +37,34 @@ func TestValidateBaseURL(t *testing.T) {
 	}
 }
 
+func TestValidateBaseURL_HTTPAllowed(t *testing.T) {
+	SetHTTPAllowed(true)
+	t.Cleanup(func() { SetHTTPAllowed(false) })
+	if ok, msg := ValidateBaseURL("http://example.com/v1"); !ok {
+		t.Errorf("http should pass when allowed: %q", msg)
+	}
+	if ok, _ := ValidateBaseURL("https://example.com/v1"); !ok {
+		t.Errorf("https should always pass")
+	}
+	// SSRF checks are unaffected: fetch-time private hosts stay blocked.
+	if err := ValidateFetchURL("http://127.0.0.1/v1/models"); err == nil {
+		t.Errorf("private host must stay blocked even with http allowed")
+	}
+	if err := ValidateFetchURL("http://api.example.com/v1/models"); err != nil {
+		t.Errorf("public http host should pass when allowed: %v", err)
+	}
+}
+
 func TestValidateFetchURL_BlocksPrivate(t *testing.T) {
+	SetHTTPAllowed(false)
+	t.Cleanup(func() { SetHTTPAllowed(false) })
 	block := []string{
 		"https://localhost/v1/models",
 		"https://127.0.0.1/v1/models",
 		"https://10.0.0.1/v1/models",
 		"https://192.168.1.1/v1/models",
 		"http://169.254.1.1/v1/models",
+		"http://api.example.com/v1/models",
 	}
 	for _, u := range block {
 		if err := ValidateFetchURL(u); err == nil {
@@ -70,9 +93,9 @@ func TestNormalizeBaseURL(t *testing.T) {
 
 func TestModelsURL(t *testing.T) {
 	cases := map[string]string{
-		"https://example.com":       "https://example.com/v1/models",
-		"https://example.com/v1":    "https://example.com/v1/models",
-		"https://example.com/v2":    "https://example.com/v2/models",
+		"https://example.com":           "https://example.com/v1/models",
+		"https://example.com/v1":        "https://example.com/v1/models",
+		"https://example.com/v2":        "https://example.com/v2/models",
 		"https://example.com/v1/models": "https://example.com/v1/models",
 	}
 	for in, want := range cases {
@@ -161,10 +184,10 @@ func TestProviderSummaryAndEdit(t *testing.T) {
 	cfg := map[string]interface{}{
 		"provider": map[string]interface{}{
 			"my-provider": map[string]interface{}{
-				"name": "My Provider",
-				"kind": "openai-compatible",
+				"name":    "My Provider",
+				"kind":    "openai-compatible",
 				"options": map[string]interface{}{"baseURL": "https://api.example.com/v1", "apiKey": "sk-123"},
-				"models": map[string]interface{}{"gpt-4o": map[string]interface{}{"name": "gpt-4o"}},
+				"models":  map[string]interface{}{"gpt-4o": map[string]interface{}{"name": "gpt-4o"}},
 			},
 		},
 	}
@@ -184,7 +207,7 @@ func TestProviderSummaryAndEdit(t *testing.T) {
 func TestNormalizeConfigKinds(t *testing.T) {
 	cfg := map[string]interface{}{
 		"provider": map[string]interface{}{
-			"r": map[string]interface{}{"kind": "responses"},
+			"r":  map[string]interface{}{"kind": "responses"},
 			"ok": map[string]interface{}{"kind": "anthropic"},
 		},
 	}
@@ -324,6 +347,47 @@ func TestOpencodePreviewAndMerge(t *testing.T) {
 	}
 	if _, ok := result["provider"].(map[string]interface{})["my-provider"]; !ok {
 		t.Error("provider not imported")
+	}
+}
+
+func TestNativeProviderFormats(t *testing.T) {
+	ocRaw := map[string]interface{}{"name": "Demo", "npm": "@ai-sdk/openai-compatible", "options": map[string]interface{}{"baseURL": "https://api.example.com/v1"}, "models": map[string]interface{}{"r1": map[string]interface{}{"id": "r1", "reasoning": true, "temperature": true, "tool_call": true, "attachment": true, "headers": map[string]interface{}{"x-test": "1"}, "options": map[string]interface{}{"reasoningEffort": "high"}, "limit": map[string]interface{}{"context": 128000, "output": 4096}, "modalities": map[string]interface{}{"input": []interface{}{"text"}, "output": []interface{}{"text"}}, "variants": map[string]interface{}{"high": map[string]interface{}{}}}}}
+	pid, internal, err := ConvertOpencodeProvider("demo", ocRaw, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pid != "demo" {
+		t.Fatal(pid)
+	}
+	native := OpenCodeProviderFromCfg(internal)
+	model := native["models"].(map[string]interface{})["r1"].(map[string]interface{})
+	if _, ok := model["reasoning"].(bool); !ok {
+		t.Fatalf("reasoning is not bool: %#v", model["reasoning"])
+	}
+	if _, ok := model["variants"].(map[string]interface{}); !ok {
+		t.Fatal("variants missing")
+	}
+	if model["temperature"] != true || model["tool_call"] != true || model["attachment"] != true {
+		t.Fatalf("capabilities lost: %#v", model)
+	}
+	if model["headers"].(map[string]interface{})["x-test"] != "1" {
+		t.Fatal("headers lost")
+	}
+	if model["options"].(map[string]interface{})["reasoningEffort"] != "high" {
+		t.Fatal("options lost")
+	}
+	if _, ok := native["kind"]; ok {
+		t.Fatal("private kind leaked")
+	}
+
+	dsh := map[string]interface{}{"id": "r1", "name": "R1", "contextWindow": 128000, "maxTokens": 4096, "reasoningEfforts": map[string]interface{}{"off": nil, "high": "high"}}
+	card := CfgToCard("r1", ConvertDeepSeekModel("r1", dsh, "openai-compatible"))
+	out := dshModelToRaw(card, "openai-compatible")
+	if out["contextWindow"] != 128000 || out["maxTokens"] != 4096 {
+		t.Fatalf("limits lost: %#v", out)
+	}
+	if _, ok := out["reasoningEfforts"].(map[string]interface{}); !ok {
+		t.Fatal("reasoningEfforts missing")
 	}
 }
 

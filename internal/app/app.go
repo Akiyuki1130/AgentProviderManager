@@ -6,11 +6,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 
-	"github.com/wailsapp/wails/v2/pkg/runtime"
 	"agentprovidermanager/internal/core"
+	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 type App struct {
@@ -65,6 +66,7 @@ func migrateLegacyAppData() {
 func (a *App) Startup(ctx context.Context) {
 	a.ctx = ctx
 	a.loadAgentState()
+	core.SetHTTPAllowed(a.httpEnabled())
 }
 
 func (a *App) Shutdown(_ context.Context) {}
@@ -227,7 +229,7 @@ func (a *App) ChooseConfigFile() map[string]interface{} {
 	}
 	result, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
 		DefaultDirectory: initDir,
-		Filters: []runtime.FileFilter{{DisplayName: "JSON/YAML 文件", Pattern: "*.json;*.jsonc;*.yaml;*.yml"}, {DisplayName: "所有文件 (*.*)", Pattern: "*.*"}},
+		Filters:          []runtime.FileFilter{{DisplayName: "JSON/YAML 文件", Pattern: "*.json;*.jsonc;*.yaml;*.yml"}, {DisplayName: "所有文件 (*.*)", Pattern: "*.*"}},
 	})
 	if err != nil {
 		return map[string]interface{}{"success": false, "path": "", "error": core.ShortText(err.Error(), 300)}
@@ -363,7 +365,7 @@ func (a *App) GetTheme() interface{} {
 }
 
 func (a *App) SetTheme(theme string) map[string]interface{} {
-	if theme != "light" && theme != "dark" {
+	if theme != "light" && theme != "dark" && theme != "system" {
 		theme = ""
 	}
 	a.mu.Lock()
@@ -385,7 +387,7 @@ func (a *App) GetLanguage() interface{} {
 }
 
 func (a *App) SetLanguage(lang string) map[string]interface{} {
-	if lang != "zh" && lang != "en" {
+	if lang != "zh" && lang != "en" && lang != "ja" && lang != "system" {
 		lang = ""
 	}
 	a.mu.Lock()
@@ -400,6 +402,100 @@ func (a *App) SetLanguage(lang string) map[string]interface{} {
 		return map[string]interface{}{"success": false, "error": "语言设置保存失败"}
 	}
 	return map[string]interface{}{"success": true}
+}
+
+func (a *App) GetAccent() interface{} {
+	return a.loadSettings()["accent"]
+}
+
+func (a *App) SetAccent(accent string) map[string]interface{} {
+	accent = strings.TrimSpace(accent)
+	if accent != "" && !regexp.MustCompile(`^#[0-9a-fA-F]{6}$`).MatchString(accent) {
+		return map[string]interface{}{"success": false, "error": "主题颜色格式无效"}
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	settings := a.loadSettings()
+	if accent == "" {
+		delete(settings, "accent")
+	} else {
+		settings["accent"] = accent
+	}
+	if !a.saveSettings(settings) {
+		return map[string]interface{}{"success": false, "error": "主题颜色保存失败"}
+	}
+	return map[string]interface{}{"success": true}
+}
+
+func (a *App) GetHttpEnabled() interface{} {
+	on, _ := a.loadSettings()["http_enabled"].(bool)
+	return on
+}
+
+func (a *App) SetHttpEnabled(v bool) map[string]interface{} {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	settings := a.loadSettings()
+	settings["http_enabled"] = v
+	if !a.saveSettings(settings) {
+		return map[string]interface{}{"success": false, "error": "HTTP 支持设置保存失败"}
+	}
+	core.SetHTTPAllowed(v)
+	return map[string]interface{}{"success": true}
+}
+
+func (a *App) GetAutoFillLimits() interface{} {
+	s := a.loadSettings()
+	if v, ok := s["auto_fill_limits"].(bool); ok {
+		return v
+	}
+	return true
+}
+
+func (a *App) SetAutoFillLimits(v bool) map[string]interface{} {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	settings := a.loadSettings()
+	settings["auto_fill_limits"] = v
+	if !a.saveSettings(settings) {
+		return map[string]interface{}{"success": false, "error": "自动补全设置保存失败"}
+	}
+	return map[string]interface{}{"success": true}
+}
+
+// GetOptions returns every persisted user option in one call.
+func (a *App) GetOptions() map[string]interface{} {
+	s := a.loadSettings()
+	theme, _ := s["theme"].(string)
+	lang, _ := s["language"].(string)
+	accent, _ := s["accent"].(string)
+	httpOn, _ := s["http_enabled"].(bool)
+	autoFill := true
+	if v, ok := s["auto_fill_limits"].(bool); ok {
+		autoFill = v
+	}
+	return map[string]interface{}{
+		"theme":           theme,
+		"language":        lang,
+		"accent":          accent,
+		"http_enabled":    httpOn,
+		"auto_fill_limits": autoFill,
+	}
+}
+
+// httpEnabled reports the persisted http:// policy (default off).
+func (a *App) httpEnabled() bool {
+	on, _ := a.loadSettings()["http_enabled"].(bool)
+	return on
+}
+
+// autoFillLimits reports the persisted auto-fill policy (default on).
+func (a *App) autoFillLimits() bool {
+	s := a.loadSettings()
+	if v, ok := s["auto_fill_limits"].(bool); ok {
+		return v
+	}
+	return true
 }
 
 func (a *App) GuessProviderID(baseURL string) interface{} {
@@ -510,12 +606,12 @@ func (a *App) GetProvider(providerID string) map[string]interface{} {
 		if m == nil {
 			return map[string]interface{}{"success": false, "error": fmt.Sprintf("提供商「%s」配置格式错误", providerID)}
 		}
-		pid, normalized, err := core.ConvertDeepSeekProvider(providerID, m, nil)
+		pid, _, err := core.ConvertDeepSeekProvider(providerID, m, nil)
 		if err != nil {
 			return map[string]interface{}{"success": false, "error": err.Error()}
 		}
-		fake := map[string]interface{}{"provider": map[string]interface{}{pid: normalized}}
-		pe, err := core.ProviderToEdit(fake, pid)
+		pe, err := core.DeepSeekProviderToEdit(pid, m)
+
 		if err != nil {
 			return map[string]interface{}{"success": false, "error": err.Error()}
 		}
@@ -566,6 +662,9 @@ func (a *App) SaveProvider(providerID string, provider map[string]interface{}) m
 		}
 		bak, _ := core.BackupConfig(target)
 		if newID != providerID {
+			if def, ok := cfg["agent-default-model"].(map[string]interface{}); ok && strings.TrimSpace(fmt.Sprint(def["provider"])) == providerID {
+				def["provider"] = newID
+			}
 			if llm, ok := cfg["llm-pi-ai"].(map[string]interface{}); ok {
 				if prov, ok := llm["providers"].(map[string]interface{}); ok {
 					delete(prov, providerID)
@@ -575,7 +674,20 @@ func (a *App) SaveProvider(providerID string, provider map[string]interface{}) m
 				delete(prov2, providerID)
 			}
 		}
-		if err := core.DeepSeekSaveProvider(target, newID, providerCfg, fingerprint); err != nil {
+		incomingModels, _ := providerCfg["models"].(map[string]interface{})
+		for _, key := range []string{newID, providerID} {
+			raw, _ := allProviders[key].(map[string]interface{})
+			if raw == nil || len(incomingModels) != 0 {
+				continue
+			}
+			if arr, ok := raw["models"].([]interface{}); ok && len(arr) > 0 {
+				return map[string]interface{}{"success": false, "error": "检测到模型列表为空。为避免误删已有模型，已取消保存；如需清空模型，请逐个删除。"}
+			}
+			if mp, ok := raw["models"].(map[string]interface{}); ok && len(mp) > 0 {
+				return map[string]interface{}{"success": false, "error": "检测到模型列表为空。为避免误删已有模型，已取消保存；如需清空模型，请逐个删除。"}
+			}
+		}
+		if err := core.DeepSeekSaveProviderInConfig(target, cfg, newID, providerCfg, fingerprint); err != nil {
 			return map[string]interface{}{"success": false, "error": fmt.Sprintf("写入配置文件时出错：\n%s", core.ShortText(err.Error(), 300))}
 		}
 		latestBak := bak
@@ -588,7 +700,43 @@ func (a *App) SaveProvider(providerID string, provider map[string]interface{}) m
 	if err != nil {
 		return map[string]interface{}{"success": false, "error": fmt.Sprintf("写入配置文件时出错：\n%s", core.ShortText(err.Error(), 300))}
 	}
-	core.NormalizeConfigKinds(config)
+	if agent == string(core.AgentOpenCode) {
+		providers, _ := config["provider"].(map[string]interface{})
+		if providers == nil {
+			providers = map[string]interface{}{}
+			config["provider"] = providers
+		}
+		if _, exists := providers[newID]; exists && newID != providerID {
+			return map[string]interface{}{"success": false, "error": fmt.Sprintf("提供商「%s」已存在", newID)}
+		}
+		incomingModels, _ := providerCfg["models"].(map[string]interface{})
+		for _, key := range []string{newID, providerID} {
+			raw, _ := providers[key].(map[string]interface{})
+			if raw == nil {
+				continue
+			}
+			em, _ := raw["models"].(map[string]interface{})
+			if len(em) > 0 && len(incomingModels) == 0 {
+				return map[string]interface{}{"success": false, "error": "检测到模型列表为空。为避免误删已有模型，已取消保存；如需清空模型，请逐个删除。"}
+			}
+		}
+		bak, _ := core.BackupConfig(target)
+		if newID != providerID {
+			delete(providers, providerID)
+		}
+		providers[newID] = core.OpenCodeProviderFromCfg(providerCfg)
+		if err := core.WriteConfig(target, config, fingerprint); err != nil {
+			return map[string]interface{}{"success": false, "error": fmt.Sprintf("写入配置文件时出错：\n%s", core.ShortText(err.Error(), 300))}
+		}
+		latestBak := bak
+		if latestBak == "" {
+			latestBak = core.FindLatestBackup(target)
+		}
+		return map[string]interface{}{"success": true, "count": count, "provider_id": newID, "backup": latestBak, "target": target, "agent": agent}
+	}
+	if agent != string(core.AgentOpenCode) {
+		core.NormalizeConfigKinds(config)
+	}
 	providers, _ := config["provider"].(map[string]interface{})
 	if providers == nil {
 		providers = map[string]interface{}{}
@@ -672,6 +820,7 @@ func (a *App) DeleteProvider(providerID string) map[string]interface{} {
 				delete(prov2, providerID)
 			}
 		}
+		core.EnsureDeepSeekDefaultModel(cfg)
 		if err := writeConfigForAgent(target, cfg, fingerprint, agent); err != nil {
 			return map[string]interface{}{"success": false, "error": fmt.Sprintf("删除提供商时出错：\n%s", core.ShortText(err.Error(), 300))}
 		}
@@ -685,7 +834,6 @@ func (a *App) DeleteProvider(providerID string) map[string]interface{} {
 	if err != nil {
 		return map[string]interface{}{"success": false, "error": fmt.Sprintf("删除提供商时出错：\n%s", core.ShortText(err.Error(), 300))}
 	}
-	core.NormalizeConfigKinds(config)
 	providers, _ := config["provider"].(map[string]interface{})
 	if providers == nil || providers[providerID] == nil {
 		return map[string]interface{}{"success": false, "error": fmt.Sprintf("提供商「%s」不存在", providerID)}
@@ -760,6 +908,7 @@ func (a *App) DeleteModel(providerID, modelID string) map[string]interface{} {
 			}
 			bak, _ := core.BackupConfig(target)
 			prov["models"] = newArr
+			core.EnsureDeepSeekDefaultModel(cfg)
 			if err := writeConfigForAgent(target, cfg, fingerprint, agent); err != nil {
 				return map[string]interface{}{"success": false, "error": fmt.Sprintf("删除模型时出错：\n%s", core.ShortText(err.Error(), 300))}
 			}
@@ -775,6 +924,7 @@ func (a *App) DeleteModel(providerID, modelID string) map[string]interface{} {
 		}
 		bak, _ := core.BackupConfig(target)
 		delete(models, modelID)
+		core.EnsureDeepSeekDefaultModel(cfg)
 		if err := writeConfigForAgent(target, cfg, fingerprint, agent); err != nil {
 			return map[string]interface{}{"success": false, "error": fmt.Sprintf("删除模型时出错：\n%s", core.ShortText(err.Error(), 300))}
 		}
@@ -788,7 +938,9 @@ func (a *App) DeleteModel(providerID, modelID string) map[string]interface{} {
 	if err != nil {
 		return map[string]interface{}{"success": false, "error": fmt.Sprintf("删除模型时出错：\n%s", core.ShortText(err.Error(), 300))}
 	}
-	core.NormalizeConfigKinds(config)
+	if agent != string(core.AgentOpenCode) {
+		core.NormalizeConfigKinds(config)
+	}
 	providers, _ := config["provider"].(map[string]interface{})
 	if providers == nil || providers[providerID] == nil {
 		return map[string]interface{}{"success": false, "error": fmt.Sprintf("提供商「%s」不存在", providerID)}
@@ -818,7 +970,7 @@ func (a *App) FetchModels(baseURL, apiKey string) map[string]interface{} {
 		}
 		return map[string]interface{}{"success": false, "error": core.ShortText(err.Error(), 300), "error_code": "OTHER"}
 	}
-	cards := core.BuildModelCards(raw)
+	cards := core.BuildModelCards(raw, a.autoFillLimits())
 	if len(cards) == 0 {
 		return map[string]interface{}{"success": false, "error": "API 返回了空模型列表"}
 	}
@@ -906,11 +1058,19 @@ func (a *App) RefreshProviderModels(providerID, baseURLOverride, apiKeyOverride 
 }
 
 func (a *App) BuildSingleCard(modelID string) map[string]interface{} {
-	card, err := core.BuildSingleCard(modelID)
+	card, err := core.BuildSingleCard(modelID, a.autoFillLimits())
 	if err != nil {
 		return map[string]interface{}{"success": false, "error": err.Error()}
 	}
 	return map[string]interface{}{"success": true, "card": card}
+}
+
+// ApplyModelPresets applies the common-model preset limits to the given
+// cards, overwriting existing context/output values that the preset covers.
+// The UI confirms with the user before overwriting filled values.
+func (a *App) ApplyModelPresets(cards []core.ModelCard) map[string]interface{} {
+	updated, filled := core.ApplyModelPresets(cards)
+	return map[string]interface{}{"success": true, "cards": updated, "filled": filled}
 }
 
 func (a *App) ImportProvider(payload map[string]interface{}) map[string]interface{} {
@@ -1238,7 +1398,14 @@ func (a *App) MigrateExecute(payload map[string]interface{}) map[string]interfac
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	result, err := core.MigrateExecute(source, target, selectedIDs, mode)
+	paths := map[string]string{}
+	if p, ok := a.agentPaths[core.NormalizeAgentID(source).String()]; ok {
+		paths["source"] = p
+	}
+	if p, ok := a.agentPaths[core.NormalizeAgentID(target).String()]; ok {
+		paths["target"] = p
+	}
+	result, err := core.MigrateExecuteAtPaths(source, target, paths["source"], paths["target"], selectedIDs, mode)
 	if err != nil {
 		return map[string]interface{}{"success": false, "error": core.ShortText(err.Error(), 400)}
 	}

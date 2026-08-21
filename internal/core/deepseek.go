@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -62,7 +63,9 @@ func DeepSeekLoadConfig(path string) (map[string]interface{}, error) {
 	return m, nil
 }
 
-func DeepSeekProvidersMap(cfg map[string]interface{}) map[string]interface{} { return deepSeekProvidersMap(cfg) }
+func DeepSeekProvidersMap(cfg map[string]interface{}) map[string]interface{} {
+	return deepSeekProvidersMap(cfg)
+}
 
 func deepSeekProvidersMap(cfg map[string]interface{}) map[string]interface{} {
 	if cfg == nil {
@@ -89,7 +92,9 @@ func deepSeekProvidersMap(cfg map[string]interface{}) map[string]interface{} {
 	return nil
 }
 
-func DeepSeekProviderSource(cfg map[string]interface{}, providerID string) (string, map[string]interface{}) { return deepSeekProviderSource(cfg, providerID) }
+func DeepSeekProviderSource(cfg map[string]interface{}, providerID string) (string, map[string]interface{}) {
+	return deepSeekProviderSource(cfg, providerID)
+}
 
 func deepSeekProviderSource(cfg map[string]interface{}, providerID string) (string, map[string]interface{}) {
 	if cfg == nil {
@@ -152,10 +157,18 @@ func loadCredentials(credsPath string) map[string]string {
 	}
 	out := map[string]string{}
 	for k, v := range raw {
+		if k == "version" || k == "refs" {
+			continue
+		}
 		if s, ok := v.(string); ok {
 			out[k] = s
-		} else {
-			out[k] = fmt.Sprintf("%v", v)
+		}
+	}
+	if refs, ok := raw["refs"].(map[string]interface{}); ok {
+		for k, v := range refs {
+			if s, ok := v.(string); ok {
+				out[k] = s
+			}
 		}
 	}
 	return out
@@ -172,7 +185,11 @@ func ConvertDeepSeekModel(mid string, modelCfg map[string]interface{}, kind stri
 	if id, ok := modelCfg["id"].(string); ok && strings.TrimSpace(id) != "" {
 		mid = strings.TrimSpace(id)
 	}
-	out := map[string]interface{}{}
+	out := deepCopyMap(modelCfg)
+	if out == nil {
+		out = map[string]interface{}{}
+	}
+	out["_dsh_raw"] = deepCopyMap(modelCfg)
 	if name, ok := modelCfg["name"].(string); ok && strings.TrimSpace(name) != "" && strings.TrimSpace(name) != mid {
 		n := strings.TrimSpace(name)
 		if len(n) > MaxProviderNameLen {
@@ -405,6 +422,38 @@ func ConvertDeepSeekProvider(providerID string, raw map[string]interface{}, kind
 	return pid, cfg, nil
 }
 
+func DeepSeekProviderToEdit(providerID string, raw map[string]interface{}) (*ProviderEdit, error) {
+	pid, normalized, err := ConvertDeepSeekProvider(providerID, raw, nil)
+	if err != nil {
+		return nil, err
+	}
+	opts, _ := normalized["options"].(map[string]interface{})
+	baseURL := stringOr(opts["baseURL"], "")
+	apiKey := stringOr(opts["apiKey"], "")
+	cards := make([]ModelCard, 0)
+	models, _ := normalized["models"].(map[string]interface{})
+	for mid, value := range models {
+		mm, _ := value.(map[string]interface{})
+		card := CfgToCard(mid, mm)
+		if card.Context == "" {
+			card.Context = mm["contextWindow"]
+		}
+		if card.Output == "" {
+			card.Output = mm["maxTokens"]
+		}
+		cards = append(cards, card)
+	}
+	for i := 0; i < len(cards); i++ {
+		for j := i + 1; j < len(cards); j++ {
+			if strings.ToLower(cards[j].ModelID) < strings.ToLower(cards[i].ModelID) {
+				cards[i], cards[j] = cards[j], cards[i]
+			}
+		}
+	}
+	name := stringOr(normalized["name"], pid)
+	return &ProviderEdit{ID: pid, Name: name, Kind: stringOr(normalized["kind"], "openai-compatible"), BaseURL: baseURL, APIKey: apiKey, APIKeyRequired: apiKey != "", Cards: cards, RawProvider: deepCopyMap(raw)}, nil
+}
+
 func DeepSeekImportPreview(path string) ImportPreview {
 	if strings.TrimSpace(path) == "" {
 		path = DeepSeekSettingsPath()
@@ -479,11 +528,17 @@ func DeepSeekImportPreview(path string) ImportPreview {
 	return item
 }
 
+// DeepSeekSaveProvider updates a provider in the existing on-disk snapshot.
+// It is kept as a compatibility wrapper for callers that only have a path.
 func DeepSeekSaveProvider(path string, providerID string, providerCfg map[string]interface{}, fingerprint string) error {
 	cfg, err := DeepSeekLoadConfig(path)
 	if err != nil {
 		return err
 	}
+	return DeepSeekSaveProviderInConfig(path, cfg, providerID, providerCfg, fingerprint)
+}
+
+func DeepSeekSaveProviderInConfig(path string, cfg map[string]interface{}, providerID string, providerCfg map[string]interface{}, fingerprint string) error {
 	if cfg == nil {
 		cfg = map[string]interface{}{}
 	}
@@ -511,64 +566,121 @@ func DeepSeekSaveProvider(path string, providerID string, providerCfg map[string
 		modelsMap, _ := providerCfg["models"].(map[string]interface{})
 		kind, _ := providerCfg["kind"].(string)
 		uiKind := ConfigKindToUIKind(kind, baseURL)
-		var arr []interface{}
-		for mid, mcfg := range modelsMap {
-			mm, _ := mcfg.(map[string]interface{})
-			card := CfgToCard(mid, mm)
-			arr = append(arr, dshModelToRaw(card, uiKind))
-		}
 		entry := map[string]interface{}{}
 		if existing, ok := providers[providerID].(map[string]interface{}); ok {
 			entry = deepCopyMap(existing)
 		}
+		// Preserve the original array order; new cards are appended deterministically.
+		ordered := make([]interface{}, 0, len(modelsMap))
+		seen := map[string]bool{}
+		if old, ok := entry["models"].([]interface{}); ok {
+			for _, value := range old {
+				mm, _ := value.(map[string]interface{})
+				mid := strings.TrimSpace(stringOr(mm["id"], ""))
+				if mid == "" || seen[mid] {
+					continue
+				}
+				if next, ok := modelsMap[mid].(map[string]interface{}); ok {
+					ordered = append(ordered, dshModelToRaw(CfgToCard(mid, next), uiKind))
+					seen[mid] = true
+				}
+			}
+		}
+		ids := make([]string, 0, len(modelsMap))
+		for mid := range modelsMap {
+			if !seen[mid] {
+				ids = append(ids, mid)
+			}
+		}
+		sort.Strings(ids)
+		for _, mid := range ids {
+			mm, _ := modelsMap[mid].(map[string]interface{})
+			ordered = append(ordered, dshModelToRaw(CfgToCard(mid, mm), uiKind))
+		}
 		entry["displayName"] = providerCfg["name"]
 		entry["baseURL"] = baseURL
+		envName, _ := entry["apiKeyEnv"].(string)
 		if strings.TrimSpace(apiKey) != "" {
-			envName := strings.ToUpper(strings.ReplaceAll(strings.ReplaceAll(providerID, "-", "_"), ":", "_")) + "_API_KEY"
+			if strings.TrimSpace(envName) == "" {
+				envName = strings.ToUpper(strings.ReplaceAll(strings.ReplaceAll(providerID, "-", "_"), ":", "_")) + "_API_KEY"
+			}
+			if err := saveDeepSeekCredential(envName, apiKey); err != nil {
+				return err
+			}
 			entry["apiKeyEnv"] = envName
-			_ = saveDeepSeekCredential(envName, apiKey)
 			delete(entry, "apiKey")
-		} else if v, ok := entry["apiKeyEnv"].(string); ok && strings.TrimSpace(v) != "" {
-			// Keep existing credential reference when key omitted on edit.
-		} else {
+		} else if strings.TrimSpace(envName) == "" {
 			delete(entry, "apiKey")
 		}
 		if uiKind == "anthropic" {
-			entry["api"] = "anthropic"
+			entry["api"] = "anthropic-messages"
+		} else if uiKind == "responses" {
+			entry["api"] = "openai-responses"
 		} else {
 			entry["api"] = "openai-completions"
 		}
-		entry["models"] = arr
+		entry["models"] = ordered
 		providers[providerID] = entry
 	} else {
-		if _, ok := cfg["provider"]; !ok {
-			cfg["provider"] = map[string]interface{}{}
-		}
 		providers, _ := cfg["provider"].(map[string]interface{})
+		if providers == nil {
+			providers = map[string]interface{}{}
+			cfg["provider"] = providers
+		}
 		providers[providerID] = deepCopyMap(providerCfg)
 	}
 	return writeDeepSeekConfig(path, cfg, fingerprint)
 }
 
 func dshModelToRaw(card ModelCard, _ string) map[string]interface{} {
-	m := map[string]interface{}{"id": card.ModelID}
+	m := deepCopyMap(card.RawCfg)
+	if m == nil {
+		m = map[string]interface{}{}
+	}
+	delete(m, "_dsh_raw")
+	delete(m, "_opencode_raw")
+	delete(m, "reasoning")
+	delete(m, "limit")
+	delete(m, "modalities")
+	delete(m, "zcode")
+	delete(m, "source")
+	delete(m, "kind")
+	if rawModalities, ok := card.RawCfg["modalities"].(map[string]interface{}); ok {
+		if input, ok := rawModalities["input"].([]interface{}); ok && len(input) > 0 {
+			m["input"] = input
+		}
+	}
+	delete(m, "id")
+	delete(m, "name")
+	m["id"] = card.ModelID
 	if card.Name != "" && card.Name != card.ModelID {
 		m["name"] = card.Name
 	}
-	if card.Reasoning && len(card.Variants) > 0 {
+	_, nativeDSH := card.RawCfg["_dsh_raw"]
+	if nativeDSH && card.Reasoning && len(card.Variants) > 0 {
 		re := map[string]interface{}{}
 		for _, v := range card.Variants {
+			v = strings.ToLower(strings.TrimSpace(v))
+			if v != "off" && v != "low" && v != "high" && v != "max" {
+				continue
+			}
 			if v == "off" {
 				re[v] = nil
 			} else {
 				re[v] = v
 			}
 		}
-		m["reasoningEfforts"] = re
-	} else if card.Reasoning {
+		if len(re) > 1 {
+			m["reasoningEfforts"] = re
+		} else {
+			m["reasoningEfforts"] = false
+		}
+	} else if nativeDSH && card.Reasoning {
 		m["reasoningEfforts"] = map[string]interface{}{"off": nil, "high": "high", "max": "max"}
-	} else {
+	} else if nativeDSH {
 		m["reasoningEfforts"] = false
+	} else {
+		delete(m, "reasoningEfforts")
 	}
 	if card.Context != nil || card.Output != nil {
 		ctx := ParseTokens(card.Context)
@@ -644,7 +756,11 @@ func saveDeepSeekCredential(envName, apiKey string) error {
 	if existing == nil {
 		existing = map[string]interface{}{}
 	}
-	existing[envName] = apiKey
+	if refs, ok := existing["refs"].(map[string]interface{}); ok {
+		refs[envName] = apiKey
+	} else {
+		existing[envName] = apiKey
+	}
 	out, err := yaml.Marshal(existing)
 	if err != nil {
 		return err

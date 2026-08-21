@@ -34,6 +34,7 @@ html[data-theme='dark'] {
   --fluent-shadow-md: 0 2px 8px rgba(0, 0, 0, 0.45);
   --fluent-shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.55);
 }
+*, *::before, *::after { box-sizing: border-box; }
 html, body { touch-action: none; overscroll-behavior: none; }
 body {
   margin: 0; padding: 0;

@@ -37,6 +37,76 @@ func agentLabel(id string) string {
 
 func (a AgentID) String() string { return string(a) }
 
+func EnsureDeepSeekDefaultModel(cfg map[string]interface{}) { ensureDeepSeekDefaultModel(cfg) }
+
+func ensureDeepSeekDefaultModel(cfg map[string]interface{}) {
+	def, _ := cfg["agent-default-model"].(map[string]interface{})
+	if def == nil {
+		return
+	}
+	provider := strings.TrimSpace(stringOr(def["provider"], ""))
+	model := strings.TrimSpace(stringOr(def["model"], ""))
+	providers := deepSeekProvidersMap(cfg)
+	valid := func(raw interface{}, wanted string) bool {
+		p, ok := raw.(map[string]interface{})
+		if !ok {
+			return false
+		}
+		if arr, ok := p["models"].([]interface{}); ok {
+			for _, v := range arr {
+				if m, ok := v.(map[string]interface{}); ok && strings.TrimSpace(stringOr(m["id"], "")) == wanted {
+					return true
+				}
+			}
+			return false
+		}
+		if mp, ok := p["models"].(map[string]interface{}); ok {
+			_, exists := mp[wanted]
+			return exists
+		}
+		return false
+	}
+	if raw, ok := providers[provider]; ok && valid(raw, model) {
+		return
+	}
+	pids := make([]string, 0, len(providers))
+	for pid := range providers {
+		pids = append(pids, pid)
+	}
+	sort.Strings(pids)
+	for _, pid := range pids {
+		p, ok := providers[pid].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if arr, ok := p["models"].([]interface{}); ok {
+			for _, v := range arr {
+				if m, ok := v.(map[string]interface{}); ok {
+					mid := strings.TrimSpace(stringOr(m["id"], ""))
+					if mid != "" {
+						def["provider"] = pid
+						def["model"] = mid
+						return
+					}
+				}
+			}
+		}
+		if mp, ok := p["models"].(map[string]interface{}); ok {
+			mids := make([]string, 0, len(mp))
+			for mid := range mp {
+				mids = append(mids, mid)
+			}
+			sort.Strings(mids)
+			if len(mids) > 0 {
+				def["provider"] = pid
+				def["model"] = mids[0]
+				return
+			}
+		}
+	}
+	delete(cfg, "agent-default-model")
+}
+
 func readRawText(path string) (string, string) {
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return "", ""
@@ -127,6 +197,10 @@ func MigratePreviewForAgents(sourceAgent, targetAgent string) MigratePreview {
 
 // MigrateExecute performs migration from source to target.
 func MigrateExecute(sourceAgent, targetAgent string, selectedIDs []string, mode string) (map[string]interface{}, error) {
+	return MigrateExecuteAtPaths(sourceAgent, targetAgent, "", "", selectedIDs, mode)
+}
+
+func MigrateExecuteAtPaths(sourceAgent, targetAgent, sourcePath, targetPath string, selectedIDs []string, mode string) (map[string]interface{}, error) {
 	srcNorm := string(NormalizeAgentID(sourceAgent))
 	tgtNorm := string(NormalizeAgentID(targetAgent))
 	if srcNorm == tgtNorm {
@@ -151,7 +225,13 @@ func MigrateExecute(sourceAgent, targetAgent string, selectedIDs []string, mode 
 		return nil, fmt.Errorf("请至少选择一个提供商进行迁移")
 	}
 	// Load source config and collect providers to migrate
-	srcPath := AgentDefaultPath(AgentID(srcNorm))
+	if strings.TrimSpace(sourcePath) == "" {
+		sourcePath = AgentDefaultPath(AgentID(srcNorm))
+	}
+	if strings.TrimSpace(targetPath) == "" {
+		targetPath = AgentDefaultPath(AgentID(tgtNorm))
+	}
+	srcPath := sourcePath
 	var srcProviders map[string]interface{}
 	var srcLoadErr error
 	if srcNorm == string(AgentDeepSeek) {
@@ -215,7 +295,7 @@ func MigrateExecute(sourceAgent, targetAgent string, selectedIDs []string, mode 
 		toMigrate = append(toMigrate, migrated{pid: newPID, cfg: cfg})
 	}
 	// Load target config
-	tgtPath := AgentDefaultPath(AgentID(tgtNorm))
+	tgtPath := targetPath
 	if tgtNorm == string(AgentDeepSeek) {
 		cfg, err := DeepSeekLoadConfig(tgtPath)
 		if err != nil {
@@ -302,7 +382,9 @@ func MigrateExecute(sourceAgent, targetAgent string, selectedIDs []string, mode 
 					}
 				}
 				if uiKind == "anthropic" {
-					entry["api"] = "anthropic"
+					entry["api"] = "anthropic-messages"
+				} else if uiKind == "responses" {
+					entry["api"] = "openai-responses"
 				} else {
 					entry["api"] = "openai-completions"
 				}
@@ -332,6 +414,7 @@ func MigrateExecute(sourceAgent, targetAgent string, selectedIDs []string, mode 
 				}
 			}
 		}
+		ensureDeepSeekDefaultModel(cfg)
 		if err := writeDeepSeekConfig(tgtPath, cfg, fp); err != nil {
 			return nil, fmt.Errorf("写入目标配置失败：%v", err)
 		}
@@ -359,8 +442,13 @@ func MigrateExecute(sourceAgent, targetAgent string, selectedIDs []string, mode 
 		// Keep non-provider top-level keys, replace provider map with migrated set
 		newProviders := map[string]interface{}{}
 		for _, item := range toMigrate {
-			newProviders[item.pid] = deepCopyMap(item.cfg)
+			if tgtNorm == string(AgentOpenCode) {
+				newProviders[item.pid] = OpenCodeProviderFromCfg(item.cfg)
+			} else {
+				newProviders[item.pid] = deepCopyMap(item.cfg)
+			}
 		}
+
 		cfg["provider"] = newProviders
 		if err := WriteConfig(tgtPath, cfg, fingerprint); err != nil {
 			return nil, fmt.Errorf("写入目标配置失败：%v", err)
@@ -368,7 +456,17 @@ func MigrateExecute(sourceAgent, targetAgent string, selectedIDs []string, mode 
 	} else {
 		// merge mode
 		for _, item := range toMigrate {
+			if tgtNorm == string(AgentOpenCode) {
+				providers, _ := cfg["provider"].(map[string]interface{})
+				if providers == nil {
+					providers = map[string]interface{}{}
+					cfg["provider"] = providers
+				}
+				providers[item.pid] = OpenCodeProviderFromCfg(item.cfg)
+				continue
+			}
 			merged, err := MergeProviderIntoConfig(cfg, item.pid, item.cfg, true)
+
 			if err != nil {
 				return nil, err
 			}

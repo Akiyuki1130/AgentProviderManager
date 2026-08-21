@@ -6,117 +6,66 @@ import (
 	"strings"
 )
 
+// ConvertOpencodeModel converts an OpenCode model to the internal editor shape
+// while retaining every official field for a lossless subsequent save.
 func ConvertOpencodeModel(mid string, modelCfg map[string]interface{}, kind string) map[string]interface{} {
-	if modelCfg == nil {
-		modelCfg = map[string]interface{}{}
+	out := deepCopyMap(modelCfg)
+	if out == nil {
+		out = map[string]interface{}{}
 	}
-	out := map[string]interface{}{}
-	if name, ok := modelCfg["name"].(string); ok && strings.TrimSpace(name) != "" && strings.TrimSpace(name) != mid {
-		n := strings.TrimSpace(name)
-		if len(n) > MaxProviderNameLen {
-			n = n[:MaxProviderNameLen]
-		}
-		out["name"] = n
+	out["_opencode_raw"] = deepCopyMap(modelCfg)
+	if id, ok := out["id"].(string); !ok || strings.TrimSpace(id) == "" {
+		out["id"] = mid
 	}
-	reasoningCfg := modelCfg["reasoning"]
-	variantsCfg, _ := modelCfg["variants"].(map[string]interface{})
-	optionsCfg, _ := modelCfg["options"].(map[string]interface{})
-	hasThinking := false
-	if optionsCfg != nil {
-		if thinking, ok := optionsCfg["thinking"].(map[string]interface{}); ok && thinking["type"] != nil {
-			hasThinking = true
-		}
+	if name, ok := out["name"].(string); ok && strings.TrimSpace(name) == mid {
+		delete(out, "name")
 	}
-	explicit := []string{}
-	if variantsCfg != nil {
-		for key, value := range variantsCfg {
-			if !ZCodeVariantSet[key] {
+
+	variants := []string{}
+	if vm, ok := out["variants"].(map[string]interface{}); ok {
+		for key, value := range vm {
+			if !ZCodeVariantSet[strings.ToLower(key)] {
 				continue
 			}
-			if m, ok := value.(map[string]interface{}); ok && m["disabled"] == true {
+			if item, ok := value.(map[string]interface{}); ok && item["disabled"] == true {
 				continue
 			}
-			translated := key
-			if v, ok := OpencodeEffortToVariant[key]; ok {
-				translated = v
+			v := strings.ToLower(key)
+			if mapped, ok := OpencodeEffortToVariant[v]; ok {
+				v = mapped
 			}
-			found := false
-			for _, e := range explicit {
-				if e == translated {
-					found = true
-					break
-				}
-			}
-			if !found {
-				explicit = append(explicit, translated)
+			if !containsStr(variants, v) {
+				variants = append(variants, v)
 			}
 		}
 	}
-	reasoningEnabled := len(explicit) > 0 || reasoningCfg == true || hasThinking
-	if m, ok := reasoningCfg.(map[string]interface{}); ok && m["enabled"] != false {
-		if m["enabled"] != false && (reasoningCfg != nil) {
-			// handles reasoning: {enabled: true/false}
-		}
-		if reasoningCfg != nil {
-			if mm, ok := reasoningCfg.(map[string]interface{}); ok && mm["enabled"] != false {
-				reasoningEnabled = reasoningEnabled || true
-			}
-		}
-	}
-	if len(explicit) > 0 || reasoningCfg == true || hasThinking {
-		reasoningEnabled = true
-	}
-	if mm, ok := reasoningCfg.(map[string]interface{}); ok && mm["enabled"] == false {
-		reasoningEnabled = len(explicit) > 0 || hasThinking
-	}
-	if reasoningEnabled {
-		var variants []string
-		if len(explicit) > 0 {
-			for _, v := range explicit {
-				if containsStr(OpencodeEffortOrder, v) || v == "off" {
-					variants = append(variants, v)
-				}
-			}
-			// off first
-			var offPart, rest []string
-			for _, v := range variants {
-				if v == "off" {
-					offPart = append(offPart, v)
-				} else {
-					rest = append(rest, v)
-				}
-			}
-			variants = append(offPart, rest...)
-			if len(variants) == 0 {
-				variants = DefaultVariantsFor(kind)
-			}
-		} else {
+	reasoning, _ := out["reasoning"].(bool)
+	if reasoning || len(variants) > 0 {
+		if len(variants) == 0 {
 			variants = DefaultVariantsFor(kind)
 		}
-		// pick default
 		defaultVariant := ""
-		for _, pref := range DefaultVariantPreference {
-			if containsStr(variants, pref) {
-				defaultVariant = pref
+		for _, preferred := range DefaultVariantPreference {
+			if containsStr(variants, preferred) {
+				defaultVariant = preferred
 				break
 			}
 		}
-		if defaultVariant == "" && len(variants) > 0 {
+		if defaultVariant == "" {
 			defaultVariant = variants[0]
 		}
-		if !(len(variants) == 1 && variants[0] == "off") {
-			out["reasoning"] = map[string]interface{}{
-				"enabled":        true,
-				"variants":       variants,
-				"defaultVariant": defaultVariant,
-			}
-		}
+		out["reasoning"] = map[string]interface{}{"enabled": reasoning, "variants": variants, "defaultVariant": defaultVariant}
 	}
-	if limit, ok := modelCfg["limit"].(map[string]interface{}); ok {
+	if a, ok := out["attachment"].(bool); ok {
+		out["attachment"] = a
+	}
+	if limit, ok := out["limit"].(map[string]interface{}); ok {
 		ctx := ParseTokens(limit["context"])
 		outTok := ParseTokens(limit["output"])
 		if ctx != nil && outTok != nil {
 			out["limit"] = map[string]interface{}{"context": *ctx, "output": *outTok}
+		} else {
+			delete(out, "limit")
 		}
 	}
 	return out
@@ -124,12 +73,14 @@ func ConvertOpencodeModel(mid string, modelCfg map[string]interface{}, kind stri
 
 func InferOpencodeKind(baseURL, npm string) string {
 	kind := InferKind(baseURL)
-	if kind != "anthropic" && npm != "" && strings.Contains(strings.ToLower(npm), "anthropic") {
+	if kind != "anthropic" && strings.Contains(strings.ToLower(npm), "anthropic") {
 		kind = "anthropic"
 	}
 	return kind
 }
 
+// ConvertOpencodeProvider converts a native OpenCode provider to the internal
+// editor shape. The original provider is retained for native write-back.
 func ConvertOpencodeProvider(providerID string, raw map[string]interface{}, kind *string) (string, map[string]interface{}, error) {
 	pid := strings.TrimSpace(providerID)
 	if !ProviderIDValid(pid) {
@@ -138,76 +89,155 @@ func ConvertOpencodeProvider(providerID string, raw map[string]interface{}, kind
 	if raw == nil {
 		raw = map[string]interface{}{}
 	}
-	name := pid
-	if n, ok := raw["name"].(string); ok && strings.TrimSpace(n) != "" {
-		name = n
+	name := stringOr(raw["name"], pid)
+	opts, _ := raw["options"].(map[string]interface{})
+	if opts == nil {
+		opts = map[string]interface{}{}
 	}
-	if len(name) > MaxProviderNameLen {
-		name = name[:MaxProviderNameLen]
+	baseURL := stringOr(opts["baseURL"], "")
+	apiKey := stringOr(opts["apiKey"], "")
+	npm := stringOr(raw["npm"], "")
+	resolved := InferOpencodeKind(baseURL, npm)
+	if kind != nil && strings.TrimSpace(*kind) != "" {
+		resolved = *kind
 	}
-	options, _ := raw["options"].(map[string]interface{})
-	if options == nil {
-		options = map[string]interface{}{}
+	if rk := stringOr(raw["kind"], ""); rk != "" {
+		resolved = ConfigKindToUIKind(rk, baseURL)
 	}
-	baseURL, _ := options["baseURL"].(string)
-	apiKey, _ := options["apiKey"].(string)
-	npm, _ := raw["npm"].(string)
-	resolvedKind := ""
-	if kind != nil {
-		resolvedKind = *kind
-	} else {
-		resolvedKind = InferOpencodeKind(baseURL, npm)
-		if rawKind, ok := raw["kind"].(string); ok && strings.TrimSpace(rawKind) != "" {
-			resolvedKind = ConfigKindToUIKind(strings.TrimSpace(rawKind), baseURL)
-		}
-	}
-	kindNorm, err := ValidateKind(resolvedKind)
+	kindNorm, err := ValidateKind(resolved)
 	if err != nil {
 		return "", nil, err
 	}
 	extra := map[string]interface{}{}
-	for k, v := range options {
-		if k != "baseURL" && k != "apiKey" {
+	for k, v := range opts {
+		if k != "baseURL" && k != "apiKey" && k != "apiKeyRequired" {
 			extra[k] = v
 		}
 	}
 	models := map[string]interface{}{}
 	if rawModels, ok := raw["models"].(map[string]interface{}); ok {
-		for mid, modelCfg := range rawModels {
-			mid = strings.TrimSpace(mid)
-			if mid == "" {
-				return "", nil, fmt.Errorf("Provider「%s」存在空的模型 ID", pid)
-			}
-			if len(mid) > MaxModelIDLength {
-				return "", nil, fmt.Errorf("Provider「%s」的模型 ID「%s」过长", pid, ShortText(mid, 40))
-			}
-			mm, _ := modelCfg.(map[string]interface{})
+		for mid, value := range rawModels {
+			mm, _ := value.(map[string]interface{})
 			models[mid] = ConvertOpencodeModel(mid, mm, kindNorm)
 		}
-		if len(models) > MaxModels {
-			return "", nil, fmt.Errorf("Provider「%s」的模型数量不能超过 %d 个", pid, MaxModels)
-		}
 	}
-	opts, err := BuildOptions(baseURL, apiKey, strings.TrimSpace(apiKey) != "", extra)
+	optsInternal, err := BuildOptions(baseURL, apiKey, strings.TrimSpace(apiKey) != "", extra)
 	if err != nil {
-		// If baseURL is empty, BuildOptions will fail; use minimal options
-		opts = map[string]interface{}{"baseURL": baseURL}
-		if strings.TrimSpace(apiKey) != "" {
-			opts["apiKey"] = strings.TrimSpace(apiKey)
-			opts["apiKeyRequired"] = true
-		}
-		for k, v := range extra {
-			opts[k] = v
-		}
+		optsInternal = deepCopyMap(opts)
 	}
 	cfg := map[string]interface{}{
-		"name":    name,
-		"kind":    KindToConfig[kindNorm],
-		"source":  "custom",
-		"options": opts,
-		"models":  models,
+		"name": name, "kind": KindToConfig[kindNorm], "source": "custom",
+		"options": optsInternal, "models": models, "_opencode_raw": deepCopyMap(raw),
 	}
 	return pid, cfg, nil
+}
+
+// OpenCodeModelFromCfg emits only fields accepted by the OpenCode model schema.
+func OpenCodeModelFromCfg(modelID string, cfg map[string]interface{}) map[string]interface{} {
+	out := deepCopyMap(cfg)
+	delete(out, "_opencode_raw")
+	delete(out, "source")
+	delete(out, "kind")
+	if id, ok := out["id"].(string); !ok || strings.TrimSpace(id) == "" {
+		out["id"] = modelID
+	}
+	if reasoning, ok := out["reasoning"].(map[string]interface{}); ok {
+		enabled, _ := reasoning["enabled"].(bool)
+		variants := NormalizeVariants(reasoning["variants"])
+		out["reasoning"] = enabled
+		if len(variants) > 0 {
+			vm := map[string]interface{}{}
+			for _, v := range variants {
+				name := v
+				if v == "off" {
+					name = "none"
+				}
+				vm[name] = map[string]interface{}{}
+			}
+			out["variants"] = vm
+		}
+	} else if _, ok := out["reasoning"].(bool); !ok {
+		delete(out, "reasoning")
+	}
+	if limit, ok := out["limit"].(map[string]interface{}); ok {
+		ctx := ParseTokens(limit["context"])
+		outTok := ParseTokens(limit["output"])
+		if ctx != nil && outTok != nil {
+			out["limit"] = map[string]interface{}{"context": *ctx, "output": *outTok}
+		} else {
+			delete(out, "limit")
+		}
+	}
+	return out
+}
+
+// OpenCodeProviderFromCfg converts an internal provider to native OpenCode.
+func OpenCodeProviderFromCfg(providerCfg map[string]interface{}) map[string]interface{} {
+	raw, _ := providerCfg["_opencode_raw"].(map[string]interface{})
+	out := deepCopyMap(raw)
+	if out == nil {
+		out = map[string]interface{}{}
+	}
+	name := stringOr(providerCfg["name"], "")
+	if name != "" {
+		out["name"] = name
+	}
+	opts, _ := providerCfg["options"].(map[string]interface{})
+	if opts == nil {
+		opts = map[string]interface{}{}
+	}
+	kind := ConfigKindToUIKind(stringOr(providerCfg["kind"], ""), stringOr(opts["baseURL"], ""))
+	nativeOpts := map[string]interface{}{}
+	for k, v := range opts {
+		if k != "apiKeyRequired" {
+			nativeOpts[k] = v
+		}
+	}
+	out["options"] = nativeOpts
+	if kind == "anthropic" {
+		out["npm"] = "@ai-sdk/anthropic"
+	} else if kind == "responses" {
+		out["npm"] = "@ai-sdk/openai"
+	} else {
+		out["npm"] = "@ai-sdk/openai-compatible"
+	}
+	models := map[string]interface{}{}
+	if mm, ok := providerCfg["models"].(map[string]interface{}); ok {
+		for id, value := range mm {
+			cfg, _ := value.(map[string]interface{})
+			models[id] = OpenCodeModelFromCfg(id, cfg)
+		}
+	}
+	out["models"] = models
+	delete(out, "kind")
+	delete(out, "source")
+	delete(out, "apiKeyRequired")
+	return out
+}
+
+func OpenCodeConfigFromInternal(cfg map[string]interface{}) map[string]interface{} {
+	out := deepCopyMap(cfg)
+	providers, _ := out["provider"].(map[string]interface{})
+	for id, raw := range providers {
+		if m, ok := raw.(map[string]interface{}); ok {
+			providers[id] = OpenCodeProviderFromCfg(m)
+		}
+	}
+	return out
+}
+
+func OpenCodeSaveProvider(path, providerID string, providerCfg map[string]interface{}, fingerprint string) error {
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		return err
+	}
+	providers, _ := cfg["provider"].(map[string]interface{})
+	if providers == nil {
+		providers = map[string]interface{}{}
+		cfg["provider"] = providers
+	}
+	providers[providerID] = OpenCodeProviderFromCfg(providerCfg)
+	return WriteConfig(path, cfg, fingerprint)
 }
 
 func OpencodeImportPreview(path string) ImportPreview {
@@ -222,190 +252,117 @@ func OpencodeImportPreview(path string) ImportPreview {
 		return item
 	}
 	providers, _ := cfg["provider"].(map[string]interface{})
-	if providers == nil || len(providers) == 0 {
+	if len(providers) == 0 {
 		item.Error = "该文件中没有可导入的 provider 配置"
 		return item
 	}
 	for pid, raw := range providers {
-		m, ok := raw.(map[string]interface{})
-		if !ok {
+		m, _ := raw.(map[string]interface{})
+		if m == nil {
 			continue
 		}
 		opts, _ := m["options"].(map[string]interface{})
-		if opts == nil {
-			opts = map[string]interface{}{}
-		}
-		baseURL, _ := opts["baseURL"].(string)
-		apiKey, _ := opts["apiKey"].(string)
-		hasKey := strings.TrimSpace(apiKey) != ""
-		modelCount := 0
-		if models, ok := m["models"].(map[string]interface{}); ok {
-			modelCount = len(models)
-		}
-		kind := "openai-compatible"
-		if baseURL != "" {
-			kind = InferOpencodeKind(baseURL, "")
-			if npm, ok := m["npm"].(string); ok {
-				kind = InferOpencodeKind(baseURL, npm)
-			}
-		}
-		item.Providers = append(item.Providers, ProviderSummary{
-			ID: pid, Name: stringOr(m["name"], pid), Kind: kind,
-			BaseURL: baseURL, HasAPIKey: hasKey, ModelCount: modelCount,
-		})
-	}
-	// sort
-	for i := 0; i < len(item.Providers); i++ {
-		for j := i + 1; j < len(item.Providers); j++ {
-			if strings.ToLower(item.Providers[j].ID) < strings.ToLower(item.Providers[i].ID) {
-				item.Providers[i], item.Providers[j] = item.Providers[j], item.Providers[i]
-			}
-		}
+		base := stringOr(opts["baseURL"], "")
+		key := stringOr(opts["apiKey"], "")
+		models, _ := m["models"].(map[string]interface{})
+		item.Providers = append(item.Providers, ProviderSummary{ID: pid, Name: stringOr(m["name"], pid), Kind: InferOpencodeKind(base, stringOr(m["npm"], "")), BaseURL: base, HasAPIKey: strings.TrimSpace(key) != "", ModelCount: len(models)})
 	}
 	return item
-}
-
-func ImportOpencodeProviders(zcodeConfig, opencodeConfig map[string]interface{}, selectedIDs []string, merge bool) (map[string]interface{}, []string, []string, error) {
-	// dedup
-	seen := map[string]bool{}
-	var deduped []string
-	for _, id := range selectedIDs {
-		if !seen[id] {
-			seen[id] = true
-			deduped = append(deduped, id)
-		}
-	}
-	result := deepCopyMap(zcodeConfig)
-	if _, ok := result["provider"]; !ok {
-		result["provider"] = map[string]interface{}{}
-	}
-	targetProviders, _ := result["provider"].(map[string]interface{})
-	if targetProviders == nil {
-		targetProviders = map[string]interface{}{}
-		result["provider"] = targetProviders
-	}
-	opencodeProviders, _ := opencodeConfig["provider"].(map[string]interface{})
-	if opencodeProviders == nil {
-		return nil, nil, nil, fmt.Errorf("opencode 配置中没有 provider")
-	}
-	var imported, merged []string
-	for _, pid := range deduped {
-		raw, ok := opencodeProviders[pid]
-		if !ok {
-			return nil, nil, nil, fmt.Errorf("提供商「%s」不存在于 opencode 配置", pid)
-		}
-		m, _ := raw.(map[string]interface{})
-		newPID, cfg, err := ConvertOpencodeProvider(pid, m, nil)
-		if err != nil {
-			return nil, nil, nil, err
-		}
-		if _, exists := targetProviders[newPID]; exists {
-			if merge {
-				mergedCfg, err := MergeProviderIntoConfig(map[string]interface{}{"provider": map[string]interface{}{newPID: targetProviders[newPID]}}, newPID, cfg, true)
-				if err != nil {
-					return nil, nil, nil, err
-				}
-				targetProviders[newPID] = mergedCfg["provider"].(map[string]interface{})[newPID]
-				merged = append(merged, newPID)
-			} else {
-				targetProviders[newPID] = cfg
-				imported = append(imported, newPID)
-			}
-		} else {
-			targetProviders[newPID] = cfg
-			imported = append(imported, newPID)
-		}
-	}
-	return result, imported, merged, nil
 }
 
 func SanitizeZCodeProvider(providerID string, raw map[string]interface{}) (string, map[string]interface{}, error) {
 	pid := strings.TrimSpace(providerID)
 	if !ProviderIDValid(pid) {
-		return "", nil, fmt.Errorf("Provider ID「%s」只能包含字母、数字、下划线、短横线或冒号", providerID)
+		return "", nil, fmt.Errorf("Provider ID 无效")
 	}
 	if raw == nil {
-		return "", nil, fmt.Errorf("提供商「%s」的配置格式错误（期望 JSON 对象）", pid)
+		return "", nil, fmt.Errorf("提供商配置格式错误")
 	}
-	cfg := deepCopyMap(raw)
-	opts, _ := cfg["options"].(map[string]interface{})
-	baseURL := ""
-	if opts != nil {
-		baseURL, _ = opts["baseURL"].(string)
-	}
-	kind, _ := cfg["kind"].(string)
-	if strings.TrimSpace(kind) == "" {
-		kind = InferKind(baseURL)
-	} else {
-		kind = ConfigKindToUIKind(strings.TrimSpace(kind), baseURL)
-	}
-	cfg["kind"] = KindToConfig[kind]
-	if _, ok := cfg["options"].(map[string]interface{}); !ok {
-		cfg["options"] = map[string]interface{}{}
-	}
-	if _, ok := cfg["models"].(map[string]interface{}); !ok {
-		cfg["models"] = map[string]interface{}{}
-	}
-	return pid, cfg, nil
+	return pid, deepCopyMap(raw), nil
 }
 
-func ImportZCodeProviders(zcodeConfig, sourceConfig map[string]interface{}, selectedIDs []string, merge bool) (map[string]interface{}, []string, []string, error) {
-	seen := map[string]bool{}
-	var deduped []string
-	for _, id := range selectedIDs {
-		if !seen[id] {
-			seen[id] = true
-			deduped = append(deduped, id)
-		}
-	}
+func ImportOpencodeProviders(zcodeConfig, opencodeConfig map[string]interface{}, selectedIDs []string, merge bool) (map[string]interface{}, []string, []string, error) {
 	result := deepCopyMap(zcodeConfig)
-	if _, ok := result["provider"]; !ok {
-		result["provider"] = map[string]interface{}{}
+	providers, _ := result["provider"].(map[string]interface{})
+	if providers == nil {
+		providers = map[string]interface{}{}
+		result["provider"] = providers
 	}
-	targetProviders, _ := result["provider"].(map[string]interface{})
-	if targetProviders == nil {
-		targetProviders = map[string]interface{}{}
-		result["provider"] = targetProviders
+	source, _ := opencodeConfig["provider"].(map[string]interface{})
+	if source == nil {
+		return nil, nil, nil, fmt.Errorf("opencode 配置中没有 provider")
 	}
-	sourceProviders, _ := sourceConfig["provider"].(map[string]interface{})
-	if sourceProviders == nil {
-		return nil, nil, nil, fmt.Errorf("源配置中没有 provider")
-	}
+	seen := map[string]bool{}
 	var imported, merged []string
-	for _, pid := range deduped {
-		raw, ok := sourceProviders[pid]
+	for _, id := range selectedIDs {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		raw, ok := source[id].(map[string]interface{})
 		if !ok {
-			return nil, nil, nil, fmt.Errorf("提供商「%s」不存在于源配置", pid)
+			return nil, nil, nil, fmt.Errorf("提供商「%s」不存在", id)
 		}
-		m, _ := raw.(map[string]interface{})
-		if m == nil {
-			return nil, nil, nil, fmt.Errorf("提供商「%s」的配置格式错误（期望 JSON 对象）", pid)
-		}
-		newPID, cfg, err := SanitizeZCodeProvider(pid, m)
+		_, converted, err := ConvertOpencodeProvider(id, raw, nil)
 		if err != nil {
 			return nil, nil, nil, err
 		}
-			if _, exists := targetProviders[newPID]; exists {
-				if merge {
-					mergedCfg, err := MergeProviderIntoConfig(map[string]interface{}{"provider": map[string]interface{}{newPID: targetProviders[newPID]}}, newPID, cfg, true)
-					if err != nil {
-						return nil, nil, nil, err
-					}
-					targetProviders[newPID] = mergedCfg["provider"].(map[string]interface{})[newPID]
-					merged = append(merged, newPID)
-				} else {
-					targetProviders[newPID] = cfg
-					imported = append(imported, newPID)
+		if _, exists := providers[id]; exists && merge {
+			old := providers[id].(map[string]interface{})
+			for k, v := range converted {
+				if k != "models" {
+					old[k] = v
 				}
-			} else {
-				targetProviders[newPID] = cfg
-				imported = append(imported, newPID)
 			}
+			providers[id] = old
+			merged = append(merged, id)
+		} else {
+			providers[id] = converted
+			imported = append(imported, id)
 		}
-		return result, imported, merged, nil
 	}
+	return result, imported, merged, nil
+}
 
-	func ZCodeConfigMergePreview(path string) ImportPreview {
+func ImportZCodeProviders(zcodeConfig, sourceConfig map[string]interface{}, selectedIDs []string, merge bool) (map[string]interface{}, []string, []string, error) {
+	result := deepCopyMap(zcodeConfig)
+	providers, _ := result["provider"].(map[string]interface{})
+	if providers == nil {
+		providers = map[string]interface{}{}
+		result["provider"] = providers
+	}
+	source, _ := sourceConfig["provider"].(map[string]interface{})
+	if source == nil {
+		return nil, nil, nil, fmt.Errorf("源配置中没有 provider")
+	}
+	seen := map[string]bool{}
+	var imported, merged []string
+	for _, id := range selectedIDs {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		raw, ok := source[id].(map[string]interface{})
+		if !ok {
+			return nil, nil, nil, fmt.Errorf("提供商「%s」不存在", id)
+		}
+		if old, ok := providers[id].(map[string]interface{}); ok && merge {
+			for k, v := range raw {
+				old[k] = v
+			}
+			providers[id] = old
+			merged = append(merged, id)
+		} else {
+			providers[id] = deepCopyMap(raw)
+			imported = append(imported, id)
+		}
+	}
+	return result, imported, merged, nil
+}
+
+func ZCodeConfigMergePreview(path string) ImportPreview {
 	item := ImportPreview{Path: path}
 	if path == "" || isNotExist(path) {
 		return item
@@ -417,7 +374,7 @@ func ImportZCodeProviders(zcodeConfig, sourceConfig map[string]interface{}, sele
 		return item
 	}
 	providers, _ := cfg["provider"].(map[string]interface{})
-	if providers == nil || len(providers) == 0 {
+	if len(providers) == 0 {
 		item.Error = "该文件中没有可导入的 provider 配置"
 		return item
 	}
@@ -425,11 +382,7 @@ func ImportZCodeProviders(zcodeConfig, sourceConfig map[string]interface{}, sele
 	return item
 }
 
-func isNotExist(path string) bool {
-	_, err := os.Stat(path)
-	return os.IsNotExist(err)
-}
-
+func isNotExist(path string) bool { _, err := os.Stat(path); return os.IsNotExist(err) }
 func stringOr(v interface{}, fallback string) string {
 	if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
 		return s

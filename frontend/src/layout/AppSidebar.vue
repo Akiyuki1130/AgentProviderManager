@@ -4,7 +4,11 @@
       <n-icon :component="collapsed ? ChevronForwardOutline : ChevronBackOutline" :size="18" />
     </button>
     <div class="app-brand">
-      <span class="brand-icon">⚡</span>
+      <svg class="brand-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M12 3.5v11" />
+        <path d="m7.5 10.5 4.5 4.5 4.5-4.5" />
+        <path d="M4.5 19.5h15" />
+      </svg>
       <span class="brand-text">Agent Provider Manager</span>
     </div>
     <nav class="app-nav" ref="navEl">
@@ -39,14 +43,18 @@ import {
   CloudDownloadOutline,
   KeyOutline,
   SwapHorizontalOutline,
+  OptionsOutline,
   ChevronBackOutline,
   ChevronForwardOutline,
 } from '@vicons/ionicons5'
+import { useSettingStore } from '../stores/setting'
+import { t } from '../i18n'
 
 const route = useRoute()
 const router = useRouter()
+const settingStore = useSettingStore()
 const collapsed = ref(false)
-const version = ref('1.0.1')
+const version = ref('2.0.0')
 const navEl = ref<HTMLElement | null>(null)
 const indicatorTop = ref(0)
 const indicatorHeight = ref(0)
@@ -54,18 +62,22 @@ const indicatorReady = ref(false)
 const indicatorStyle = computed(() => ({ transform: `translateY(${indicatorTop.value}px)`, height: `${indicatorHeight.value}px` }))
 
 interface NavItem { key: string; label: string; icon: Component }
-const navItems: NavItem[] = [
-  { key: '/manage', label: '管理配置', icon: SettingsOutline },
-  { key: '/import', label: '导入提供商', icon: CloudDownloadOutline },
-  { key: '/migrate', label: '配置文件迁移', icon: SwapHorizontalOutline },
-  { key: '/keychain', label: 'API Key 钥匙串', icon: KeyOutline },
-]
+const navItems = computed<NavItem[]>(() => {
+  const l = settingStore.resolvedLang
+  return [
+    { key: '/manage', label: t('tab.manage', l), icon: SettingsOutline },
+    { key: '/import', label: t('tab.import', l), icon: CloudDownloadOutline },
+    { key: '/migrate', label: t('tab.migrate', l), icon: SwapHorizontalOutline },
+    { key: '/keychain', label: t('tab.keychain', l), icon: KeyOutline },
+    { key: '/options', label: t('tab.options', l), icon: OptionsOutline },
+  ]
+})
 const activeKey = computed(() => route.path)
 function updateIndicator() {
   const nav = navEl.value
   if (!nav) return
   const items = Array.from(nav.querySelectorAll<HTMLElement>('.nav-item'))
-  const idx = navItems.findIndex((i) => i.key === activeKey.value)
+  const idx = navItems.value.findIndex((i) => i.key === activeKey.value)
   if (idx < 0 || !items[idx]) return
   const navRect = nav.getBoundingClientRect()
   const itemRect = items[idx].getBoundingClientRect()
@@ -74,7 +86,7 @@ function updateIndicator() {
   indicatorReady.value = true
 }
 onMounted(() => { window.addEventListener('resize', updateIndicator); nextTick(updateIndicator) })
-watch([activeKey, collapsed], () => { nextTick(updateIndicator) })
+watch([activeKey, collapsed, () => settingStore.resolvedLang], () => { nextTick(updateIndicator) })
 onBeforeUnmount(() => { window.removeEventListener('resize', updateIndicator) })
 </script>
 
@@ -102,7 +114,7 @@ onBeforeUnmount(() => { window.removeEventListener('resize', updateIndicator) })
   display: flex; align-items: center; gap: 10px;
   min-height: 56px; overflow: hidden; user-select: none;
 }
-.brand-icon { font-size: 20px; color: var(--accent, #0067c0); flex-shrink: 0; }
+.brand-icon { color: var(--accent, #0078d4); flex-shrink: 0; display: block; }
 .brand-text { font-size: 13px; font-weight: 700; white-space: nowrap; overflow: hidden; transition: opacity 0.2s, max-width 0.25s; max-width: 180px; }
 .app-sidebar.collapsed .brand-text { opacity: 0; max-width: 0; }
 .app-nav { flex: 1; padding: 8px 10px; display: flex; flex-direction: column; gap: 4px; overflow-y: auto; position: relative; }
@@ -111,11 +123,11 @@ onBeforeUnmount(() => { window.removeEventListener('resize', updateIndicator) })
   padding: 10px 14px; border-radius: 8px; cursor: pointer;
   transition: background 0.2s, color 0.2s; color: inherit; user-select: none;
 }
-.nav-item:hover { background: color-mix(in srgb, var(--accent, #0067c0) 8%, transparent); }
-.nav-item.active { background: color-mix(in srgb, var(--accent, #0067c0) 12%, transparent); color: var(--accent-text-strong); }
+.nav-item:hover { background: color-mix(in srgb, var(--accent, #0078d4) 8%, transparent); }
+.nav-item.active { background: color-mix(in srgb, var(--accent, #0078d4) 12%, transparent); color: var(--accent-text-strong); }
 .nav-indicator {
   position: absolute; left: 10px; top: 0; width: 3px; border-radius: 2px;
-  background: var(--accent, #0067c0); pointer-events: none;
+  background: var(--accent, #0078d4); pointer-events: none;
   transition: transform 0.22s, height 0.22s, background-color 0.2s;
 }
 .nav-icon { flex-shrink: 0; }
