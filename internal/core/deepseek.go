@@ -390,6 +390,9 @@ func ConvertDeepSeekProvider(providerID string, raw map[string]interface{}, kind
 			if mid == "" {
 				continue
 			}
+			if len(mid) > MaxModelIDLength {
+				return "", nil, fmt.Errorf("Provider「%s」的模型 ID「%s」过长", pid, ShortText(mid, 40))
+			}
 			mm, _ := modelCfg.(map[string]interface{})
 			modelsOut[mid] = ConvertDeepSeekModel(mid, mm, kindNorm)
 		}
@@ -531,14 +534,22 @@ func DeepSeekImportPreview(path string) ImportPreview {
 // DeepSeekSaveProvider updates a provider in the existing on-disk snapshot.
 // It is kept as a compatibility wrapper for callers that only have a path.
 func DeepSeekSaveProvider(path string, providerID string, providerCfg map[string]interface{}, fingerprint string) error {
+	return DeepSeekSaveProviderWithMerge(path, providerID, providerCfg, fingerprint, false)
+}
+
+func DeepSeekSaveProviderWithMerge(path string, providerID string, providerCfg map[string]interface{}, fingerprint string, mergeModels bool) error {
 	cfg, err := DeepSeekLoadConfig(path)
 	if err != nil {
 		return err
 	}
-	return DeepSeekSaveProviderInConfig(path, cfg, providerID, providerCfg, fingerprint)
+	return DeepSeekSaveProviderInConfigWithMerge(path, cfg, providerID, providerCfg, fingerprint, mergeModels)
 }
 
 func DeepSeekSaveProviderInConfig(path string, cfg map[string]interface{}, providerID string, providerCfg map[string]interface{}, fingerprint string) error {
+	return DeepSeekSaveProviderInConfigWithMerge(path, cfg, providerID, providerCfg, fingerprint, false)
+}
+
+func DeepSeekSaveProviderInConfigWithMerge(path string, cfg map[string]interface{}, providerID string, providerCfg map[string]interface{}, fingerprint string, mergeModels bool) error {
 	if cfg == nil {
 		cfg = map[string]interface{}{}
 	}
@@ -582,6 +593,9 @@ func DeepSeekSaveProviderInConfig(path string, cfg map[string]interface{}, provi
 				}
 				if next, ok := modelsMap[mid].(map[string]interface{}); ok {
 					ordered = append(ordered, dshModelToRaw(CfgToCard(mid, next), uiKind))
+					seen[mid] = true
+				} else if mergeModels {
+					ordered = append(ordered, deepCopyValue(value))
 					seen[mid] = true
 				}
 			}
@@ -627,7 +641,16 @@ func DeepSeekSaveProviderInConfig(path string, cfg map[string]interface{}, provi
 			providers = map[string]interface{}{}
 			cfg["provider"] = providers
 		}
-		providers[providerID] = deepCopyMap(providerCfg)
+		entry, _ := providers[providerID].(map[string]interface{})
+		if entry == nil {
+			entry = map[string]interface{}{}
+		} else {
+			entry = deepCopyMap(entry)
+		}
+		for k, v := range providerCfg {
+			entry[k] = deepCopyValue(v)
+		}
+		providers[providerID] = entry
 	}
 	return writeDeepSeekConfig(path, cfg, fingerprint)
 }
@@ -751,7 +774,11 @@ func saveDeepSeekCredential(envName, apiKey string) error {
 	var existing map[string]interface{}
 	data, err := os.ReadFile(credsPath)
 	if err == nil && len(data) > 0 {
-		_ = yaml.Unmarshal(data, &existing)
+		if err := yaml.Unmarshal(data, &existing); err != nil {
+			return fmt.Errorf("读取 DeepSeek 凭据文件失败：%w", err)
+		}
+	} else if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("读取 DeepSeek 凭据文件失败：%w", err)
 	}
 	if existing == nil {
 		existing = map[string]interface{}{}

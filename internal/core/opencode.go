@@ -174,6 +174,9 @@ func OpenCodeModelFromCfg(modelID string, cfg map[string]interface{}) map[string
 // OpenCodeProviderFromCfg converts an internal provider to native OpenCode.
 func OpenCodeProviderFromCfg(providerCfg map[string]interface{}) map[string]interface{} {
 	raw, _ := providerCfg["_opencode_raw"].(map[string]interface{})
+	if raw == nil {
+		raw, _ = providerCfg["_raw_provider"].(map[string]interface{})
+	}
 	out := deepCopyMap(raw)
 	if out == nil {
 		out = map[string]interface{}{}
@@ -309,12 +312,25 @@ func ImportOpencodeProviders(zcodeConfig, opencodeConfig map[string]interface{},
 			return nil, nil, nil, err
 		}
 		if _, exists := providers[id]; exists && merge {
-			old := providers[id].(map[string]interface{})
+			old, ok := providers[id].(map[string]interface{})
+			if !ok {
+				return nil, nil, nil, fmt.Errorf("目标配置中的 provider「%s」格式错误", id)
+			}
+			old = deepCopyMap(old)
 			for k, v := range converted {
 				if k != "models" {
-					old[k] = v
+					old[k] = deepCopyValue(v)
 				}
 			}
+			oldModels, _ := old["models"].(map[string]interface{})
+			if oldModels == nil {
+				oldModels = map[string]interface{}{}
+			}
+			incomingModels, _ := converted["models"].(map[string]interface{})
+			for mid, model := range incomingModels {
+				oldModels[mid] = deepCopyValue(model)
+			}
+			old["models"] = oldModels
 			providers[id] = old
 			merged = append(merged, id)
 		} else {

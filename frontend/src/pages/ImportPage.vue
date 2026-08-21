@@ -274,6 +274,11 @@ function isLimitFilled(v: string | number | undefined): boolean {
 }
 
 onMounted(async () => {
+  const fillApiKey = sessionStorage.getItem('zcode-pm:fillApiKey')
+  if (fillApiKey) {
+    apiKey.value = fillApiKey
+    sessionStorage.removeItem('zcode-pm:fillApiKey')
+  }
   const raw = sessionStorage.getItem('zcode-pm:manualRefresh')
   if (raw) {
     try {

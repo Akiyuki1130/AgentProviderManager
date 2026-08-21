@@ -77,7 +77,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, reactive, onMounted } from 'vue'
+import { ref, computed, reactive, onMounted, watch } from 'vue'
 import { NButton, NInput, NCheckbox, NModal, NPopconfirm } from 'naive-ui'
 import type { KeychainEntry } from '../types'
 import * as api from '../api'
@@ -156,29 +156,52 @@ async function loadAllSecrets() {
   }
 }
 
+async function fetchSecret(id: string): Promise<string> {
+	const cached = secrets.get(id)
+	if (cached) return cached
+	const res = await api.GetKeychainEntry(id) as Record<string, unknown>
+	if (!res['success']) return ''
+	const entry = res['entry'] as Record<string, unknown>
+	const key = entry['api_key'] as string || entry['apiKey'] as string || ''
+	if (key) secrets.set(id, key)
+	return key
+}
+
+async function writeClipboard(text: string): Promise<boolean> {
+	try {
+		const { ClipboardSetText } = await import('../../wailsjs/runtime/runtime')
+		if (await ClipboardSetText(text)) return true
+	} catch { /* fall back to browser clipboard */ }
+	try {
+		await navigator.clipboard.writeText(text)
+		return true
+	} catch {
+		return false
+	}
+}
+
 async function copyKey(e: KeychainEntry) {
-  let key = secrets.get(e.id)
-  if (!key) {
-    const res = await api.GetKeychainEntry(e.id) as Record<string, unknown>
-    if (res['success']) {
-      const entry = res['entry'] as Record<string, unknown>
-      key = entry['api_key'] as string || entry['apiKey'] as string || ''
-      secrets.set(e.id, key)
-    }
-  }
-  if (key) { await navigator.clipboard.writeText(key); toast('success', '已复制', '✓ 已复制 API Key') }
+	try {
+		const key = await fetchSecret(e.id)
+		if (key && await writeClipboard(key)) toast('success', '已复制', '✓ 已复制 API Key')
+		else toast('error', '复制失败', '无法访问系统剪贴板')
+	} catch (err) { toast('error', '复制失败', String(err)) }
 }
 
 async function copySelected() {
-  await loadAllSecrets()
-  const keys = Array.from(selectedIds).map((id) => secrets.get(id) || '').filter(Boolean)
-  if (keys.length > 0) { await navigator.clipboard.writeText(keys.join('\n')); toast('success', '已复制', `✓ 已复制 ${keys.length} 个 API Key`) }
+	await loadAllSecrets()
+	const keys = Array.from(selectedIds).map((id) => secrets.get(id) || '').filter(Boolean)
+	if (keys.length > 0 && await writeClipboard(keys.join('\n'))) toast('success', '已复制', `✓ 已复制 ${keys.length} 个 API Key`)
+	else if (keys.length > 0) toast('error', '复制失败', '无法访问系统剪贴板')
 }
 
-function useInImport(e: KeychainEntry) {
-  // Store in sessionStorage for ImportPage to pick up
-  sessionStorage.setItem('zcode-pm:fillApiKey', secrets.get(e.id) || '')
-  toast('success', '已填入', `✓ 已把「${e.name}」的 API Key 准备填入导入页，请切换到导入页`)
+async function useInImport(e: KeychainEntry) {
+	try {
+		const key = await fetchSecret(e.id)
+		if (!key) { toast('error', '填入失败', '无法读取 API Key'); return }
+		sessionStorage.setItem('zcode-pm:fillApiKey', key)
+		toast('success', '已填入', `✓ 已把「${e.name}」的 API Key 准备填入导入页，请切换到导入页`)
+	} catch (err) { toast('error', '填入失败', String(err)) }
 }
 
 function openAdd() { editingId.value = ''; modalForm.name = ''; modalForm.api_key = ''; modalForm.note = ''; modalError.value = ''; showModal.value = true }
@@ -230,6 +253,8 @@ function toggleAll(e: Event) {
   if (checked) filteredEntries.value.forEach((en) => selectedIds.add(en.id))
   else filteredEntries.value.forEach((en) => selectedIds.delete(en.id))
 }
+
+watch(showAll, (enabled) => { if (enabled) void loadAllSecrets() })
 
 onMounted(loadKeychain)
 </script>

@@ -523,8 +523,9 @@ onUnmounted(() => {
 .editor-grid > * { min-width: 0; }
 .editor-grid :deep(.n-input), .editor-grid :deep(.n-select) { width: 100%; max-width: 100%; min-width: 0; }
 .form-label { min-width: 0; font-size: 12px; color: var(--fluent-text-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.editor-actions { display: flex; gap: 8px; flex-wrap: nowrap; margin-top: 12px; align-items: center; overflow-x: auto; overscroll-behavior: contain; }
+.editor-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; align-items: center; overflow: visible; }
 .editor-actions > * { flex-shrink: 0; }
+
 .list-wrap { display: flex; flex-direction: column; gap: 8px; }
 .list-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
 .list-header h3 { font-size: 14px; font-weight: 600; }
@@ -543,7 +544,8 @@ onUnmounted(() => {
 .batch-capability-pill { font-size: 11px; border: 1px solid var(--fluent-border); border-radius: 999px; padding: 3px 10px; cursor: pointer; background: var(--fluent-card-bg); color: inherit; }
 .batch-capability-pill:hover, .batch-capability-pill.checked { border-color: var(--accent); }
 .batch-capability-pill.checked { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); }
-.list-scroll { display: flex; flex-direction: column; }
+.list-scroll { display: flex; flex-direction: column; min-height: 0; }
+@media (max-width: 1100px) { .manage-layout { grid-template-columns: 1fr; } .provider-sidebar { height: auto; max-height: 32vh; } }
 .empty-state { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 24px; color: var(--fluent-text-soft); text-align: center; }
 .empty-title { font-size: 14px; font-weight: 600; color: var(--fluent-text); }
 .empty-sub { font-size: 12px; }
@@ -551,5 +553,4 @@ onUnmounted(() => {
 .switch::after { content: ""; position: absolute; top: 4px; left: 4px; width: 12px; height: 12px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.3); transition: transform 0.2s; }
 .switch.on { background: var(--accent); }
 .switch.on::after { transform: translateX(20px); }
-@media (max-width: 900px) { .manage-layout { grid-template-columns: 1fr; } .provider-sidebar { height: auto; max-height: 40vh; } }
 </style>

@@ -136,7 +136,13 @@ func NormalizeConfigKinds(config map[string]interface{}) bool {
 			changed = true
 			continue
 		}
-		if kind != "" && valid[strings.TrimSpace(kind)] {
+		trimmedKind := strings.TrimSpace(kind)
+		if kind != trimmedKind && valid[trimmedKind] {
+			m["kind"] = trimmedKind
+			changed = true
+			kind = trimmedKind
+		}
+		if kind != "" && valid[kind] {
 			continue
 		}
 		if kind == "" || strings.TrimSpace(kind) == "" {
@@ -330,7 +336,10 @@ func FileFingerprint(path string) (string, error) {
 		return "", err
 	}
 	h := sha256.Sum256(data)
-	stat, _ := os.Stat(path)
+	stat, err := os.Stat(path)
+	if err != nil {
+		return "", err
+	}
 	return fmt.Sprintf("%d:%d:%s", stat.ModTime().UnixNano(), stat.Size(), hex.EncodeToString(h[:])), nil
 }
 

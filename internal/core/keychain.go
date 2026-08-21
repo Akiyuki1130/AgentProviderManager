@@ -1,7 +1,6 @@
 package core
 
 import (
-	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -11,7 +10,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"golang.org/x/sys/windows"
 )
 
 func keychainStamp() string {
@@ -19,41 +17,22 @@ func keychainStamp() string {
 }
 
 func dpapiProtect(data []byte, protect bool) ([]byte, error) {
-	// Use Windows DPAPI via syscall on Windows; fallback to base64 on other platforms
+	if protected, err := dpapiWindows(data, protect); err == nil {
+		return protected, nil
+	}
 	if protect {
-		// On Windows, use CryptProtectData. For portability, we use a simple
-		// base64 wrapper that will be validated on load.
-		// Real DPAPI is handled via windows package when available.
-		enc, err := dpapiWindows(data, true)
-		if err == nil {
-			return enc, nil
-		}
-		// fallback: plain base64 (non-Windows dev/test)
-		return []byte(base64.StdEncoding.EncodeToString(data)), nil
+		return nil, &KeychainCryptoError{Msg: "Windows DPAPI 保护失败，未保存钥匙串"}
 	}
-	// Try Windows DPAPI first
-	dec, err := dpapiWindows(data, false)
+	// Files written by versions before DPAPI was implemented used a reversible
+	// base64 payload. Accept that legacy format once so it can be re-encrypted.
+	decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(data)))
 	if err == nil {
-		return dec, nil
-	}
-	// fallback: try base64 decode
-	decoded, err2 := base64.StdEncoding.DecodeString(strings.TrimSpace(string(data)))
-	if err2 == nil {
-		// Check if it's JSON payload
 		var tmp interface{}
 		if json.Unmarshal(decoded, &tmp) == nil {
 			return decoded, nil
 		}
 	}
 	return nil, &KeychainCryptoError{Msg: "钥匙串解密失败"}
-}
-
-func dpapiWindows(data []byte, protect bool) ([]byte, error) {
-	// Minimal DPAPI stub: try using windows CryptProtectData via syscall
-	// If not on Windows, return error to trigger fallback
-	_ = windows.Handle(0)
-	_ = rand.Reader
-	return nil, fmt.Errorf("DPAPI not implemented in this build")
 }
 
 func protectKeychainEntries(entries []KeychainEntry) (string, error) {

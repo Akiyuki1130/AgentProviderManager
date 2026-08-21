@@ -194,6 +194,7 @@ function onOutputInput(e: Event) { props.card.output = (e.target as HTMLInputEle
 .switch.on::after { transform: translateX(20px); }
 .mc-check { display: inline-flex; align-items: center; cursor: pointer; flex-shrink: 0; position: relative; }
 .mc-check input { position: absolute; opacity: 0; }
+.mc-check input:focus-visible + .check-mark { outline: 2px solid var(--accent); outline-offset: 2px; }
 .check-mark { width: 18px; height: 18px; border: 1.5px solid #888; border-radius: 4px; display: inline-flex; align-items: center; justify-content: center; }
 .mc-check input:checked + .check-mark { background: var(--accent); border-color: var(--accent); }
 .mc-check input:checked + .check-mark::after { content: ""; width: 5px; height: 9px; border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(45deg) translate(-1px, -1px); }

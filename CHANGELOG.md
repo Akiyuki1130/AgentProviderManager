@@ -1,0 +1,25 @@
+# Changelog
+
+## 2.0.0 — 2026-08-22
+
+### Added
+
+- Windows DPAPI-backed keychain storage with one-time migration of legacy reversible keychain data.
+- Built-in model context/output limit presets and batch matching.
+- ZCode, OpenCode, and DeepSeek Harness management, import, migration, backup, and restore workflows.
+- Custom text-input context menu containing Cut, Copy, and Paste only.
+- Bilingual project documentation and Windows release instructions.
+
+### Fixed
+
+- Preserved target models when importing/merging DeepSeek and OpenCode providers.
+- Preserved native OpenCode and DeepSeek provider fields during edits.
+- Stopped writes when creating a safety backup fails.
+- Completed the API-key keychain-to-import-page handoff.
+- Improved narrow-window layout, touch scrolling, and keyboard focus visibility.
+
+### Compatibility notes
+
+- Windows-only release; Microsoft Edge WebView2 Runtime is required.
+- Configuration files are reserialized when saved, so comments and formatting may change.
+- This release does not include Linux or macOS binaries.

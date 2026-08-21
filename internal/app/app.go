@@ -475,10 +475,10 @@ func (a *App) GetOptions() map[string]interface{} {
 		autoFill = v
 	}
 	return map[string]interface{}{
-		"theme":           theme,
-		"language":        lang,
-		"accent":          accent,
-		"http_enabled":    httpOn,
+		"theme":            theme,
+		"language":         lang,
+		"accent":           accent,
+		"http_enabled":     httpOn,
 		"auto_fill_limits": autoFill,
 	}
 }
@@ -660,7 +660,10 @@ func (a *App) SaveProvider(providerID string, provider map[string]interface{}) m
 		if existsDeepSeek && newID != providerID {
 			return map[string]interface{}{"success": false, "error": fmt.Sprintf("提供商「%s」已存在", newID)}
 		}
-		bak, _ := core.BackupConfig(target)
+		bak, backupErr := core.BackupConfig(target)
+		if backupErr != nil {
+			return map[string]interface{}{"success": false, "error": fmt.Sprintf("创建配置备份失败：%s", core.ShortText(backupErr.Error(), 300))}
+		}
 		if newID != providerID {
 			if def, ok := cfg["agent-default-model"].(map[string]interface{}); ok && strings.TrimSpace(fmt.Sprint(def["provider"])) == providerID {
 				def["provider"] = newID
@@ -720,7 +723,10 @@ func (a *App) SaveProvider(providerID string, provider map[string]interface{}) m
 				return map[string]interface{}{"success": false, "error": "检测到模型列表为空。为避免误删已有模型，已取消保存；如需清空模型，请逐个删除。"}
 			}
 		}
-		bak, _ := core.BackupConfig(target)
+		bak, backupErr := core.BackupConfig(target)
+		if backupErr != nil {
+			return map[string]interface{}{"success": false, "error": fmt.Sprintf("创建配置备份失败：%s", core.ShortText(backupErr.Error(), 300))}
+		}
 		if newID != providerID {
 			delete(providers, providerID)
 		}
@@ -755,7 +761,10 @@ func (a *App) SaveProvider(providerID string, provider map[string]interface{}) m
 			return map[string]interface{}{"success": false, "error": "检测到模型列表为空。为避免误删已有模型，已取消保存；如需清空模型，请逐个删除。"}
 		}
 	}
-	bak, _ := core.BackupConfig(target)
+	bak, backupErr := core.BackupConfig(target)
+	if backupErr != nil {
+		return map[string]interface{}{"success": false, "error": fmt.Sprintf("创建配置备份失败：%s", core.ShortText(backupErr.Error(), 300))}
+	}
 	if newID != providerID {
 		if _, exists := providers[providerID]; exists {
 			_, _ = core.RenameProviderInConfig(config, providerID, newID)
@@ -798,7 +807,10 @@ func (a *App) DeleteProvider(providerID string) map[string]interface{} {
 		if allProviders == nil || allProviders[providerID] == nil {
 			return map[string]interface{}{"success": false, "error": fmt.Sprintf("提供商「%s」不存在", providerID)}
 		}
-		bak, _ := core.BackupConfig(target)
+		bak, backupErr := core.BackupConfig(target)
+		if backupErr != nil {
+			return map[string]interface{}{"success": false, "error": fmt.Sprintf("创建配置备份失败：%s", core.ShortText(backupErr.Error(), 300))}
+		}
 		src, _ := core.DeepSeekProviderSource(cfg, providerID)
 		if src == "llm" {
 			if llm, ok := cfg["llm-pi-ai"].(map[string]interface{}); ok {
@@ -838,7 +850,10 @@ func (a *App) DeleteProvider(providerID string) map[string]interface{} {
 	if providers == nil || providers[providerID] == nil {
 		return map[string]interface{}{"success": false, "error": fmt.Sprintf("提供商「%s」不存在", providerID)}
 	}
-	bak, _ := core.BackupConfig(target)
+	bak, backupErr := core.BackupConfig(target)
+	if backupErr != nil {
+		return map[string]interface{}{"success": false, "error": fmt.Sprintf("创建配置备份失败：%s", core.ShortText(backupErr.Error(), 300))}
+	}
 	delete(providers, providerID)
 	if err := core.WriteConfig(target, config, fingerprint); err != nil {
 		return map[string]interface{}{"success": false, "error": fmt.Sprintf("删除提供商时出错：\n%s", core.ShortText(err.Error(), 300))}
@@ -906,7 +921,10 @@ func (a *App) DeleteModel(providerID, modelID string) map[string]interface{} {
 			if !found {
 				return map[string]interface{}{"success": false, "error": fmt.Sprintf("模型「%s」不存在", modelID)}
 			}
-			bak, _ := core.BackupConfig(target)
+			bak, backupErr := core.BackupConfig(target)
+			if backupErr != nil {
+				return map[string]interface{}{"success": false, "error": fmt.Sprintf("创建配置备份失败：%s", core.ShortText(backupErr.Error(), 300))}
+			}
 			prov["models"] = newArr
 			core.EnsureDeepSeekDefaultModel(cfg)
 			if err := writeConfigForAgent(target, cfg, fingerprint, agent); err != nil {
@@ -922,7 +940,10 @@ func (a *App) DeleteModel(providerID, modelID string) map[string]interface{} {
 		if models == nil || models[modelID] == nil {
 			return map[string]interface{}{"success": false, "error": fmt.Sprintf("模型「%s」不存在", modelID)}
 		}
-		bak, _ := core.BackupConfig(target)
+		bak, backupErr := core.BackupConfig(target)
+		if backupErr != nil {
+			return map[string]interface{}{"success": false, "error": fmt.Sprintf("创建配置备份失败：%s", core.ShortText(backupErr.Error(), 300))}
+		}
 		delete(models, modelID)
 		core.EnsureDeepSeekDefaultModel(cfg)
 		if err := writeConfigForAgent(target, cfg, fingerprint, agent); err != nil {
@@ -950,7 +971,10 @@ func (a *App) DeleteModel(providerID, modelID string) map[string]interface{} {
 	if models == nil || models[modelID] == nil {
 		return map[string]interface{}{"success": false, "error": fmt.Sprintf("模型「%s」不存在", modelID)}
 	}
-	bak, _ := core.BackupConfig(target)
+	bak, backupErr := core.BackupConfig(target)
+	if backupErr != nil {
+		return map[string]interface{}{"success": false, "error": fmt.Sprintf("创建配置备份失败：%s", core.ShortText(backupErr.Error(), 300))}
+	}
 	delete(models, modelID)
 	if err := core.WriteConfig(target, config, fingerprint); err != nil {
 		return map[string]interface{}{"success": false, "error": fmt.Sprintf("删除模型时出错：\n%s", core.ShortText(err.Error(), 300))}
@@ -1137,8 +1161,11 @@ func (a *App) ImportProvider(payload map[string]interface{}) map[string]interfac
 				}
 			}
 		}
-		bak, _ := core.BackupConfig(target)
-		if err := core.DeepSeekSaveProvider(target, pid, providerCfg, fingerprint); err != nil {
+		bak, backupErr := core.BackupConfig(target)
+		if backupErr != nil {
+			return map[string]interface{}{"success": false, "error": fmt.Sprintf("创建配置备份失败：%s", core.ShortText(backupErr.Error(), 300))}
+		}
+		if err := core.DeepSeekSaveProviderWithMerge(target, pid, providerCfg, fingerprint, mergeModels); err != nil {
 			return map[string]interface{}{"success": false, "error": fmt.Sprintf("写入配置文件时出错：\n%s", core.ShortText(err.Error(), 300))}
 		}
 		latestBak := bak
@@ -1169,7 +1196,10 @@ func (a *App) ImportProvider(payload map[string]interface{}) map[string]interfac
 		return map[string]interface{}{"success": false, "error": err.Error()}
 	}
 	core.NormalizeConfigKinds(existing)
-	bak, _ := core.BackupConfig(target)
+	bak, backupErr := core.BackupConfig(target)
+	if backupErr != nil {
+		return map[string]interface{}{"success": false, "error": fmt.Sprintf("创建配置备份失败：%s", core.ShortText(backupErr.Error(), 300))}
+	}
 	merged, err := core.MergeProviderIntoConfig(existing, pid, providerCfg, mergeModels)
 	if err != nil {
 		return map[string]interface{}{"success": false, "error": err.Error()}
@@ -1268,7 +1298,10 @@ func (a *App) ImportOpencode(payload map[string]interface{}) map[string]interfac
 	if err != nil {
 		return map[string]interface{}{"success": false, "error": err.Error()}
 	}
-	bak, _ := core.BackupConfig(target)
+	bak, backupErr := core.BackupConfig(target)
+	if backupErr != nil {
+		return map[string]interface{}{"success": false, "error": fmt.Sprintf("创建配置备份失败：%s", core.ShortText(backupErr.Error(), 300))}
+	}
 	if err := core.WriteConfig(target, result, fingerprint); err != nil {
 		return map[string]interface{}{"success": false, "error": fmt.Sprintf("写入配置文件时出错：\n%s", core.ShortText(err.Error(), 300))}
 	}
@@ -1359,7 +1392,10 @@ func (a *App) MergeConfig(payload map[string]interface{}) map[string]interface{}
 	if err != nil {
 		return map[string]interface{}{"success": false, "error": err.Error()}
 	}
-	bak, _ := core.BackupConfig(target)
+	bak, backupErr := core.BackupConfig(target)
+	if backupErr != nil {
+		return map[string]interface{}{"success": false, "error": fmt.Sprintf("创建配置备份失败：%s", core.ShortText(backupErr.Error(), 300))}
+	}
 	if err := core.WriteConfig(target, result, fingerprint); err != nil {
 		return map[string]interface{}{"success": false, "error": fmt.Sprintf("写入配置文件时出错：\n%s", core.ShortText(err.Error(), 300))}
 	}
