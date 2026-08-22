@@ -149,7 +149,7 @@ export const useUpdateStore = defineStore('update', () => {
     try {
       const result = await api.InstallUpdate()
       applyStatus(result)
-      // Installation is deliberately explicit and does not restart/reload Wails.
+      // Installation is explicit; the helper replaces the executable and restarts it.
     } catch (cause) {
       error.value = errorMessage(cause)
     }

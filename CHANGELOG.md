@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.0.2 — 2026-08-22
+
+### Fixed
+
+- Replaced updates at the executable's current path, preserving user-renamed executable names.
+- Deferred temporary `.apm-backup-*.exe` cleanup to the restarted application with retries, so backup files do not remain after Windows releases the old process image.
+- Added an explicit “Update and restart” action and automatic launch of the updated executable.
+
 ## 2.0.1 — 2026-08-22
 
 ### Added

@@ -5,6 +5,7 @@ import (
 	"embed"
 	"fmt"
 	"os"
+	"time"
 
 	"agentprovidermanager/internal/app"
 	appupdate "agentprovidermanager/internal/update"
@@ -14,7 +15,7 @@ import (
 )
 
 var (
-	version   = "2.0.1"
+	version   = "2.0.2"
 	buildTime = "unknown"
 )
 
@@ -29,6 +30,16 @@ func main() {
 		}
 		return
 	}
+	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	if len(os.Args) > 1 && os.Args[1] == appupdate.CleanupBackupFlag {
+		if err := appupdate.RunBackupCleanup(cleanupCtx, os.Args[1:], ""); err != nil {
+			fmt.Fprintf(os.Stderr, "Update backup cleanup deferred: %v\n", err)
+		}
+	}
+	if err := appupdate.CleanupStaleBackups(cleanupCtx, ""); err != nil {
+		fmt.Fprintf(os.Stderr, "Stale update backup cleanup deferred: %v\n", err)
+	}
+	cleanupCancel()
 	if len(os.Args) > 1 && os.Args[1] == "--version" {
 		fmt.Printf("AgentProviderManager %s (built %s)\n", version, buildTime)
 		os.Exit(0)
