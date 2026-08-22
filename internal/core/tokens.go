@@ -69,6 +69,17 @@ func ParseTokens(v interface{}) *int {
 	}
 }
 
+func canonicalVariant(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "none", "disabled", "nothink":
+		return "off"
+	case "minimal":
+		return "low"
+	default:
+		return strings.ToLower(strings.TrimSpace(value))
+	}
+}
+
 // NormalizeVariants normalizes reasoning variants to deduplicated lowercase list.
 func NormalizeVariants(value interface{}) []string {
 	if value == nil {
@@ -92,7 +103,7 @@ func NormalizeVariants(value interface{}) []string {
 	seen := map[string]bool{}
 	var out []string
 	for _, raw := range items {
-		s := strings.TrimSpace(strings.ToLower(raw))
+		s := canonicalVariant(raw)
 		if s != "" && ZCodeVariantSet[s] && !seen[s] {
 			seen[s] = true
 			out = append(out, s)

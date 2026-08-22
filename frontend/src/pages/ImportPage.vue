@@ -219,15 +219,16 @@ function batchSelectAll(v: boolean) { for (const c of filteredCards.value) c.sel
 function batchToggleReasoning() {
   const next = !batchReasoning.value
   const onVariants = settingStore.reasoningAllIntensities ? [...variantOpts.value] : ['off', 'high', 'max']
-  for (const c of filteredCards.value) { c.reasoning = next; if (next && (!c.variants || c.variants.length === 0)) { c.variants = [...onVariants]; c.default_variant = 'high' } else if (!next) { c.variants = []; c.default_variant = '' } }
+  for (const c of filteredCards.value) { c.reasoning = next; c._raw_reasoning_enabled = next; if (next && (!c.variants || c.variants.length === 0)) { c.variants = [...onVariants]; c.default_variant = 'high' } else if (!next) { c.variants = []; c.default_variant = '' } }
 }
 function batchToggleVariant(v: string) {
-  for (const c of filteredCards.value) { const arr = c.variants || []; const idx = arr.indexOf(v); if (idx >= 0) arr.splice(idx, 1); else { arr.push(v); c.reasoning = true }; c.variants = [...arr]; if (c.default_variant && !arr.includes(c.default_variant)) c.default_variant = arr[0] || '' }
+  for (const c of filteredCards.value) { const arr = c.variants || []; const idx = arr.indexOf(v); if (idx >= 0) arr.splice(idx, 1); else { arr.push(v); c.reasoning = true; c._raw_reasoning_enabled = true }; c.variants = [...arr]; if (c.default_variant && !arr.includes(c.default_variant)) c.default_variant = arr[0] || '' }
 }
 function batchSetDefault(v: string) {
   if (!v) return
   for (const c of filteredCards.value) {
     c.reasoning = true
+    c._raw_reasoning_enabled = true
     // 后端返回的模型 variants 可能为 null，需要兜底
     const arr = c.variants || []
     if (!arr.includes(v)) arr.push(v)

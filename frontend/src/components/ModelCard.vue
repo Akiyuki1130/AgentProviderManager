@@ -127,6 +127,7 @@ function onSelectChange(e: Event) { props.card.select = (e.target as HTMLInputEl
 function onNameInput(e: Event) { props.card.name = (e.target as HTMLInputElement).value }
 function toggleReasoning() {
   props.card.reasoning = !props.card.reasoning
+  props.card._raw_reasoning_enabled = props.card.reasoning
   if (props.card.reasoning && (!props.card.variants || props.card.variants.length === 0)) {
     // 选项「单模型思考默认全部强度」开启时勾选全部档位，否则保持默认 off/high/max
     props.card.variants = settingStore.reasoningAllIntensities ? [...variantOptions.value] : ['off', 'high', 'max']

@@ -24,15 +24,15 @@ func ConvertOpencodeModel(mid string, modelCfg map[string]interface{}, kind stri
 	variants := []string{}
 	if vm, ok := out["variants"].(map[string]interface{}); ok {
 		for key, value := range vm {
-			if !ZCodeVariantSet[strings.ToLower(key)] {
-				continue
-			}
 			if item, ok := value.(map[string]interface{}); ok && item["disabled"] == true {
 				continue
 			}
-			v := strings.ToLower(key)
+			v := canonicalVariant(key)
 			if mapped, ok := OpencodeEffortToVariant[v]; ok {
 				v = mapped
+			}
+			if !ZCodeVariantSet[v] {
+				continue
 			}
 			if !containsStr(variants, v) {
 				variants = append(variants, v)
@@ -45,10 +45,24 @@ func ConvertOpencodeModel(mid string, modelCfg map[string]interface{}, kind stri
 			variants = DefaultVariantsFor(kind)
 		}
 		defaultVariant := ""
-		for _, preferred := range DefaultVariantPreference {
+		preferredRaw, _ := out["reasoningEffort"].(string)
+		if preferredRaw == "" {
+			if options, ok := out["options"].(map[string]interface{}); ok {
+				preferredRaw, _ = options["reasoningEffort"].(string)
+			}
+		}
+		if preferredRaw != "" {
+			preferred := canonicalVariant(preferredRaw)
 			if containsStr(variants, preferred) {
 				defaultVariant = preferred
-				break
+			}
+		}
+		if defaultVariant == "" {
+			for _, preferred := range DefaultVariantPreference {
+				if containsStr(variants, preferred) {
+					defaultVariant = preferred
+					break
+				}
 			}
 		}
 		if defaultVariant == "" {
@@ -138,6 +152,7 @@ func OpenCodeModelFromCfg(modelID string, cfg map[string]interface{}) map[string
 	delete(out, "_opencode_raw")
 	delete(out, "source")
 	delete(out, "kind")
+	delete(out, "reasoningEffort")
 	if id, ok := out["id"].(string); !ok || strings.TrimSpace(id) == "" {
 		out["id"] = modelID
 	}
@@ -155,6 +170,20 @@ func OpenCodeModelFromCfg(modelID string, cfg map[string]interface{}) map[string
 				vm[name] = map[string]interface{}{}
 			}
 			out["variants"] = vm
+			defaultVariant, _ := reasoning["defaultVariant"].(string)
+			defaultVariant = canonicalVariant(defaultVariant)
+			if !containsStr(variants, defaultVariant) {
+				defaultVariant = variants[0]
+			}
+			if defaultVariant == "off" {
+				defaultVariant = "none"
+			}
+			options, _ := out["options"].(map[string]interface{})
+			if options == nil {
+				options = map[string]interface{}{}
+			}
+			options["reasoningEffort"] = defaultVariant
+			out["options"] = options
 		}
 	} else if _, ok := out["reasoning"].(bool); !ok {
 		delete(out, "reasoning")

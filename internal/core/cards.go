@@ -84,24 +84,27 @@ func CfgToCard(modelID string, modelCfg map[string]interface{}) ModelCard {
 		limit = map[string]interface{}{}
 	}
 	var enabled bool
+	var enabledKnown bool
 	var variants []string
 	var defaultVariant string
 	var rawEnabled *bool
 	if reasoning, ok := modelCfg["reasoning"].(map[string]interface{}); ok {
 		if e, ok := reasoning["enabled"].(bool); ok {
 			enabled = e
+			enabledKnown = true
 			b := e
 			rawEnabled = &b
 		}
 		variants = NormalizeVariants(reasoning["variants"])
 		if dv, ok := reasoning["defaultVariant"].(string); ok {
-			dv = strings.TrimSpace(strings.ToLower(dv))
+			dv = canonicalVariant(dv)
 			if containsStr(variants, dv) {
 				defaultVariant = dv
 			}
 		}
 	} else if enabledRaw, ok := modelCfg["reasoning"].(bool); ok {
 		enabled = enabledRaw
+		enabledKnown = true
 		b := enabledRaw
 		rawEnabled = &b
 		if vm, ok := modelCfg["variants"].(map[string]interface{}); ok {
@@ -109,10 +112,7 @@ func CfgToCard(modelID string, modelCfg map[string]interface{}) ModelCard {
 				if item, ok := value.(map[string]interface{}); ok && item["disabled"] == true {
 					continue
 				}
-				key = strings.ToLower(strings.TrimSpace(key))
-				if key == "none" {
-					key = "off"
-				}
+				key = canonicalVariant(key)
 				if ZCodeVariantSet[key] && !containsStr(variants, key) {
 					variants = append(variants, key)
 				}
@@ -122,19 +122,18 @@ func CfgToCard(modelID string, modelCfg map[string]interface{}) ModelCard {
 	if len(variants) == 0 {
 		if efforts, ok := modelCfg["reasoningEfforts"].(map[string]interface{}); ok {
 			for key, value := range efforts {
-				key = strings.ToLower(strings.TrimSpace(key))
-				if key == "none" {
-					key = "off"
-				}
+				key = canonicalVariant(key)
 				if key == "off" || value != nil {
 					if ZCodeVariantSet[key] && !containsStr(variants, key) {
 						variants = append(variants, key)
 					}
 				}
 			}
-			enabled = len(variants) > 0
+			if !enabledKnown {
+				enabled = len(variants) > 1 || (len(variants) == 1 && variants[0] != "off")
+			}
 			if enabled {
-				b := true
+				b := enabled
 				rawEnabled = &b
 			}
 		}
@@ -143,9 +142,13 @@ func CfgToCard(modelID string, modelCfg map[string]interface{}) ModelCard {
 	if n, ok := modelCfg["name"].(string); ok && strings.TrimSpace(n) != "" {
 		name = n
 	}
+	reasoningEnabled := enabled
+	if !enabledKnown {
+		reasoningEnabled = len(variants) > 0 && !(len(variants) == 1 && variants[0] == "off")
+	}
 	card := ModelCard{
 		ModelID: modelID, APIReturned: false, Name: name,
-		Reasoning: enabled || len(variants) > 0, RawReasoningEnabled: rawEnabled,
+		Reasoning: reasoningEnabled, RawReasoningEnabled: rawEnabled,
 		Variants: variants, DefaultVariant: defaultVariant, Context: limit["context"],
 		Output: limit["output"], Select: false, RawCfg: deepCopyMap(modelCfg),
 	}

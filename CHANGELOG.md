@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.0.3 — 2026-08-22
+
+### Fixed
+
+- Preserved reasoning enabled state when converting between ZCode, OpenCode, and DeepSeek Harness.
+- Preserved the selected default reasoning effort during cross-agent migration.
+- Normalized compatible reasoning aliases and filtered DeepSeek efforts unsupported by its native schema.
+- Kept explicit reasoning toggles made in the editor when saving migrated models.
+
 ## 2.0.2 — 2026-08-22
 
 ### Fixed

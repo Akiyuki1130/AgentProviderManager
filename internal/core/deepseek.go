@@ -202,19 +202,35 @@ func ConvertDeepSeekModel(mid string, modelCfg map[string]interface{}, kind stri
 			// Explicit non-reasoning marker – do not emit reasoning block.
 		} else if m, ok := re.(map[string]interface{}); ok && len(m) > 0 {
 			variants := []string{}
+			seen := map[string]bool{}
 			for k, v := range m {
-				if v == nil && strings.ToLower(strings.TrimSpace(k)) == "off" {
-					variants = append(variants, "off")
+				lk := strings.ToLower(strings.TrimSpace(k))
+				switch lk {
+				case "none", "disabled", "nothink":
+					lk = "off"
+				case "minimal":
+					lk = "low"
+				}
+				if lk == "off" {
+					if !seen[lk] {
+						variants = append(variants, lk)
+						seen[lk] = true
+					}
 					continue
 				}
 				if v == nil {
 					continue
 				}
-				lk := strings.ToLower(strings.TrimSpace(k))
-				if ZCodeVariantSet[lk] {
+				if lk != "low" && lk != "high" && lk != "max" {
+					if vv, ok := OpencodeEffortToVariant[lk]; ok {
+						lk = vv
+					} else {
+						continue
+					}
+				}
+				if !seen[lk] {
 					variants = append(variants, lk)
-				} else if vv, ok := OpencodeEffortToVariant[lk]; ok {
-					variants = append(variants, vv)
+					seen[lk] = true
 				}
 			}
 			if len(variants) > 0 {
@@ -252,15 +268,24 @@ func ConvertDeepSeekModel(mid string, modelCfg map[string]interface{}, kind stri
 					variants = DefaultVariantsFor(kind)
 				}
 				defaultVariant := ""
-				for _, pref := range DefaultVariantPreference {
-					if containsStr(variants, pref) {
-						defaultVariant = pref
-						break
+				if preferred, ok := modelCfg["reasoningEffort"].(string); ok {
+					preferred = canonicalVariant(preferred)
+					if containsStr(variants, preferred) {
+						defaultVariant = preferred
+					}
+				}
+				if defaultVariant == "" {
+					for _, pref := range DefaultVariantPreference {
+						if containsStr(variants, pref) {
+							defaultVariant = pref
+							break
+						}
 					}
 				}
 				if defaultVariant == "" && len(variants) > 0 {
 					defaultVariant = variants[0]
 				}
+
 				if !(len(variants) == 1 && variants[0] == "off") {
 					out["reasoning"] = map[string]interface{}{
 						"enabled":        true,
@@ -679,11 +704,22 @@ func dshModelToRaw(card ModelCard, _ string) map[string]interface{} {
 	if card.Name != "" && card.Name != card.ModelID {
 		m["name"] = card.Name
 	}
-	_, nativeDSH := card.RawCfg["_dsh_raw"]
-	if nativeDSH && card.Reasoning && len(card.Variants) > 0 {
+	// DeepSeek only accepts these four effort names. Keep the source enabled
+	// state independently from the selected variants so cross-agent migration
+	// does not silently turn reasoning off or on.
+	enabled := card.Reasoning
+	if card.RawReasoningEnabled != nil {
+		// The editor updates this field whenever the user toggles reasoning, so
+		// it preserves both the source state and an explicit UI change.
+		enabled = *card.RawReasoningEnabled
+	}
+	delete(m, "reasoningEffort")
+	if !enabled {
+		m["reasoningEfforts"] = false
+	} else {
 		re := map[string]interface{}{}
 		for _, v := range card.Variants {
-			v = strings.ToLower(strings.TrimSpace(v))
+			v = canonicalVariant(v)
 			if v != "off" && v != "low" && v != "high" && v != "max" {
 				continue
 			}
@@ -693,17 +729,22 @@ func dshModelToRaw(card ModelCard, _ string) map[string]interface{} {
 				re[v] = v
 			}
 		}
-		if len(re) > 1 {
-			m["reasoningEfforts"] = re
-		} else {
-			m["reasoningEfforts"] = false
+		if len(re) == 0 {
+			re = map[string]interface{}{"off": nil, "high": "high", "max": "max"}
 		}
-	} else if nativeDSH && card.Reasoning {
-		m["reasoningEfforts"] = map[string]interface{}{"off": nil, "high": "high", "max": "max"}
-	} else if nativeDSH {
-		m["reasoningEfforts"] = false
-	} else {
-		delete(m, "reasoningEfforts")
+		m["reasoningEfforts"] = re
+		// DeepSeek represents the selected default effort in a separate native
+		// field. Keep it when the source card has one, including an explicit off.
+		defaultVariant := canonicalVariant(card.DefaultVariant)
+		if value, ok := re[defaultVariant]; ok {
+			if defaultVariant == "off" {
+				m["reasoningEffort"] = "off"
+			} else {
+				m["reasoningEffort"] = value
+			}
+		} else {
+			delete(m, "reasoningEffort")
+		}
 	}
 	if card.Context != nil || card.Output != nil {
 		ctx := ParseTokens(card.Context)
