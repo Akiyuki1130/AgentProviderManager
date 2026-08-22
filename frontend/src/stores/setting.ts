@@ -14,6 +14,7 @@ const AGENT_KEY = 'apm:agent'
 const HTTP_KEY = 'apm:http'
 const AUTOFILL_KEY = 'apm:autofill'
 const REASONING_ALL_KEY = 'apm:reasoningAll'
+const AUTO_UPDATE_KEY = 'apm:autoUpdate'
 const LEGACY_THEME_KEY = 'zcode-pm:theme'
 const LEGACY_LANG_KEY = 'zcode-pm:lang'
 const LEGACY_ACCENT_KEY = 'zcode-pm:accent'
@@ -65,6 +66,7 @@ export const useSettingStore = defineStore('setting', () => {
   const httpEnabled = ref<boolean>(loadBool(HTTP_KEY, false))
   const autoFillLimits = ref<boolean>(loadBool(AUTOFILL_KEY, true))
   const reasoningAllIntensities = ref<boolean>(loadBool(REASONING_ALL_KEY, false))
+  const autoUpdate = ref<boolean>(loadBool(AUTO_UPDATE_KEY, false))
   const systemDark = ref<boolean>(window.matchMedia('(prefers-color-scheme: dark)').matches)
 
   // 语言设为「跟随系统」时按系统语言解析出实际界面语言
@@ -107,12 +109,16 @@ export const useSettingStore = defineStore('setting', () => {
     reasoningAllIntensities.value = v
     try { localStorage.setItem(REASONING_ALL_KEY, String(v)) } catch { /* ignore */ }
   }
+  function setAutoUpdate(v: boolean) {
+    autoUpdate.value = v
+    try { localStorage.setItem(AUTO_UPDATE_KEY, String(v)) } catch { /* ignore */ }
+  }
   function setAgent(a: AgentID) {
     agent.value = a
     try { localStorage.setItem(AGENT_KEY, a) } catch { /* ignore */ }
   }
   return {
-    theme, lang, accentColor, agent, httpEnabled, autoFillLimits, reasoningAllIntensities, systemDark, resolvedLang,
-    initTheme, setTheme, setLang, setAccentColor, setHttpEnabled, setAutoFillLimits, setReasoningAllIntensities, setAgent,
+    theme, lang, accentColor, agent, httpEnabled, autoFillLimits, reasoningAllIntensities, autoUpdate, systemDark, resolvedLang,
+    initTheme, setTheme, setLang, setAccentColor, setHttpEnabled, setAutoFillLimits, setReasoningAllIntensities, setAutoUpdate, setAgent,
   }
 })

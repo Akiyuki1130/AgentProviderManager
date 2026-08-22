@@ -145,3 +145,19 @@ export async function MigratePreview(source: string, target: string): Promise<Re
 export async function MigrateExecute(payload: unknown): Promise<Record<string, unknown>> {
   return call('MigrateExecute', payload)
 }
+
+// Update methods intentionally go through the dynamic Wails bridge above. This
+// keeps the frontend type-checkable while the generated bindings catch up with
+// the backend methods.
+export async function CheckForUpdate(): Promise<Record<string, unknown>> {
+  return call('CheckForUpdate')
+}
+export async function DownloadUpdate(): Promise<Record<string, unknown>> {
+  return call('DownloadUpdate')
+}
+export async function InstallUpdate(): Promise<Record<string, unknown>> {
+  return call('InstallUpdate')
+}
+export async function GetUpdateStatus(): Promise<Record<string, unknown>> {
+  return call('GetUpdateStatus')
+}

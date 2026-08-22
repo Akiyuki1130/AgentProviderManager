@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.0.1 — 2026-08-22
+
+### Added
+
+- Published a Windows amd64 executable asset with an architecture-specific filename so the built-in updater can select it.
+- Added `AGENTS.md` with versioning, build, release-asset, and updater workflow instructions.
+
+### Fixed
+
+- Corrected updater progress reporting so a check without a download does not report 100% completion.
+- Preserved a verified staged update when checking the same latest release again.
+
 ## 2.0.0 — 2026-08-22
 
 ### Added
@@ -9,6 +21,8 @@
 - ZCode, OpenCode, and DeepSeek Harness management, import, migration, backup, and restore workflows.
 - Custom text-input context menu containing Cut, Copy, and Paste only.
 - Bilingual project documentation and Windows release instructions.
+- Optional fixed-source GitHub Release update checks, SHA-256 verified staging, and explicit restart confirmation.
+- Options-page links for the author, project homepage, and GitHub issue reporting.
 
 ### Fixed
 

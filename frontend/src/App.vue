@@ -38,6 +38,17 @@
           </div>
         </template>
       </n-modal>
+      <n-modal v-model:show="updatePromptShow" preset="card" :title="updatePromptTitle" style="width: 460px" :mask-closable="false">
+        <div style="font-size: 13px; line-height: 1.7">
+          {{ updatePromptMessage }}
+        </div>
+        <template #footer>
+          <div style="display: flex; justify-content: flex-end; gap: 8px">
+            <n-button :disabled="updateInstalling" @click="updatePromptShow = false">{{ t('options.updateLater', settingStore.resolvedLang) }}</n-button>
+            <n-button type="primary" :loading="updateInstalling" @click="confirmUpdateInstall">{{ t('options.updateRestartNow', settingStore.resolvedLang) }}</n-button>
+          </div>
+        </template>
+      </n-modal>
       <n-modal v-model:show="showRestoreModal" preset="card" title="恢复备份" style="width: 520px" :mask-closable="false">
         <div style="font-size: 13px; line-height: 1.6">
           为当前 Agent（{{ agentLabel(settingStore.agent) }}）选择要恢复的备份，恢复将覆盖当前配置文件。
@@ -63,12 +74,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, onMounted, watch } from 'vue'
+import { computed, ref, onMounted, onUnmounted, watch } from 'vue'
 import { NConfigProvider, NDialogProvider, NModal, NButton, zhCN, dateZhCN, enUS, dateEnUS, jaJP, dateJaJP } from 'naive-ui'
 import type { GlobalTheme } from 'naive-ui'
 import { useSettingStore } from './stores/setting'
 import type { AgentID } from './stores/setting'
-import { requestLeave, cancelLeave, confirmLeave, leaveShow, leaveSaving } from './stores/leaveGuard'
+import { requestLeave, cancelLeave, confirmLeave, leaveShow, leaveSaving, leaveDirty } from './stores/leaveGuard'
+import { useUpdateStore } from './stores/update'
+import { t } from './i18n'
 import { buildThemeOverrides, isDark as isDarkFn, darkTheme, resolveTheme } from './styles/theme'
 import AppSidebar from './layout/AppSidebar.vue'
 import AppTopbar from './layout/AppTopbar.vue'
@@ -77,6 +90,11 @@ import EditContextMenu from './components/EditContextMenu.vue'
 import * as api from './api'
 
 const settingStore = useSettingStore()
+const updateStore = useUpdateStore()
+const updatePromptShow = ref(false)
+const updateInstalling = ref(false)
+const updatePromptTitle = computed(() => t('options.updatePromptTitle', settingStore.resolvedLang).replace('{version}', updateStore.latestVersion))
+const updatePromptMessage = computed(() => updateStore.ready ? t('options.updatePromptReady', settingStore.resolvedLang) : t('options.updatePromptAvailable', settingStore.resolvedLang))
 const toastRef = ref<InstanceType<typeof ToastContainer>>()
 const targetPath = ref('')
 const hasBackup = ref(false)
@@ -156,6 +174,29 @@ async function doRestore(bak: string) {
     } else toast('error', '恢复失败', res['error'] as string)
   } finally { restoring.value = false }
 }
+async function doInstallUpdate() {
+  updateInstalling.value = true
+  try {
+    await updateStore.install()
+    if (updateStore.error) {
+      toast('error', '更新失败', updateStore.error)
+      return
+    }
+    updatePromptShow.value = false
+  } finally {
+    updateInstalling.value = false
+  }
+}
+
+function confirmUpdateInstall() {
+  updatePromptShow.value = false
+  if (leaveDirty()) {
+    requestLeave(() => { void doInstallUpdate() })
+    return
+  }
+  void doInstallUpdate()
+}
+
 function formatBackupLabel(path: string): string {
   const m = path.match(/\.bak_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})/)
   if (m) return `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]}:${m[6]}`
@@ -205,6 +246,28 @@ onMounted(async () => {
     }
     await refreshBackup()
   } catch { /* ignore */ }
+  if (settingStore.autoUpdate) {
+    void updateStore.check(false).then(async () => {
+      if (updateStore.available && !updateStore.ready) await updateStore.download()
+      if (updateStore.ready) updatePromptShow.value = true
+    })
+  }
+})
+
+function onUpdateRequestInstall() {
+  if (updateStore.ready) updatePromptShow.value = true
+}
+
+onMounted(() => {
+  window.addEventListener('update-request-install', onUpdateRequestInstall)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('update-request-install', onUpdateRequestInstall)
+})
+
+watch(() => updateStore.ready, (ready) => {
+  if (ready) updatePromptShow.value = true
 })
 
 watch(dark, (d) => { document.documentElement.setAttribute('data-theme', d ? 'dark' : 'light') })

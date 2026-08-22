@@ -9,19 +9,24 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	"agentprovidermanager/internal/core"
+	appupdate "agentprovidermanager/internal/update"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 type App struct {
-	ctx              context.Context
-	mu               sync.Mutex
-	targetConfigPath string
-	currentAgent     string
-	agentPaths       map[string]string
-	lastDialogPath   string
-	settingsPath     string
+	ctx               context.Context
+	mu                sync.Mutex
+	updateMu          sync.Mutex
+	updateInfo        appupdate.UpdateInfo
+	updateDownloading bool
+	targetConfigPath  string
+	currentAgent      string
+	agentPaths        map[string]string
+	lastDialogPath    string
+	settingsPath      string
 }
 
 func NewApp() *App {
@@ -158,6 +163,126 @@ func (a *App) GetAppInfo() map[string]interface{} {
 		"agents":              core.AllAgents(),
 		"current_agent":       a.currentAgent,
 	}
+}
+
+func (a *App) updateStatusLocked() map[string]interface{} {
+	status := map[string]interface{}{
+		"current_version":   core.AppVersion,
+		"latest_version":    "",
+		"available":         false,
+		"downloading":       a.updateDownloading,
+		"download_progress": 0,
+		"ready":             false,
+		"error":             "",
+	}
+	if a.updateInfo.Version != "" {
+		status["latest_version"] = a.updateInfo.Version
+		status["available"] = a.updateInfo.IsUpdate
+		status["ready"] = a.updateInfo.StagedPath != ""
+		if a.updateInfo.StagedPath != "" {
+			status["download_progress"] = 100
+		}
+	}
+	return status
+}
+
+func updateError(err error) string {
+	if err == nil {
+		return ""
+	}
+	return core.ShortText(err.Error(), 500)
+}
+
+func (a *App) CheckForUpdate() map[string]interface{} {
+	a.updateMu.Lock()
+	defer a.updateMu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	info, err := appupdate.New(nil).CheckLatest(ctx, core.AppVersion)
+	if err != nil {
+		status := a.updateStatusLocked()
+		status["error"] = updateError(err)
+		return status
+	}
+	previous := a.updateInfo
+	if previous.StagedPath != "" && previous.Version == info.Version && previous.ExpectedSHA256 == info.ExpectedSHA256 {
+		info.StagedPath = previous.StagedPath
+		info.ExecutablePath = previous.ExecutablePath
+		info.Bytes = previous.Bytes
+	} else if previous.StagedPath != "" && previous.StagedPath != info.StagedPath {
+		_ = os.Remove(previous.StagedPath)
+	}
+	a.updateInfo = info
+	return a.updateStatusLocked()
+}
+
+func (a *App) DownloadUpdate() map[string]interface{} {
+	a.updateMu.Lock()
+	if a.updateDownloading {
+		status := a.updateStatusLocked()
+		a.updateMu.Unlock()
+		return status
+	}
+	a.updateDownloading = true
+	a.updateMu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	path, err := os.Executable()
+	if err == nil {
+		info, downloadErr := appupdate.New(nil).DownloadLatest(ctx, core.AppVersion, func(downloaded, total int64) {
+			progress := 0
+			if total > 0 {
+				progress = int(float64(downloaded) / float64(total) * 100)
+			}
+			if a.ctx != nil {
+				runtime.EventsEmit(a.ctx, "update:progress", map[string]interface{}{"progress": progress, "downloaded": downloaded, "total": total, "downloading": true})
+			}
+		})
+		a.updateMu.Lock()
+		a.updateDownloading = false
+		if downloadErr == nil {
+			info.ExecutablePath = path
+			a.updateInfo = info
+		}
+		status := a.updateStatusLocked()
+		if downloadErr != nil {
+			status["error"] = updateError(downloadErr)
+		}
+		a.updateMu.Unlock()
+		if downloadErr == nil && a.ctx != nil {
+			runtime.EventsEmit(a.ctx, "update:progress", map[string]interface{}{"progress": 100, "ready": true, "downloading": false})
+		}
+		return status
+	}
+	a.updateMu.Lock()
+	a.updateDownloading = false
+	status := a.updateStatusLocked()
+	status["error"] = updateError(err)
+	a.updateMu.Unlock()
+	return status
+}
+
+func (a *App) InstallUpdate() map[string]interface{} {
+	a.updateMu.Lock()
+	info := a.updateInfo
+	a.updateMu.Unlock()
+	if info.StagedPath == "" || info.ExpectedSHA256 == "" {
+		return map[string]interface{}{"success": false, "error": "没有已下载的更新"}
+	}
+	if err := appupdate.StartCurrentProcessHelper(info.StagedPath, info.ExpectedSHA256); err != nil {
+		return map[string]interface{}{"success": false, "error": updateError(err)}
+	}
+	if a.ctx != nil {
+		runtime.Quit(a.ctx)
+	}
+	return map[string]interface{}{"success": true, "accepted": true}
+}
+
+func (a *App) GetUpdateStatus() map[string]interface{} {
+	a.updateMu.Lock()
+	defer a.updateMu.Unlock()
+	return a.updateStatusLocked()
 }
 
 func (a *App) ListAgents() map[string]interface{} {

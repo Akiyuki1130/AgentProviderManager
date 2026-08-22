@@ -1,4 +1,4 @@
-# Agent Provider Manager 2.0.0
+# Agent Provider Manager 2.0.1
 
 > 一个面向 Windows 的多 Agent 模型提供商管理器：用一个原生桌面界面管理 ZCode、OpenCode 与 DeepSeek Harness 的 provider、模型、API Key、备份和迁移。
 >
@@ -40,13 +40,13 @@ DeepSeek 支持通过 `DSH_HOME` 覆盖默认目录，并会优先探测已有�
 - 配置备份、指纹检查和恢复；默认最多保留 2 份备份。
 - 从 OpenCode 导入 provider，或在支持的 Agent 之间迁移配置。
 - 输入框提供只含“剪切 / 复制 / 粘贴”的自定义右键菜单。
-- 不包含模型代理、计费、遥测、自动上传或后台更新服务。
+- 不包含模型代理、计费、遥测或自动上传；可选的自动更新只从本项目 GitHub Release 检查并下载正式版本。
 
 ### 安全与隐私边界
 
 1. 模型请求只允许 `http` / `https`。默认仅允许 HTTPS；用户显式开启“允许 HTTP”后，外部 HTTP 地址才会被允许。HTTP 会以明文传输 API Key 和请求内容，不建议在生产环境开启。
 2. 发请求前及重定向过程中会校验 host，拒绝 localhost、环回、私有、链路本地、未指定和其他保留地址。此校验是 SSRF 防护，不等同于完整的网络隔离。
-3. 点击获取模型时，API Key 会通过 `Authorization: Bearer ...` 发送到用户输入的 Base URL；服务商可能记录请求、来源 IP、模型列表和认证信息。项目本身不会把数据上传到项目方，也没有遥测或自动更新服务。
+3. 点击获取模型时，API Key 会通过 `Authorization: Bearer ...` 发送到用户输入的 Base URL；服务商可能记录请求、来源 IP、模型列表和认证信息。项目本身不会把模型配置或凭据上传到项目方，也没有遥测；可选自动更新只访问固定的 GitHub Release 地址。
 4. DeepSeek 的 `.credentials.yaml`、provider 配置、备份和恢复快照可能包含 API Key。不要把这些文件提交 Git、上传工单或发送给他人。
 5. 导入页的临时流程可能使用前端 `sessionStorage` 传递 API Key；钥匙串页面的复制功能会把密钥放入系统剪贴板。使用后请清理剪贴板，避免剪贴板管理器、录屏和共享用户配置泄露密钥。
 6. Windows DPAPI 绑定当前 Windows 用户环境。更换用户、迁移到另一台电脑或重装系统前，请先按业务需要迁移凭据；不要把 DPAPI 文件当作跨设备备份。
@@ -56,7 +56,7 @@ DeepSeek 支持通过 `DSH_HOME` 覆盖默认目录，并会优先探测已有�
 
 #### 方式 A：下载 Release
 
-1. 在 GitHub Releases 下载 `AgentProviderManager-2.0.0-windows-amd64.zip`。
+1. 在 GitHub Releases 下载 `AgentProviderManager-2.0.1-windows-amd64.zip`。
 2. 解压到用户有执行权限的目录。
 3. 确认系统已安装 Microsoft Edge WebView2 Runtime；Wails 桌面窗口依赖 WebView2。
 4. 启动 `AgentProviderManager.exe`。程序不会自动上传配置，也不会自动修改未选择的 Agent 文件。
@@ -87,7 +87,11 @@ wails build
 
 在修改前建议先复制一份配置文件到离线位置。保存成功后程序会创建备份并报告备份路径；恢复操作会列出可用备份，选择正确时间点后再确认。
 
-#### 2. 管理 provider
+#### 2. 软件更新
+
+在“选项”页可以手动检查 GitHub Release，也可以打开自动更新。自动更新默认关闭；开启后只会从固定的 `Akiyuki1130/AgentProviderManager` 正式 Release 检查并下载 Windows amd64 EXE。下载完成后程序不会突然退出，而是显示确认窗口；只有点击“立即重启更新”并通过未保存更改确认后，更新助手才会等待旧进程退出、校验 SHA-256、替换当前 EXE 并用原文件名启动新版本。安装目录需要允许当前用户写入；失败时会尝试回滚。
+
+#### 3. 管理 provider
 
 在“管理”页选择 provider：
 
@@ -163,7 +167,7 @@ git diff --check
 
 Agent Provider Manager (**APM**) is a Windows desktop application for maintaining third-party model providers used by ZCode, OpenCode, and DeepSeek Harness. It edits user-selected configuration files locally and offers provider/model editing, bulk model operations, model-limit presets, imports, migrations, backups, restore, a Windows DPAPI-backed API-key keychain, and a minimal edit context menu.
 
-APM is a local configuration manager. It is not a proxy, model gateway, hosted secret vault, billing service, telemetry client, or automatic updater.
+APM is a local configuration manager. It is not a proxy, model gateway, hosted secret vault, billing service, telemetry client, or mandatory updater. Optional updates use only this project's fixed GitHub Release source.
 
 ### Supported agent tools
 
@@ -191,7 +195,7 @@ The product is currently **Windows-only**. It uses Wails and WebView2, and the W
 - Create, rotate, inspect, and restore up to two recent configuration backups.
 - Import OpenCode providers and migrate supported configurations between agents.
 - Show only Cut, Copy, and Paste in the custom context menu for text inputs.
-- No proxying, telemetry, background upload, or automatic update service is included.
+- No proxying, telemetry, or background upload is included. Optional updates use the fixed GitHub Release source and always require explicit restart confirmation.
 
 ### Security and privacy boundary
 
@@ -199,6 +203,7 @@ The product is currently **Windows-only**. It uses Wails and WebView2, and the W
 - Hosts are checked before requests and again across redirects. Localhost, loopback, private, link-local, unspecified, and other reserved addresses are rejected. This is SSRF protection, not a complete network isolation boundary.
 - When the user requests model discovery, the API key is sent as `Authorization: Bearer ...` to the user-provided Base URL. The provider may log requests, source IPs, model information, and authentication data. APM does not upload data to the project owner and contains no telemetry or updater.
 - DeepSeek credentials, provider files, backups, and restore snapshots may contain API keys. Never commit, upload, or share them.
+- Optional updates use only HTTPS GitHub API/release hosts for this repository. Stable Windows amd64 assets are size-limited and SHA-256 checked before staging; installation waits for the current process to exit and requires an explicit restart confirmation. The updater does not accept arbitrary URLs or shell commands.
 - The import flow may temporarily use browser `sessionStorage`, and copying a key places it in the system clipboard. Clear the clipboard and avoid screen sharing or shared browser profiles when handling secrets.
 - DPAPI is tied to the current Windows user. Plan credential migration before moving to another account or machine.
 - Atomic temporary-file replacement, SHA-256 fingerprints, and backup rotation reduce accidental loss but do not provide a database transaction or replace independent backups.
@@ -207,7 +212,7 @@ The product is currently **Windows-only**. It uses Wails and WebView2, and the W
 
 #### Download a Release
 
-1. Download `AgentProviderManager-2.0.0-windows-amd64.zip` from GitHub Releases.
+1. Download `AgentProviderManager-2.0.1-windows-amd64.zip` from GitHub Releases.
 2. Extract it to a directory where you have execute permission.
 3. Install Microsoft Edge WebView2 Runtime if it is not already present.
 4. Run `AgentProviderManager.exe`.

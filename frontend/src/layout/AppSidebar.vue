@@ -54,7 +54,7 @@ const route = useRoute()
 const router = useRouter()
 const settingStore = useSettingStore()
 const collapsed = ref(false)
-const version = ref('2.0.0')
+const version = ref('2.0.1')
 const navEl = ref<HTMLElement | null>(null)
 const indicatorTop = ref(0)
 const indicatorHeight = ref(0)
@@ -92,7 +92,7 @@ onBeforeUnmount(() => { window.removeEventListener('resize', updateIndicator) })
 
 <style scoped>
 .app-sidebar {
-  width: 230px; flex-shrink: 0;
+  width: 216px; flex-shrink: 0;
   background: var(--fluent-card-bg);
   border-right: 1px solid var(--fluent-border);
   display: flex; flex-direction: column;

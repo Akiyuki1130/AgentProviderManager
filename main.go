@@ -1,18 +1,20 @@
 package main
 
 import (
+	"context"
 	"embed"
 	"fmt"
 	"os"
 
 	"agentprovidermanager/internal/app"
+	appupdate "agentprovidermanager/internal/update"
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 )
 
 var (
-	version   = "2.0.0"
+	version   = "2.0.1"
 	buildTime = "unknown"
 )
 
@@ -20,6 +22,13 @@ var (
 var assets embed.FS
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == appupdate.HelperFlag {
+		if err := appupdate.RunHelper(context.Background(), os.Args[1:]); err != nil {
+			fmt.Fprintf(os.Stderr, "Update helper failed: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "--version" {
 		fmt.Printf("AgentProviderManager %s (built %s)\n", version, buildTime)
 		os.Exit(0)
@@ -31,8 +40,9 @@ func main() {
 		Title:     fmt.Sprintf("Agent Provider Manager v%s", version),
 		Width:     1280,
 		Height:    800,
-		MinWidth:  1100,
+		MinWidth:  1120,
 		MinHeight: 680,
+		Frameless: true,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
