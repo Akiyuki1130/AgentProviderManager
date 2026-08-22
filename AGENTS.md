@@ -57,7 +57,7 @@ Keep the ZIP's user-facing executable name as `AgentProviderManager.exe` so user
 
 The updater uses the fixed GitHub repository `Akiyuki1130/AgentProviderManager` and the GitHub `latest` release endpoint. It accepts stable SemVer releases only, selects the Windows amd64 `.exe`, verifies the GitHub SHA-256 digest or `SHA256SUMS.txt`, and stages the file beside the running executable.
 
-Downloading never replaces or restarts the application. Installation requires an explicit user confirmation. The helper then waits for the old process to exit, verifies the staged file again, backs up the current executable, replaces the original path (including a user-renamed executable), rolls back on launch failure, and starts the new executable at that same path. The restarted application receives a restricted cleanup directive and retries removal of the temporary `.apm-backup-*.exe` after Windows releases the old process image. Do not remove URL/SSRF validation, SHA-256 verification, the no-shell argument handling, or the restart confirmation.
+Downloading never replaces or restarts the application. Installation requires an explicit user confirmation. The helper then waits for the old process to exit, verifies the staged file again, backs up the current executable, replaces the original path (including a user-renamed executable), rolls back on launch failure, and starts the new executable at that same path. The restarted application receives a restricted cleanup directive and retries removal of the temporary `.apm-backup-*` file after Windows releases the old process image. Do not remove URL/SSRF validation, SHA-256 verification, the no-shell argument handling, or the restart confirmation.
 
 ## Git and release hygiene
 
