@@ -228,6 +228,7 @@ onMounted(async () => {
     const accentVal = opts['accent'] as string | undefined
     if (typeof accentVal === 'string' && accentVal) settingStore.setAccentColor(accentVal)
     if (typeof opts['http_enabled'] === 'boolean') settingStore.setHttpEnabled(opts['http_enabled'] as boolean)
+    if (typeof opts['private_hosts_enabled'] === 'boolean') settingStore.setPrivateHostsAllowed(opts['private_hosts_enabled'] as boolean)
     if (typeof opts['auto_fill_limits'] === 'boolean') settingStore.setAutoFillLimits(opts['auto_fill_limits'] as boolean)
   } catch { /* ignore */ }
   try {

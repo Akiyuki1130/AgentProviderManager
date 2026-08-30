@@ -10,11 +10,17 @@ import (
 )
 
 // httpPolicy guards the "allow http://" option. Default is off: only https is
-// accepted. SSRF host checks (localhost / loopback / private / reserved) are
-// always applied regardless of this policy.
+// accepted.
 var (
 	httpPolicyMu sync.RWMutex
 	httpPolicyOn bool
+)
+
+// privatePolicy guards the "allow local/private addresses" option. Default is
+// off: localhost / loopback / private / reserved hosts are rejected.
+var (
+	privatePolicyMu sync.RWMutex
+	privatePolicyOn bool
 )
 
 // SetHTTPAllowed controls whether plain http:// URLs are accepted.
@@ -29,6 +35,21 @@ func HTTPAllowed() bool {
 	httpPolicyMu.RLock()
 	defer httpPolicyMu.RUnlock()
 	return httpPolicyOn
+}
+
+// SetPrivateHostsAllowed controls whether localhost/loopback/private/reserved
+// hosts are accepted.
+func SetPrivateHostsAllowed(v bool) {
+	privatePolicyMu.Lock()
+	privatePolicyOn = v
+	privatePolicyMu.Unlock()
+}
+
+// PrivateHostsAllowed reports whether private/reserved hosts are accepted.
+func PrivateHostsAllowed() bool {
+	privatePolicyMu.RLock()
+	defer privatePolicyMu.RUnlock()
+	return privatePolicyOn
 }
 
 func isPrivateOrReservedHost(host string) bool {
@@ -96,8 +117,8 @@ func ValidateFetchURL(raw string) error {
 	if host == "" {
 		return fmt.Errorf("缺少有效主机名")
 	}
-	if isPrivateOrReservedHost(host) {
-		return fmt.Errorf("已拦截私有/保留地址请求")
+	if !PrivateHostsAllowed() && isPrivateOrReservedHost(host) {
+		return fmt.Errorf("已拦截私有/保留地址请求（如需访问本地或内网地址，请在选项中开启\"允许本地与内网地址\"）")
 	}
 	return nil
 }

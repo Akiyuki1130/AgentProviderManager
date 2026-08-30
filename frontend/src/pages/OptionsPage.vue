@@ -66,6 +66,16 @@
 
         <div class="opt-row">
           <div class="opt-info">
+            <div class="opt-name">{{ t('options.privateHosts', lang) }}</div>
+            <div class="opt-desc">{{ t('options.privateHostsDesc', lang) }}</div>
+          </div>
+          <div class="opt-ctrl">
+            <n-switch :value="settingStore.privateHostsAllowed" @update:value="onPrivateHostsChange" />
+          </div>
+        </div>
+
+        <div class="opt-row">
+          <div class="opt-info">
             <div class="opt-name">{{ t('options.autofill', lang) }}</div>
             <div class="opt-desc">{{ t('options.autofillDesc', lang) }}</div>
           </div>
@@ -179,6 +189,10 @@ function onAccentChange(v: string) {
 function onHttpChange(v: boolean) {
   settingStore.setHttpEnabled(v)
   toast('success', t('options.http', lang.value), t('common.ok', lang.value))
+}
+function onPrivateHostsChange(v: boolean) {
+  settingStore.setPrivateHostsAllowed(v)
+  toast('success', t('options.privateHosts', lang.value), t('common.ok', lang.value))
 }
 function onAutoFillChange(v: boolean) {
   settingStore.setAutoFillLimits(v)

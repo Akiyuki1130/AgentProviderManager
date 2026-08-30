@@ -1,4 +1,4 @@
-# Agent Provider Manager 2.0.3
+# Agent Provider Manager 2.0.4
 
 > 一个面向 Windows 的多 Agent 模型提供商管理器：用一个原生桌面界面管理 ZCode、OpenCode 与 DeepSeek Harness 的 provider、模型、API Key、备份和迁移。
 >
@@ -45,7 +45,7 @@ DeepSeek 支持通过 `DSH_HOME` 覆盖默认目录，并会优先探测已有�
 ### 安全与隐私边界
 
 1. 模型请求只允许 `http` / `https`。默认仅允许 HTTPS；用户显式开启“允许 HTTP”后，外部 HTTP 地址才会被允许。HTTP 会以明文传输 API Key 和请求内容，不建议在生产环境开启。
-2. 发请求前及重定向过程中会校验 host，拒绝 localhost、环回、私有、链路本地、未指定和其他保留地址。此校验是 SSRF 防护，不等同于完整的网络隔离。
+2. 发请求前及重定向过程中会校验 host，默认拒绝 localhost、环回、私有、链路本地、未指定和其他保留地址；用户显式开启“允许本地与内网地址”后才会放行（例如访问本机模型服务）。此校验是 SSRF 防护，不等同于完整的网络隔离。
 3. 点击获取模型时，API Key 会通过 `Authorization: Bearer ...` 发送到用户输入的 Base URL；服务商可能记录请求、来源 IP、模型列表和认证信息。项目本身不会把模型配置或凭据上传到项目方，也没有遥测；可选自动更新只访问固定的 GitHub Release 地址。
 4. DeepSeek 的 `.credentials.yaml`、provider 配置、备份和恢复快照可能包含 API Key。不要把这些文件提交 Git、上传工单或发送给他人。
 5. 导入页的临时流程可能使用前端 `sessionStorage` 传递 API Key；钥匙串页面的复制功能会把密钥放入系统剪贴板。使用后请清理剪贴板，避免剪贴板管理器、录屏和共享用户配置泄露密钥。
@@ -56,7 +56,7 @@ DeepSeek 支持通过 `DSH_HOME` 覆盖默认目录，并会优先探测已有�
 
 #### 方式 A：下载 Release
 
-1. 在 GitHub Releases 下载 `AgentProviderManager-2.0.3-windows-amd64.zip`。
+1. 在 GitHub Releases 下载 `AgentProviderManager-2.0.4-windows-amd64.zip`。
 2. 解压到用户有执行权限的目录。
 3. 确认系统已安装 Microsoft Edge WebView2 Runtime；Wails 桌面窗口依赖 WebView2。
 4. 启动 `AgentProviderManager.exe`。程序不会自动上传配置，也不会自动修改未选择的 Agent 文件。
@@ -200,7 +200,7 @@ The product is currently **Windows-only**. It uses Wails and WebView2, and the W
 ### Security and privacy boundary
 
 - Only `http` and `https` URLs are accepted. HTTPS is the default. External HTTP is allowed only after the user explicitly enables the HTTP option, and it exposes API keys and request data in plaintext.
-- Hosts are checked before requests and again across redirects. Localhost, loopback, private, link-local, unspecified, and other reserved addresses are rejected. This is SSRF protection, not a complete network isolation boundary.
+- Hosts are checked before requests and again across redirects. Localhost, loopback, private, link-local, unspecified, and other reserved addresses are rejected by default; they are only allowed after the user explicitly enables the "Allow local & private addresses" option (for example, to reach a local model server). This is SSRF protection, not a complete network isolation boundary.
 - When the user requests model discovery, the API key is sent as `Authorization: Bearer ...` to the user-provided Base URL. The provider may log requests, source IPs, model information, and authentication data. APM does not upload data to the project owner and contains no telemetry or updater.
 - DeepSeek credentials, provider files, backups, and restore snapshots may contain API keys. Never commit, upload, or share them.
 - Optional updates use only HTTPS GitHub API/release hosts for this repository. Stable Windows amd64 assets are size-limited and SHA-256 checked before staging; installation waits for the current process to exit and requires an explicit restart confirmation. The updater does not accept arbitrary URLs or shell commands.
@@ -212,7 +212,7 @@ The product is currently **Windows-only**. It uses Wails and WebView2, and the W
 
 #### Download a Release
 
-1. Download `AgentProviderManager-2.0.3-windows-amd64.zip` from GitHub Releases.
+1. Download `AgentProviderManager-2.0.4-windows-amd64.zip` from GitHub Releases.
 2. Extract it to a directory where you have execute permission.
 3. Install Microsoft Edge WebView2 Runtime if it is not already present.
 4. Run `AgentProviderManager.exe`.

@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.0.4 — 2026-08-31
+
+### Added
+
+- New "Allow local & private addresses" option (off by default). When enabled, model discovery can reach localhost, loopback, LAN, and other private/reserved hosts such as local model servers (e.g. `http://127.0.0.1:8787/v1`). Requires the existing plain-HTTP option for `http://` URLs. The updater's GitHub-only host validation is unaffected.
+
 ## 2.0.3 — 2026-08-22
 
 ### Fixed

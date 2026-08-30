@@ -82,6 +82,32 @@ func TestValidateFetchURL_BlocksPrivate(t *testing.T) {
 	}
 }
 
+func TestValidateFetchURL_PrivateAllowed(t *testing.T) {
+	SetHTTPAllowed(true)
+	SetPrivateHostsAllowed(true)
+	t.Cleanup(func() { SetHTTPAllowed(false); SetPrivateHostsAllowed(false) })
+	allow := []string{
+		"http://127.0.0.1:8787/v1/models",
+		"http://localhost:1234/v1/models",
+		"https://192.168.1.1/v1/models",
+		"https://10.0.0.1/v1/models",
+		"http://[::1]:8787/v1/models",
+	}
+	for _, u := range allow {
+		if err := ValidateFetchURL(u); err != nil {
+			t.Errorf("ValidateFetchURL(%q) should pass when private hosts allowed, got %v", u, err)
+		}
+	}
+	// Non-http(s) schemes stay rejected regardless of the option.
+	if err := ValidateFetchURL("ftp://127.0.0.1/v1/models"); err == nil {
+		t.Error("non-http scheme must stay blocked")
+	}
+	SetPrivateHostsAllowed(false)
+	if err := ValidateFetchURL("http://127.0.0.1:8787/v1/models"); err == nil {
+		t.Error("private host must be blocked again after the option is turned off")
+	}
+}
+
 func TestNormalizeBaseURL(t *testing.T) {
 	if got := NormalizeBaseURL("https://example.com/v1/models"); got != "https://example.com/v1" {
 		t.Errorf("NormalizeBaseURL models suffix: got %q", got)

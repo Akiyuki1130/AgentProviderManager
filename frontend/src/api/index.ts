@@ -73,6 +73,12 @@ export async function GetHttpEnabled(): Promise<boolean> {
 export async function SetHttpEnabled(v: boolean): Promise<Record<string, unknown>> {
   return call('SetHttpEnabled', v)
 }
+export async function GetPrivateHostsAllowed(): Promise<boolean> {
+  try { return (await call('GetPrivateHostsAllowed')) as boolean } catch { return false }
+}
+export async function SetPrivateHostsAllowed(v: boolean): Promise<Record<string, unknown>> {
+  return call('SetPrivateHostsAllowed', v)
+}
 export async function GetAutoFillLimits(): Promise<boolean> {
   try { return (await call('GetAutoFillLimits')) as boolean } catch { return true }
 }

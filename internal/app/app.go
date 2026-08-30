@@ -72,6 +72,7 @@ func (a *App) Startup(ctx context.Context) {
 	a.ctx = ctx
 	a.loadAgentState()
 	core.SetHTTPAllowed(a.httpEnabled())
+	core.SetPrivateHostsAllowed(a.privateHostsAllowed())
 }
 
 func (a *App) Shutdown(_ context.Context) {}
@@ -569,6 +570,23 @@ func (a *App) SetHttpEnabled(v bool) map[string]interface{} {
 	return map[string]interface{}{"success": true}
 }
 
+func (a *App) GetPrivateHostsAllowed() interface{} {
+	on, _ := a.loadSettings()["private_hosts_enabled"].(bool)
+	return on
+}
+
+func (a *App) SetPrivateHostsAllowed(v bool) map[string]interface{} {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	settings := a.loadSettings()
+	settings["private_hosts_enabled"] = v
+	if !a.saveSettings(settings) {
+		return map[string]interface{}{"success": false, "error": "允许本地与内网地址设置保存失败"}
+	}
+	core.SetPrivateHostsAllowed(v)
+	return map[string]interface{}{"success": true}
+}
+
 func (a *App) GetAutoFillLimits() interface{} {
 	s := a.loadSettings()
 	if v, ok := s["auto_fill_limits"].(bool); ok {
@@ -595,22 +613,31 @@ func (a *App) GetOptions() map[string]interface{} {
 	lang, _ := s["language"].(string)
 	accent, _ := s["accent"].(string)
 	httpOn, _ := s["http_enabled"].(bool)
+	privateOn, _ := s["private_hosts_enabled"].(bool)
 	autoFill := true
 	if v, ok := s["auto_fill_limits"].(bool); ok {
 		autoFill = v
 	}
 	return map[string]interface{}{
-		"theme":            theme,
-		"language":         lang,
-		"accent":           accent,
-		"http_enabled":     httpOn,
-		"auto_fill_limits": autoFill,
+		"theme":                 theme,
+		"language":              lang,
+		"accent":                accent,
+		"http_enabled":          httpOn,
+		"private_hosts_enabled": privateOn,
+		"auto_fill_limits":      autoFill,
 	}
 }
 
 // httpEnabled reports the persisted http:// policy (default off).
 func (a *App) httpEnabled() bool {
 	on, _ := a.loadSettings()["http_enabled"].(bool)
+	return on
+}
+
+// privateHostsAllowed reports the persisted local/private-address policy
+// (default off).
+func (a *App) privateHostsAllowed() bool {
+	on, _ := a.loadSettings()["private_hosts_enabled"].(bool)
 	return on
 }
 

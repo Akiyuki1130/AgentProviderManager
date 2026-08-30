@@ -12,6 +12,7 @@ const LANG_KEY = 'apm:lang'
 const ACCENT_KEY = 'apm:accent'
 const AGENT_KEY = 'apm:agent'
 const HTTP_KEY = 'apm:http'
+const PRIVATE_HOSTS_KEY = 'apm:privateHosts'
 const AUTOFILL_KEY = 'apm:autofill'
 const REASONING_ALL_KEY = 'apm:reasoningAll'
 const AUTO_UPDATE_KEY = 'apm:autoUpdate'
@@ -64,6 +65,7 @@ export const useSettingStore = defineStore('setting', () => {
   const accentColor = ref<string>(loadAccent())
   const agent = ref<AgentID>(loadAgent())
   const httpEnabled = ref<boolean>(loadBool(HTTP_KEY, false))
+  const privateHostsAllowed = ref<boolean>(loadBool(PRIVATE_HOSTS_KEY, false))
   const autoFillLimits = ref<boolean>(loadBool(AUTOFILL_KEY, true))
   const reasoningAllIntensities = ref<boolean>(loadBool(REASONING_ALL_KEY, false))
   const autoUpdate = ref<boolean>(loadBool(AUTO_UPDATE_KEY, false))
@@ -100,6 +102,11 @@ export const useSettingStore = defineStore('setting', () => {
     try { localStorage.setItem(HTTP_KEY, String(v)) } catch { /* ignore */ }
     void api.SetHttpEnabled(v).catch(() => { /* ignore */ })
   }
+  function setPrivateHostsAllowed(v: boolean) {
+    privateHostsAllowed.value = v
+    try { localStorage.setItem(PRIVATE_HOSTS_KEY, String(v)) } catch { /* ignore */ }
+    void api.SetPrivateHostsAllowed(v).catch(() => { /* ignore */ })
+  }
   function setAutoFillLimits(v: boolean) {
     autoFillLimits.value = v
     try { localStorage.setItem(AUTOFILL_KEY, String(v)) } catch { /* ignore */ }
@@ -118,7 +125,7 @@ export const useSettingStore = defineStore('setting', () => {
     try { localStorage.setItem(AGENT_KEY, a) } catch { /* ignore */ }
   }
   return {
-    theme, lang, accentColor, agent, httpEnabled, autoFillLimits, reasoningAllIntensities, autoUpdate, systemDark, resolvedLang,
-    initTheme, setTheme, setLang, setAccentColor, setHttpEnabled, setAutoFillLimits, setReasoningAllIntensities, setAutoUpdate, setAgent,
+    theme, lang, accentColor, agent, httpEnabled, privateHostsAllowed, autoFillLimits, reasoningAllIntensities, autoUpdate, systemDark, resolvedLang,
+    initTheme, setTheme, setLang, setAccentColor, setHttpEnabled, setPrivateHostsAllowed, setAutoFillLimits, setReasoningAllIntensities, setAutoUpdate, setAgent,
   }
 })

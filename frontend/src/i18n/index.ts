@@ -52,6 +52,12 @@ const dict: Record<string, Record<UiLang, string>> = {
     en: 'Off by default. When enabled, http:// URLs are allowed; https:// is always supported',
     ja: '既定ではオフ。有効にすると http:// を許可します。https:// は常に利用可能',
   },
+  'options.privateHosts': { zh: '允许本地与内网地址', en: 'Allow local & private addresses', ja: 'ローカル/プライベートアドレスを許可' },
+  'options.privateHostsDesc': {
+    zh: '默认关闭。开启后允许访问 localhost、127.0.0.1、内网 IP 等私有/保留地址（例如本地模型服务）；请仅对可信服务开启',
+    en: 'Off by default. When enabled, localhost, 127.0.0.1, LAN IPs and other private/reserved hosts are allowed (e.g. local model servers); only enable for trusted services',
+    ja: '既定ではオフ。有効にすると localhost・127.0.0.1・LAN IP などのプライベート/予約アドレス（ローカルモデルサーバーなど）にアクセスできます。信頼できるサービスのみ有効にしてください',
+  },
   'options.autofill': {
     zh: '导入时自动补全上下文与输出长度',
     en: 'Auto-fill context & output length on import',
