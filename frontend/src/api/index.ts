@@ -1,3 +1,5 @@
+import type { ZCodeFormatInfo, LegacyImportPreview, LegacyImportResult } from '../types'
+
 type WailsApp = Record<string, (...args: unknown[]) => Promise<unknown>>
 
 function getApp(): WailsApp | null {
@@ -166,4 +168,17 @@ export async function InstallUpdate(): Promise<Record<string, unknown>> {
 }
 export async function GetUpdateStatus(): Promise<Record<string, unknown>> {
   return call('GetUpdateStatus')
+}
+
+// ZCode v2 / legacy format detection and the legacy-provider import bridge also
+// go through the dynamic Wails bridge above, for the same reason: the frontend
+// stays type-checkable while the generated bindings catch up with the backend.
+export async function GetZCodeFormat(): Promise<ZCodeFormatInfo> {
+  return call<ZCodeFormatInfo>('GetZCodeFormat')
+}
+export async function PreviewLegacyImport(): Promise<LegacyImportPreview> {
+  return call<LegacyImportPreview>('PreviewLegacyImport')
+}
+export async function ApplyLegacyImport(ids: string[]): Promise<LegacyImportResult> {
+  return call<LegacyImportResult>('ApplyLegacyImport', ids)
 }

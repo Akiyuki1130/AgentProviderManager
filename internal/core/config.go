@@ -12,6 +12,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"agentprovidermanager/internal/zcodeprovider"
 )
 
 // LoadConfig loads a JSON/JSONC config file. Missing file returns empty map.
@@ -364,12 +366,20 @@ func LoadConfigWithFingerprint(path string) (map[string]interface{}, string, err
 }
 
 func WriteConfig(path string, config map[string]interface{}, expectedFingerprint string) error {
+	text, _ := json.MarshalIndent(config, "", "  ")
+	text = append(text, '\n')
+	return WriteConfigBytes(path, text, expectedFingerprint)
+}
+
+// WriteConfigBytes 是 WriteConfig 的字节写入部分：同样的目录创建、原子替换
+// （临时文件 + rename）与指纹校验，但直接写出给定字节。
+// 新版 ZCode provider_config.json 走 zcodeprovider.Encode 得到 canonical 字节，
+// 若这里再走 map，就会丢掉严格校验（未知键会让 ZCode 把整份配置当成空）。
+func WriteConfigBytes(path string, data []byte, expectedFingerprint string) error {
 	dir := filepath.Dir(path)
 	if dir != "" {
 		_ = os.MkdirAll(dir, 0755)
 	}
-	text, _ := json.MarshalIndent(config, "", "  ")
-	text = append(text, '\n')
 	d := dir
 	if d == "" {
 		d = "."
@@ -379,7 +389,7 @@ func WriteConfig(path string, config map[string]interface{}, expectedFingerprint
 		return err
 	}
 	tmpName := tmpFile.Name()
-	if _, err := tmpFile.Write(text); err != nil {
+	if _, err := tmpFile.Write(data); err != nil {
 		tmpFile.Close()
 		_ = os.Remove(tmpName)
 		return err
@@ -587,12 +597,14 @@ func DetectConfigLocationsForAgent(agentID string) []ConfigLocation {
 		add("OpenCode 配置", OpencodeConfig())
 	} else if agentID == "" {
 		add("ZCode 全局配置", ZCodeConfig())
+		add("ZCode 新版配置", ZCodeProviderConfigPath())
 		add("ZCode 旧版配置位置", filepath.Join(home, ".zcode", "config.json"))
 		add("OpenCode 配置", OpencodeConfig())
 		add("DeepSeek 配置 (settings.yaml)", filepath.Join(DshHome(), "settings.yaml"))
 		add("DeepSeek 配置 (settings.json)", filepath.Join(DshHome(), "settings.json"))
 	} else {
 		add("ZCode 全局配置", ZCodeConfig())
+		add("ZCode 新版配置", ZCodeProviderConfigPath())
 		add("ZCode 旧版配置位置", filepath.Join(home, ".zcode", "config.json"))
 	}
 	return locations
@@ -623,6 +635,12 @@ func ConfigProviderSummaryForAgent(path string, agentID string) ImportPreview {
 		preview.Path = path
 		return preview
 	}
+	// 新版 provider_config.json 没有 legacy 的 provider 键，供应商在
+	// providerConfigRules.providerRules 里；按内容分流，否则该条目会显示 0 个供应商。
+	// 其它 agent 的配置（OpenCode 等）即便顶层带 config/schemaVersion 也不走这条路。
+	if normAgent != string(AgentOpenCode) && DetectZCodeFormatAt(path) == zcodeprovider.FormatV2 {
+		return v2ProviderImportPreview(path, item)
+	}
 	cfg, err := LoadConfig(path)
 	if err != nil {
 		item.Error = err.Error()
@@ -631,6 +649,24 @@ func ConfigProviderSummaryForAgent(path string, agentID string) ImportPreview {
 	}
 	item.Exists = true
 	item.Providers = BuildProviderSummary(cfg)
+	return item
+}
+
+// v2ProviderImportPreview 严格解码新版 provider_config.json，并按 providerRule 生成摘要。
+// 解码失败时沿用 ImportPreview.Error（不新增字段）。
+func v2ProviderImportPreview(path string, item ImportPreview) ImportPreview {
+	item.Exists = true
+	data, err := os.ReadFile(path)
+	if err != nil {
+		item.Error = fmt.Sprintf("读取配置文件失败：%v", err)
+		return item
+	}
+	cfg, err := zcodeprovider.Decode(data)
+	if err != nil {
+		item.Error = err.Error()
+		return item
+	}
+	item.Providers = zcodeV2Store{}.List(cfg.Doc())
 	return item
 }
 

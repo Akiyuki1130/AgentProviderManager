@@ -66,3 +66,30 @@ export interface ImportPreview {
   error: string
   providers: ProviderSummary[]
 }
+
+/** ZCode 当前生效的配置格式：v2 -> provider_config.json，legacy -> config.json。 */
+export type ZCodeConfigFormat = 'v2' | 'legacy' | 'unknown'
+
+export interface ZCodeFormatInfo {
+  success: boolean
+  error?: string
+  format: ZCodeConfigFormat
+  path: string
+  supports_legacy_import: boolean
+}
+
+export interface LegacyImportPreview {
+  success: boolean
+  error?: string
+  providers: ProviderSummary[]
+  /** providerId -> 新格式不支持的旧字段名列表 */
+  dropped: Record<string, string[]>
+}
+
+export interface LegacyImportResult {
+  success: boolean
+  error?: string
+  imported: string[]
+  skipped: string[]
+  backup: string
+}

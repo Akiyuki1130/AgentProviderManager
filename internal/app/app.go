@@ -98,8 +98,21 @@ func (a *App) loadAgentState() {
 		}
 	}
 	a.agentPaths = paths
+	// ZCode 新版优先：目标仍指向旧版文件（或尚未确定），而新版的 provider_config.json
+	// 确实存在且判定为 v2 时，自动把目标切到新版并持久化。
+	if a.currentAgent == string(core.AgentZCode) {
+		v2Path := core.ZCodeProviderConfigPath()
+		if !core.IsZCodeV2Path(paths[string(core.AgentZCode)]) && core.IsZCodeV2Path(v2Path) {
+			paths[string(core.AgentZCode)] = v2Path
+			a.agentPaths = paths
+			a.persistAgentStateLocked()
+		}
+	}
 	if p, ok := paths[a.currentAgent]; ok && strings.TrimSpace(p) != "" {
 		a.targetConfigPath = p
+	} else if a.currentAgent == string(core.AgentZCode) {
+		// 新版优先只在这里生效（app 层）；core 的 AgentDefaultPath 仍是旧版语义。
+		a.targetConfigPath = core.ZCodeDefaultPath()
 	} else {
 		a.targetConfigPath = core.AgentDefaultPath(core.NormalizeAgentID(a.currentAgent))
 	}
@@ -735,7 +748,17 @@ func (a *App) ListProviders() map[string]interface{} {
 	if err != nil {
 		return map[string]interface{}{"success": false, "error": err.Error()}
 	}
-	return map[string]interface{}{"success": true, "providers": core.BuildProviderSummary(cfg), "target": target, "agent": agent}
+	var summaries []core.ProviderSummary
+	if agent == string(core.AgentZCode) {
+		backend, berr := core.GetBackend(agent, target)
+		if berr != nil {
+			return map[string]interface{}{"success": false, "error": berr.Error()}
+		}
+		summaries = backend.Store(cfg).List(cfg)
+	} else {
+		summaries = core.BuildProviderSummary(cfg)
+	}
+	return map[string]interface{}{"success": true, "providers": summaries, "target": target, "agent": agent}
 }
 
 func (a *App) GetProvider(providerID string) map[string]interface{} {
@@ -773,7 +796,16 @@ func (a *App) GetProvider(providerID string) map[string]interface{} {
 	if err != nil {
 		return map[string]interface{}{"success": false, "error": err.Error()}
 	}
-	provider, err := core.ProviderToEdit(cfg, providerID)
+	var provider *core.ProviderEdit
+	if agent == string(core.AgentZCode) {
+		backend, berr := core.GetBackend(agent, target)
+		if berr != nil {
+			return map[string]interface{}{"success": false, "error": berr.Error()}
+		}
+		provider, err = backend.Store(cfg).Get(cfg, providerID)
+	} else {
+		provider, err = core.ProviderToEdit(cfg, providerID)
+	}
 	if err != nil {
 		return map[string]interface{}{"success": false, "error": err.Error()}
 	}
@@ -892,8 +924,10 @@ func (a *App) SaveProvider(providerID string, provider map[string]interface{}) m
 		}
 		return map[string]interface{}{"success": true, "count": count, "provider_id": newID, "backup": latestBak, "target": target, "agent": agent}
 	}
-	if agent != string(core.AgentOpenCode) {
-		core.NormalizeConfigKinds(config)
+	// ZCode 分支：文档变换走 backend（kind 归一化/重命名/合并），备份与写盘仍在本函数内完成。
+	backend, berr := core.GetBackend(agent, target)
+	if berr != nil {
+		return map[string]interface{}{"success": false, "error": berr.Error()}
 	}
 	providers, _ := config["provider"].(map[string]interface{})
 	if providers == nil {
@@ -917,22 +951,11 @@ func (a *App) SaveProvider(providerID string, provider map[string]interface{}) m
 	if backupErr != nil {
 		return map[string]interface{}{"success": false, "error": fmt.Sprintf("创建配置备份失败：%s", core.ShortText(backupErr.Error(), 300))}
 	}
-	if newID != providerID {
-		if _, exists := providers[providerID]; exists {
-			_, _ = core.RenameProviderInConfig(config, providerID, newID)
-		} else {
-			if _, ok := config["provider"]; !ok {
-				config["provider"] = map[string]interface{}{}
-			}
-			config["provider"].(map[string]interface{})[newID] = map[string]interface{}{}
-		}
+	merged, mergeErr := backend.Store(config).Upsert(config, providerID, provider, core.SaveOptions{MergeModels: false})
+	if mergeErr != nil {
+		return map[string]interface{}{"success": false, "error": fmt.Sprintf("写入配置文件时出错：\n%s", core.ShortText(mergeErr.Error(), 300))}
 	}
-	var merged map[string]interface{}
-	merged, err = core.MergeProviderIntoConfig(config, newID, providerCfg, false)
-	if err != nil {
-		return map[string]interface{}{"success": false, "error": fmt.Sprintf("写入配置文件时出错：\n%s", core.ShortText(err.Error(), 300))}
-	}
-	if err := core.WriteConfig(target, merged, fingerprint); err != nil {
+	if err := backend.Write(target, merged, fingerprint); err != nil {
 		return map[string]interface{}{"success": false, "error": fmt.Sprintf("写入配置文件时出错：\n%s", core.ShortText(err.Error(), 300))}
 	}
 	latestBak := bak
@@ -986,6 +1009,36 @@ func (a *App) DeleteProvider(providerID string) map[string]interface{} {
 		}
 		core.EnsureDeepSeekDefaultModel(cfg)
 		if err := writeConfigForAgent(target, cfg, fingerprint, agent); err != nil {
+			return map[string]interface{}{"success": false, "error": fmt.Sprintf("删除提供商时出错：\n%s", core.ShortText(err.Error(), 300))}
+		}
+		latestBak := bak
+		if latestBak == "" {
+			latestBak = core.FindLatestBackup(target)
+		}
+		return map[string]interface{}{"success": true, "provider_id": providerID, "backup": latestBak, "target": target}
+	}
+	// ZCode 分支：文档变换走 backend，备份与写盘仍在本函数内完成。
+	if agent == string(core.AgentZCode) {
+		backend, berr := core.GetBackend(agent, target)
+		if berr != nil {
+			return map[string]interface{}{"success": false, "error": berr.Error()}
+		}
+		config, fingerprint, rerr := backend.ReadWithFingerprint(target)
+		if rerr != nil {
+			return map[string]interface{}{"success": false, "error": fmt.Sprintf("删除提供商时出错：\n%s", core.ShortText(rerr.Error(), 300))}
+		}
+		newDoc, found, derr := backend.Store(config).Delete(config, providerID)
+		if derr != nil {
+			return map[string]interface{}{"success": false, "error": derr.Error()}
+		}
+		if !found {
+			return map[string]interface{}{"success": false, "error": fmt.Sprintf("提供商「%s」不存在", providerID)}
+		}
+		bak, backupErr := core.BackupConfig(target)
+		if backupErr != nil {
+			return map[string]interface{}{"success": false, "error": fmt.Sprintf("创建配置备份失败：%s", core.ShortText(backupErr.Error(), 300))}
+		}
+		if err := backend.Write(target, newDoc, fingerprint); err != nil {
 			return map[string]interface{}{"success": false, "error": fmt.Sprintf("删除提供商时出错：\n%s", core.ShortText(err.Error(), 300))}
 		}
 		latestBak := bak
@@ -1107,6 +1160,36 @@ func (a *App) DeleteModel(providerID, modelID string) map[string]interface{} {
 		}
 		return map[string]interface{}{"success": true, "provider_id": providerID, "model_id": modelID, "backup": latestBak, "target": target}
 	}
+	// ZCode 分支：文档变换走 backend，备份与写盘仍在本函数内完成。
+	if agent == string(core.AgentZCode) {
+		backend, berr := core.GetBackend(agent, target)
+		if berr != nil {
+			return map[string]interface{}{"success": false, "error": berr.Error()}
+		}
+		config, fingerprint, rerr := backend.ReadWithFingerprint(target)
+		if rerr != nil {
+			return map[string]interface{}{"success": false, "error": fmt.Sprintf("删除模型时出错：\n%s", core.ShortText(rerr.Error(), 300))}
+		}
+		newDoc, found, derr := backend.Store(config).DeleteModel(config, providerID, modelID)
+		if derr != nil {
+			return map[string]interface{}{"success": false, "error": derr.Error()}
+		}
+		if !found {
+			return map[string]interface{}{"success": false, "error": fmt.Sprintf("模型「%s」不存在", modelID)}
+		}
+		bak, backupErr := core.BackupConfig(target)
+		if backupErr != nil {
+			return map[string]interface{}{"success": false, "error": fmt.Sprintf("创建配置备份失败：%s", core.ShortText(backupErr.Error(), 300))}
+		}
+		if err := backend.Write(target, newDoc, fingerprint); err != nil {
+			return map[string]interface{}{"success": false, "error": fmt.Sprintf("删除模型时出错：\n%s", core.ShortText(err.Error(), 300))}
+		}
+		latestBak := bak
+		if latestBak == "" {
+			latestBak = core.FindLatestBackup(target)
+		}
+		return map[string]interface{}{"success": true, "provider_id": providerID, "model_id": modelID, "backup": latestBak, "target": target}
+	}
 	config, fingerprint, err := core.LoadConfigWithFingerprint(target)
 	if err != nil {
 		return map[string]interface{}{"success": false, "error": fmt.Sprintf("删除模型时出错：\n%s", core.ShortText(err.Error(), 300))}
@@ -1136,6 +1219,100 @@ func (a *App) DeleteModel(providerID, modelID string) map[string]interface{} {
 		latestBak = core.FindLatestBackup(target)
 	}
 	return map[string]interface{}{"success": true, "provider_id": providerID, "model_id": modelID, "backup": latestBak, "target": target}
+}
+
+// zcodeFormatTargetPath 是格式判定使用的 ZCode 目标文件：
+// 当前 Agent 是 ZCode 时用实际目标文件，否则用 ZCode 的默认路径（优先新版）。
+func (a *App) zcodeFormatTargetPath() string {
+	if a.currentAgent == string(core.AgentZCode) && strings.TrimSpace(a.targetConfigPath) != "" {
+		return a.targetConfigPath
+	}
+	return core.ZCodeDefaultPath()
+}
+
+// loadLegacyImportPreview 读取旧版 config.json（不存在时视为空）与新版配置，
+// 计算待导入的旧供应商。
+func (a *App) loadLegacyImportPreview() (core.LegacyImportPreview, error) {
+	legacyDoc, err := core.LoadConfig(core.ZCodeConfig())
+	if err != nil {
+		return core.LegacyImportPreview{}, err
+	}
+	v2Doc, err := core.LoadConfig(a.zcodeFormatTargetPath())
+	if err != nil {
+		return core.LegacyImportPreview{}, err
+	}
+	return core.PreviewLegacyImport(legacyDoc, v2Doc)
+}
+
+// GetZCodeFormat 返回当前 ZCode 配置格式（v2 / legacy / unknown）与判定路径。
+// supports_legacy_import 为真表示：当前是 v2、旧版 config.json 存在且尚有未导入的供应商。
+func (a *App) GetZCodeFormat() map[string]interface{} {
+	path := a.zcodeFormatTargetPath()
+	format := core.DetectZCodeFormatAt(path)
+	supports := false
+	if core.IsZCodeV2Path(path) {
+		if _, statErr := os.Stat(core.ZCodeConfig()); statErr == nil {
+			if preview, err := a.loadLegacyImportPreview(); err == nil {
+				supports = len(preview.Providers) > 0
+			}
+		}
+	}
+	return map[string]interface{}{
+		"success":                true,
+		"format":                 core.ZCodeFormatName(format),
+		"path":                   path,
+		"supports_legacy_import": supports,
+	}
+}
+
+// PreviewLegacyImport 预览旧版 config.json 中可导入新版的供应商，以及转换会丢掉的字段。
+func (a *App) PreviewLegacyImport() map[string]interface{} {
+	if !core.IsZCodeV2Path(a.zcodeFormatTargetPath()) {
+		return map[string]interface{}{"success": false, "error": "当前不是新版配置格式（provider_config.json），无法导入旧供应商"}
+	}
+	preview, err := a.loadLegacyImportPreview()
+	if err != nil {
+		return map[string]interface{}{"success": false, "error": core.ShortText(err.Error(), 300)}
+	}
+	return map[string]interface{}{
+		"success":   true,
+		"providers": preview.Providers,
+		"dropped":   preview.Dropped,
+	}
+}
+
+// ApplyLegacyImport 把选中的旧供应商一次性导入新版配置。
+// 写盘前会备份目标新版文件，返回值里带上备份路径。旧版 config.json 不会被修改。
+func (a *App) ApplyLegacyImport(ids []string) map[string]interface{} {
+	if len(ids) == 0 {
+		return map[string]interface{}{"success": false, "error": "请至少选择一个提供商"}
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	target := a.zcodeFormatTargetPath()
+	// 这不是通用校验，而是防配置损坏：canonical v2 内容一旦写进旧版 config.json，
+	// ZCode 会认不出旧版结构，等于毁掉这份配置，所以非 v2 目标一律拒绝。
+	if !core.IsZCodeV2Path(target) {
+		return map[string]interface{}{"success": false, "error": "当前不是新版配置格式（provider_config.json），无法导入旧供应商"}
+	}
+	legacyDoc, err := core.LoadConfig(core.ZCodeConfig())
+	if err != nil {
+		return map[string]interface{}{"success": false, "error": core.ShortText(err.Error(), 300)}
+	}
+	v2Doc, err := core.LoadConfig(target)
+	if err != nil {
+		return map[string]interface{}{"success": false, "error": core.ShortText(err.Error(), 300)}
+	}
+	_, report, applyErr := core.ApplyLegacyImport(v2Doc, legacyDoc, ids, target)
+	if applyErr != nil {
+		return map[string]interface{}{"success": false, "error": core.ShortText(applyErr.Error(), 300)}
+	}
+	return map[string]interface{}{
+		"success":  true,
+		"imported": report.Imported,
+		"skipped":  report.Skipped,
+		"backup":   report.Backup,
+	}
 }
 
 func (a *App) FetchModels(baseURL, apiKey string) map[string]interface{} {

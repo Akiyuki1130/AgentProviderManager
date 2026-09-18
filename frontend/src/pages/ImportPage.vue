@@ -6,6 +6,46 @@
     </div>
 
     <div class="fluent-card card-pad">
+      <div class="card-title">{{ t('zcodeFormat.title', lang) }}</div>
+      <div class="format-line">
+        <span class="format-badge" :class="`format-badge--${appStore.zcodeFormat}`">{{ formatLabel }}</span>
+        <span class="format-path-label">{{ t('zcodeFormat.pathLabel', lang) }}</span>
+        <span class="format-path" :title="appStore.zcodeFormatPath">{{ appStore.zcodeFormatPath || t('zcodeFormat.noPath', lang) }}</span>
+      </div>
+      <div class="format-desc">{{ t('zcodeFormat.desc', lang) }}</div>
+      <div v-if="appStore.zcodeFormatError" class="format-error">{{ t('zcodeFormat.error', lang).replace('{error}', appStore.zcodeFormatError) }}</div>
+    </div>
+
+    <div v-if="showLegacyImport" class="fluent-card card-pad legacy-card">
+      <div class="card-title">{{ t('legacyImport.title', lang) }}</div>
+      <div class="legacy-desc">{{ t('legacyImport.desc', lang) }}</div>
+      <div class="legacy-desc">{{ t('legacyImport.orderNote', lang) }}</div>
+      <div v-if="appStore.legacyPreviewLoading" class="legacy-hint">{{ t('legacyImport.loading', lang) }}</div>
+      <div v-else-if="appStore.legacyProviders.length === 0" class="legacy-hint">{{ t('legacyImport.empty', lang) }}</div>
+      <template v-else>
+        <label class="legacy-select-all">
+          <n-checkbox :checked="allLegacySelected" :indeterminate="hasLegacySelection && !allLegacySelected" @update:checked="toggleAllLegacy" />
+          <span>{{ t('legacyImport.selectAll', lang) }}</span>
+        </label>
+        <div class="legacy-list">
+          <div v-for="p in appStore.legacyProviders" :key="p.id" class="legacy-item">
+            <n-checkbox :checked="legacySelected.includes(p.id)" @update:checked="(v: boolean) => toggleLegacy(p.id, v)" />
+            <div class="legacy-meta">
+              <div class="legacy-name">{{ p.name || p.id }}</div>
+              <div class="legacy-sub">{{ p.id }} · {{ p.kind }} · {{ t('legacyImport.models', lang).replace('{n}', String(p.model_count)) }}</div>
+              <div v-if="droppedFields(p.id).length > 0" class="legacy-dropped">
+                {{ t('legacyImport.dropped', lang).replace('{fields}', droppedFields(p.id).join(dropSeparator)) }}
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="legacy-actions">
+          <n-button type="primary" :disabled="legacySelected.length === 0" :loading="applyingLegacy" @click="openLegacyConfirm">{{ t('legacyImport.apply', lang) }}</n-button>
+        </div>
+      </template>
+    </div>
+
+    <div class="fluent-card card-pad">
       <div class="card-title">连接配置</div>
       <div class="conn-grid">
         <label class="form-label">Base URL</label>
@@ -84,18 +124,34 @@
         <ModelCard v-for="card in filteredCards" :key="card.model_id" :card="card" :agent="settingStore.agent" :show-select="true" @delete="removeCard(card)" />
       </div>
     </div>
+
+    <n-modal v-model:show="legacyConfirmShow" preset="card" :title="t('legacyImport.confirmTitle', lang)" style="width: 460px" :mask-closable="false">
+      <div style="font-size: 13px; line-height: 1.7">
+        {{ t('legacyImport.confirmBody', lang).replace('{n}', String(legacySelected.length)) }}
+      </div>
+      <template #footer>
+        <div style="display: flex; justify-content: flex-end; gap: 8px">
+          <n-button :disabled="applyingLegacy" @click="legacyConfirmShow = false">{{ t('common.cancel', lang) }}</n-button>
+          <n-button type="primary" :loading="applyingLegacy" @click="applyLegacyImport">{{ t('legacyImport.confirmOk', lang) }}</n-button>
+        </div>
+      </template>
+    </n-modal>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { NButton, NInput, NSelect } from 'naive-ui'
+import { NButton, NInput, NSelect, NCheckbox, NModal } from 'naive-ui'
 import { useSettingStore } from '../stores/setting'
+import { useAppStore } from '../stores/app'
 import ModelCard from '../components/ModelCard.vue'
 import type { ModelCard as Card } from '../types'
+import { t } from '../i18n'
 import * as api from '../api'
 
 const settingStore = useSettingStore()
+const appStore = useAppStore()
+const lang = computed(() => settingStore.resolvedLang)
 const baseUrl = ref('')
 const kind = ref('openai-compatible')
 const apiKey = ref('')
@@ -274,6 +330,73 @@ function isLimitFilled(v: string | number | undefined): boolean {
   return v > 0
 }
 
+// ---- ZCode 配置格式展示 & 旧供应商导入到新版 ----
+const legacySelected = ref<string[]>([])
+const legacyConfirmShow = ref(false)
+const applyingLegacy = ref(false)
+
+const showLegacyImport = computed(() => appStore.zcodeFormat === 'v2' && appStore.supportsLegacyImport)
+const formatLabel = computed(() => {
+  if (appStore.zcodeFormat === 'v2') return t('zcodeFormat.v2', lang.value)
+  if (appStore.zcodeFormat === 'legacy') return t('zcodeFormat.legacy', lang.value)
+  return t('zcodeFormat.unknown', lang.value)
+})
+const dropSeparator = computed(() => (lang.value === 'zh' || lang.value === 'ja' ? '、' : ', '))
+const allLegacySelected = computed(() => appStore.legacyProviders.length > 0 && appStore.legacyProviders.every((p) => legacySelected.value.includes(p.id)))
+const hasLegacySelection = computed(() => appStore.legacyProviders.some((p) => legacySelected.value.includes(p.id)))
+
+function droppedFields(id: string): string[] {
+  return appStore.legacyDropped[id] || []
+}
+function toggleAllLegacy(v: boolean) {
+  legacySelected.value = v ? appStore.legacyProviders.map((p) => p.id) : []
+}
+function toggleLegacy(id: string, v: boolean) {
+  if (v) {
+    if (!legacySelected.value.includes(id)) legacySelected.value = [...legacySelected.value, id]
+  } else {
+    legacySelected.value = legacySelected.value.filter((x) => x !== id)
+  }
+}
+
+function openLegacyConfirm() {
+  if (legacySelected.value.length === 0) {
+    toast('info', t('legacyImport.title', lang.value), t('legacyImport.noneSelected', lang.value))
+    return
+  }
+  legacyConfirmShow.value = true
+}
+
+async function applyLegacyImport() {
+  const ids = [...legacySelected.value]
+  if (ids.length === 0) return
+  applyingLegacy.value = true
+  try {
+    const res = await api.ApplyLegacyImport(ids)
+    if (res.success) {
+      const imported = res.imported || []
+      const skipped = res.skipped || []
+      const backup = res.backup || ''
+      legacyConfirmShow.value = false
+      legacySelected.value = []
+      toast('success', t('legacyImport.successTitle', lang.value),
+        t('legacyImport.successBody', lang.value).replace('{n}', String(imported.length)).replace('{backup}', backup || '—'))
+      if (skipped.length > 0) {
+        toast('info', t('legacyImport.successTitle', lang.value), t('legacyImport.skipped', lang.value).replace('{n}', String(skipped.length)))
+      }
+      await appStore.fetchZCodeFormat()
+      await appStore.fetchProviders()
+      if (appStore.supportsLegacyImport) await appStore.fetchLegacyPreview()
+    } else {
+      toast('error', t('legacyImport.failedTitle', lang.value), res.error || '')
+    }
+  } catch (e) {
+    toast('error', t('legacyImport.failedTitle', lang.value), String(e))
+  } finally {
+    applyingLegacy.value = false
+  }
+}
+
 onMounted(async () => {
   const fillApiKey = sessionStorage.getItem('zcode-pm:fillApiKey')
   if (fillApiKey) {
@@ -294,6 +417,12 @@ onMounted(async () => {
       statusKind.value = ''
     } catch { /* ignore parse error */ }
   }
+
+  await appStore.fetchZCodeFormat()
+  if (appStore.zcodeFormat === 'v2' && appStore.supportsLegacyImport) {
+    await appStore.fetchLegacyPreview()
+    legacySelected.value = appStore.legacyProviders.map((p) => p.id)
+  }
 })
 </script>
 
@@ -313,6 +442,26 @@ onMounted(async () => {
 .status-text.warn { color: #ca5010; }
 .footer-bar { display: flex; gap: 12px; align-items: center; padding: 12px 16px; flex-wrap: wrap; }
 .refresh-banner { display: flex; gap: 8px; align-items: center; background: color-mix(in srgb, var(--accent) 10%, transparent); border: 1px solid var(--accent); border-radius: 8px; padding: 8px 12px; font-size: 12px; }
+.format-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.format-badge { font-size: 11px; font-weight: 600; border-radius: 4px; padding: 2px 8px; border: 1px solid var(--fluent-border); background: var(--fluent-bg); }
+.format-badge--v2 { color: #107c10; border-color: color-mix(in srgb, #107c10 40%, transparent); background: color-mix(in srgb, #107c10 10%, transparent); }
+.format-badge--legacy { color: #ca5010; border-color: color-mix(in srgb, #ca5010 40%, transparent); background: color-mix(in srgb, #ca5010 10%, transparent); }
+.format-badge--unknown { color: var(--fluent-text-soft); }
+.format-path-label { font-size: 11px; color: var(--fluent-text-soft); }
+.format-path { font-size: 11px; color: var(--fluent-text); word-break: break-all; min-width: 0; }
+.format-desc { font-size: 11px; color: var(--fluent-text-soft); margin-top: 6px; }
+.format-error { font-size: 11px; color: #d13438; margin-top: 4px; }
+.legacy-card { display: flex; flex-direction: column; gap: 8px; }
+.legacy-desc { font-size: 11px; color: var(--fluent-text-soft); }
+.legacy-hint { font-size: 12px; color: var(--fluent-text-soft); }
+.legacy-select-all { display: inline-flex; gap: 6px; align-items: center; font-size: 12px; cursor: pointer; }
+.legacy-list { display: flex; flex-direction: column; gap: 6px; }
+.legacy-item { display: flex; gap: 8px; align-items: flex-start; border: 1px solid var(--fluent-border); border-radius: 8px; padding: 8px 12px; }
+.legacy-meta { min-width: 0; flex: 1; }
+.legacy-name { font-size: 13px; font-weight: 600; }
+.legacy-sub { font-size: 11px; color: var(--fluent-text-soft); margin-top: 2px; word-break: break-all; }
+.legacy-dropped { font-size: 11px; color: #ca5010; margin-top: 4px; }
+.legacy-actions { display: flex; justify-content: flex-end; }
 .list-wrap { display: flex; flex-direction: column; gap: 8px; }
 .list-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
 .list-header h3 { font-size: 14px; font-weight: 600; }

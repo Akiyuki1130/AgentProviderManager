@@ -18,11 +18,11 @@ Agent Provider Manager（简称 **APM**）是一个 Windows 桌面工具，用�
 
 | Agent | 默认配置位置 | 支持的操作 |
 |---|---|---|
-| **ZCode** | `%USERPROFILE%\\.zcode\\v2\\config.json` | 读取、编辑、保存、备份、恢复、provider/model 管理、跨 Agent 迁移目标 |
+| **ZCode** | `%USERPROFILE%\\.zcode\\v2\\provider_config.json`（新版，优先）/ `%USERPROFILE%\\.zcode\\v2\\config.json`（旧版） | 读取、编辑、保存、备份、恢复、provider/model 管理、旧版供应商一次性导入、跨 Agent 迁移目标 |
 | **OpenCode** | `%USERPROFILE%\\.config\\opencode\\opencode.json` | 读取、编辑、保存、备份、恢复、provider/model 管理、导入和迁移 |
 | **DeepSeek Harness** | `%USERPROFILE%\\.dsh\\settings.yaml`（也支持 `.yml` / `.json`） | 读取、编辑、保存、备份、恢复、provider/model 管理；凭据写入 `.credentials.yaml` |
 
-DeepSeek 支持通过 `DSH_HOME` 覆盖默认目录，并会优先探测已有的 `settings.yaml`、`settings.yml` 和 `settings.json`。顶部栏也可以选择已探测路径或通过文件选择器指定配置文件。保存时会重新序列化 JSON/YAML，因此不保证保留原文件的注释、缩进和键顺序。
+DeepSeek 支持通过 `DSH_HOME` 覆盖默认目录，并会优先探测已有的 `settings.yaml`、`settings.yml` 和 `settings.json`。ZCode 新版文件的位置可用 `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` 覆盖，程序会按文件内容判定当前目标是旧版（`config.json`）还是新版（`provider_config.json`）。顶部栏也可以选择已探测路径或通过文件选择器指定配置文件。保存时会重新序列化 JSON/YAML，因此不保证保留原文件的注释、缩进和键顺序。
 
 > 当前程序定位为 **Windows-only**：使用 Wails + WebView2，Windows 钥匙串使用 Windows DPAPI。非 Windows 平台没有完整的产品支持承诺。
 
@@ -132,6 +132,7 @@ wails build
 - 没有内置前端 E2E 测试；发布前应在真实 Wails 窗口验证剪贴板、WebView2、DPAPI、配置备份和恢复。
 - 大量模型会产生较多 DOM，2000 个模型接近后端上限时可能降低低配机器上的交互流畅度。
 - 配置保存会重新序列化文件，注释和原始格式可能变化。
+- 保存到 ZCode 新版配置会重写为规范结构：旧版专有、无法映射的字段不会写入，读取或写入含未知键的文件会直接报错，而不会静默改写。
 - 程序不会替用户判断第三方服务商是否可信；HTTP、API Key、备份和剪贴板风险由使用者承担。
 
 ### 开发与贡献
@@ -173,11 +174,11 @@ APM is a local configuration manager. It is not a proxy, model gateway, hosted s
 
 | Agent | Default configuration | Supported operations |
 |---|---|---|
-| **ZCode** | `%USERPROFILE%\\.zcode\\v2\\config.json` | Read/edit/save, backups, restore, provider/model management, migration target |
+| **ZCode** | `%USERPROFILE%\\.zcode\\v2\\provider_config.json` (new format, preferred) / `%USERPROFILE%\\.zcode\\v2\\config.json` (legacy) | Read/edit/save, backups, restore, provider/model management, one-time legacy provider import, migration target |
 | **OpenCode** | `%USERPROFILE%\\.config\\opencode\\opencode.json` | Read/edit/save, backups, restore, provider/model management, import and migration |
 | **DeepSeek Harness** | `%USERPROFILE%\\.dsh\\settings.yaml` (`.yml` / `.json` also supported) | Read/edit/save, backups, restore, provider/model management; credentials in `.credentials.yaml` |
 
-DeepSeek supports the `DSH_HOME` override and probes existing `settings.yaml`, `settings.yml`, and `settings.json`. You can also choose a configuration file from the application. Saving re-serializes JSON/YAML; comments, indentation, and original key order are not guaranteed to survive.
+DeepSeek supports the `DSH_HOME` override and probes existing `settings.yaml`, `settings.yml`, and `settings.json`. ZCode's new-format location can be overridden with `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE`; the application decides from the file contents whether the target is the legacy (`config.json`) or the new (`provider_config.json`) format. You can also choose a configuration file from the application. Saving re-serializes JSON/YAML; comments, indentation, and original key order are not guaranteed to survive.
 
 The product is currently **Windows-only**. It uses Wails and WebView2, and the Windows keychain uses Windows DPAPI.
 
@@ -250,6 +251,7 @@ wails build
 - Frontend behavior is not covered by a full E2E suite; validate the real Wails window before shipping.
 - Very large model collections near the 2,000-model backend limit may be slower on low-end hardware.
 - Saving reserializes configuration files and may change comments or formatting.
+- Saving to the new ZCode format rewrites it in the canonical structure: legacy-only fields with no mapping are not written, and a file containing unknown keys is rejected instead of silently rewritten.
 - Users remain responsible for provider trust, HTTP exposure, API-key handling, backup security, and clipboard hygiene.
 
 ### Development and license
