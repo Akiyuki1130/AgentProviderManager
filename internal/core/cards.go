@@ -85,7 +85,8 @@ func CfgToCard(modelID string, modelCfg map[string]interface{}) ModelCard {
 	}
 	var enabled bool
 	var enabledKnown bool
-	var variants []string
+	// 非 nil 空切片：variants 没有 omitempty，nil 会编码成 JSON null。
+	variants := make([]string, 0)
 	var defaultVariant string
 	var rawEnabled *bool
 	if reasoning, ok := modelCfg["reasoning"].(map[string]interface{}); ok {
@@ -95,7 +96,11 @@ func CfgToCard(modelID string, modelCfg map[string]interface{}) ModelCard {
 			b := e
 			rawEnabled = &b
 		}
-		variants = NormalizeVariants(reasoning["variants"])
+		// NormalizeVariants 对 nil / 全被过滤掉的输入返回 nil，直接赋值会把上面初始化好的
+		// 空切片又变回 nil，所以只在确实有档位时覆盖（长度语义与原来完全一致）。
+		if nv := NormalizeVariants(reasoning["variants"]); len(nv) > 0 {
+			variants = nv
+		}
 		if dv, ok := reasoning["defaultVariant"].(string); ok {
 			dv = canonicalVariant(dv)
 			if containsStr(variants, dv) {

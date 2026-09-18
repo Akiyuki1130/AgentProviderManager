@@ -261,7 +261,9 @@ async function loadProvider(id: string) {
   currentId.value = id
   const res = await api.GetProvider(id) as Record<string, unknown>
   if (res['success']) {
-    const p = res['provider'] as ProviderEdit
+    const raw = res['provider'] as ProviderEdit
+    // 后端在零模型时可能返回 cards: null，在此边界归一化，保证进入响应式状态的 cards 始终是数组
+    const p: ProviderEdit = { ...raw, cards: raw.cards || [] }
     currentProvider.value = p
     editForm.value = { ...p, cards: p.cards.map((c) => ({ ...c })) }
     savedProvider.value = deepClone(p)
@@ -307,10 +309,15 @@ async function saveProvider(): Promise<boolean> {
     }
     const res = await api.SaveProvider(currentId.value || editForm.value.id, payload) as Record<string, unknown>
     if (res['success']) {
-      toast('success', '保存成功', `已保存 ${res['count']} 个模型到提供商 ${res['provider_id']}`)
       currentId.value = res['provider_id'] as string
-      await loadProviders()
-      if (currentId.value) await loadProvider(currentId.value)
+      // 先刷新再提示成功，避免用户同时看到成功与失败提示；刷新失败也只报错、不影响保存结果
+      try {
+        await loadProviders()
+        if (currentId.value) await loadProvider(currentId.value)
+        toast('success', '保存成功', `已保存 ${res['count']} 个模型到提供商 ${res['provider_id']}`)
+      } catch (e) {
+        toast('error', '加载失败', String(e))
+      }
       return true
     } else {
       toast('error', '保存失败', res['error'] as string)

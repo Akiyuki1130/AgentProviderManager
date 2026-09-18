@@ -181,7 +181,9 @@ func ProviderToEdit(config map[string]interface{}, providerID string) (*Provider
 	if models == nil {
 		models = map[string]interface{}{}
 	}
-	var cards []ModelCard
+	// 非 nil 空切片：cards 没有 omitempty，零模型时 nil 会编码成 JSON null，
+	// 前端拿到 null 会在 cards.map 上抛错。
+	cards := make([]ModelCard, 0)
 	for mid, mcfg := range models {
 		mm, _ := mcfg.(map[string]interface{})
 		cards = append(cards, CfgToCard(mid, mm))
@@ -221,9 +223,10 @@ func ProviderToEdit(config map[string]interface{}, providerID string) (*Provider
 func BuildProviderSummary(config map[string]interface{}) []ProviderSummary {
 	providers, _ := config["provider"].(map[string]interface{})
 	if providers == nil {
-		return nil
+		// 空配置也要给 []，nil 会被编码成 JSON null。
+		return []ProviderSummary{}
 	}
-	var out []ProviderSummary
+	out := make([]ProviderSummary, 0, len(providers))
 	for pid, raw := range providers {
 		m, ok := raw.(map[string]interface{})
 		if !ok {
