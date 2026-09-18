@@ -1,4 +1,4 @@
-# Agent Provider Manager 2.0.4
+# Agent Provider Manager 2.0.5
 
 > 一个面向 Windows 的多 Agent 模型提供商管理器：用一个原生桌面界面管理 ZCode、OpenCode 与 DeepSeek Harness 的 provider、模型、API Key、备份和迁移。
 >
@@ -56,7 +56,7 @@ DeepSeek 支持通过 `DSH_HOME` 覆盖默认目录，并会优先探测已有�
 
 #### 方式 A：下载 Release
 
-1. 在 GitHub Releases 下载 `AgentProviderManager-2.0.4-windows-amd64.zip`。
+1. 在 GitHub Releases 下载 `AgentProviderManager-2.0.5-windows-amd64.zip`。
 2. 解压到用户有执行权限的目录。
 3. 确认系统已安装 Microsoft Edge WebView2 Runtime；Wails 桌面窗口依赖 WebView2。
 4. 启动 `AgentProviderManager.exe`。程序不会自动上传配置，也不会自动修改未选择的 Agent 文件。
@@ -213,7 +213,7 @@ The product is currently **Windows-only**. It uses Wails and WebView2, and the W
 
 #### Download a Release
 
-1. Download `AgentProviderManager-2.0.4-windows-amd64.zip` from GitHub Releases.
+1. Download `AgentProviderManager-2.0.5-windows-amd64.zip` from GitHub Releases.
 2. Extract it to a directory where you have execute permission.
 3. Install Microsoft Edge WebView2 Runtime if it is not already present.
 4. Run `AgentProviderManager.exe`.
