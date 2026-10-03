@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.0.7 — 2026-10-03
+
+### Fixed
+
+- **Importing a provider into a ZCode new-format file could make ZCode treat the whole personal configuration as empty.** `ImportProvider` resolved its target outside the config backends: it read the file as a plain provider map, merged the incoming provider into a top-level `provider` key with `MergeProviderIntoConfig`, and wrote the result back through the generic JSON writer. For `provider_config.json` that produced a document with an extra top-level `provider` key, which ZCode's `.strict()` schema rejects (`unrecognized_keys: ["provider"]`); ZCode kept the file on disk but fell back to an in-memory empty configuration, so every provider disappeared from the agent. The ZCode path now goes through `GetBackend` → `Store.Upsert` → `Backend.Write`, like every other ZCode mutation, so new-format files are only ever written from `zcodeprovider.Encode`.
+- Writes to a new-format ZCode file are now guarded in one place: `WriteConfigBytes` refuses any payload that looks like a new-format document (top-level `schemaVersion` and `config`) but does not pass the strict ZCode validation, and explains why. This closes the same corruption in the flows that are still legacy-only — OpenCode import, configuration merge and cross-agent migration now fail with a clear error and leave the file untouched instead of writing something ZCode rejects.
+
+### Added
+
+- `core.MergeModelCards`: `merge_models=true` keeps its previous semantics (existing models are preserved, same-ID models are replaced, new IDs are appended) on the new-format backend, whose `Upsert` replaces a provider's model set wholesale.
+- Regression tests: importing into a new-format file must leave it strictly valid, merging must keep existing models, a legacy `config.json` target must keep its previous shape, the legacy-only flows must refuse a new-format target without touching it, and the write guard must reject a new-format document with an unknown top-level key while leaving legacy-shaped JSON for other agents alone.
+
 ## 2.0.6 — 2026-10-03
 
 ### Added

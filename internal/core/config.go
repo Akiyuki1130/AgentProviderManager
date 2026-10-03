@@ -371,11 +371,43 @@ func WriteConfig(path string, config map[string]interface{}, expectedFingerprint
 	return WriteConfigBytes(path, text, expectedFingerprint)
 }
 
+// guardZCodeV2Doc 阻止把 ZCode 不接受的文档写进新版个人配置。
+//
+// ZCode 的 zod schema 是 .strict()：任何未知键都会让整份个人配置被当成空，所有供应商
+// 在使用端消失。新版文档必须整体经过 zcodeprovider 的严格校验才能落盘；而旧式的
+// “LoadConfig -> 改顶层 provider map -> WriteConfig” 写法会往新版文档里塞一个顶层
+// provider 键，正是这条规则要拦住的。所有写盘最终都经过 WriteConfigBytes，因此闸门
+// 放在这里，任何新增的调用方都不会绕过它。
+//
+// 只识别“顶层同时有 schemaVersion 与 config”的 JSON：这是 ZCode 新版个人配置的特征，
+// opencode / deepseek 的配置不会命中，不会被误伤。
+func guardZCodeV2Doc(data []byte) error {
+	var doc map[string]interface{}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return nil
+	}
+	if _, ok := doc["schemaVersion"]; !ok {
+		return nil
+	}
+	if _, ok := doc["config"]; !ok {
+		return nil
+	}
+	if _, err := zcodeprovider.Decode(data); err != nil {
+		return &ConfigParseError{Msg: fmt.Sprintf(
+			"拒绝写入：这份 JSON 是 ZCode 新版个人配置（顶层有 schemaVersion 与 config），但没有通过 ZCode 的严格校验（%v）。ZCode 遇到未知键会把整份个人配置当成空，因此本次写入已取消。",
+			err)}
+	}
+	return nil
+}
+
 // WriteConfigBytes 是 WriteConfig 的字节写入部分：同样的目录创建、原子替换
 // （临时文件 + rename）与指纹校验，但直接写出给定字节。
 // 新版 ZCode provider_config.json 走 zcodeprovider.Encode 得到 canonical 字节，
 // 若这里再走 map，就会丢掉严格校验（未知键会让 ZCode 把整份配置当成空）。
 func WriteConfigBytes(path string, data []byte, expectedFingerprint string) error {
+	if err := guardZCodeV2Doc(data); err != nil {
+		return err
+	}
 	dir := filepath.Dir(path)
 	if dir != "" {
 		_ = os.MkdirAll(dir, 0755)

@@ -19,6 +19,27 @@ type ModelCard struct {
 	RawCfg              map[string]interface{} `json:"_raw_cfg,omitempty"`
 }
 
+// MergeModelCards 复刻 MergeProviderIntoConfig(mergeModels=true) 的模型合并语义：
+// 保留 existing 的顺序，incoming 中同 ID 的覆盖 existing，新 ID 追加到末尾。
+// 新版 ZCode backend 的 Upsert 是“模型集合整体替换”，导入路径需要显式并入已有模型。
+func MergeModelCards(existing, incoming []ModelCard) []ModelCard {
+	merged := make([]ModelCard, 0, len(existing)+len(incoming))
+	index := make(map[string]int, len(existing))
+	for _, c := range existing {
+		index[c.ModelID] = len(merged)
+		merged = append(merged, c)
+	}
+	for _, c := range incoming {
+		if i, ok := index[c.ModelID]; ok {
+			merged[i] = c
+			continue
+		}
+		index[c.ModelID] = len(merged)
+		merged = append(merged, c)
+	}
+	return merged
+}
+
 // ProviderSummary mirrors provider_summary entries.
 type ProviderSummary struct {
 	ID         string `json:"id"`

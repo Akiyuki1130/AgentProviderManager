@@ -1,4 +1,4 @@
-# Agent Provider Manager 2.0.6
+# Agent Provider Manager 2.0.7
 
 > 一个面向 Windows 的多 Agent 模型提供商管理器：用一个原生桌面界面管理 ZCode、OpenCode 与 DeepSeek Harness 的 provider、模型、API Key、备份和迁移。
 >
@@ -57,7 +57,7 @@ DeepSeek 支持通过 `DSH_HOME` 覆盖默认目录，并会优先探测已有�
 
 #### 方式 A：下载 Release
 
-1. 在 GitHub Releases 下载 `AgentProviderManager-2.0.6-windows-amd64.zip`。
+1. 在 GitHub Releases 下载 `AgentProviderManager-2.0.7-windows-amd64.zip`。
 2. 解压到用户有执行权限的目录。
 3. 确认系统已安装 Microsoft Edge WebView2 Runtime；Wails 桌面窗口依赖 WebView2。
 4. 启动 `AgentProviderManager.exe`。程序不会自动上传配置，也不会自动修改未选择的 Agent 文件。
@@ -118,7 +118,7 @@ wails build
 
 #### 5. 导入与迁移
 
-- OpenCode provider 可以导入到 ZCode 兼容配置中，并按 provider/model ID 合并。
+- OpenCode provider 可以导入到 ZCode 旧版兼容配置中，并按 provider/model ID 合并。目标为 ZCode 新版配置（`provider_config.json`）时这条路径会明确报错并保持文件不变，因为新版 schema 需要单独的转换。
 - ZCode 与 OpenCode 之间可执行选择性迁移。
 - DeepSeek 的原生格式与其他 Agent 的 schema 不同；部分跨 Agent 迁移或导入路径会被明确拒绝，不要把拒绝当作网络错误。
 - “合并”会尽量保留目标已有 provider/model；“覆盖”会以导入内容替换对应范围。执行前阅读预览，并保留备份。
@@ -133,7 +133,8 @@ wails build
 - 没有内置前端 E2E 测试；发布前应在真实 Wails 窗口验证剪贴板、WebView2、DPAPI、配置备份和恢复。
 - 大量模型会产生较多 DOM，2000 个模型接近后端上限时可能降低低配机器上的交互流畅度。
 - 配置保存会重新序列化文件，注释和原始格式可能变化。
-- 保存到 ZCode 新版配置会重写为规范结构：旧版专有、无法映射的字段不会写入；未知键仍然会被拒绝（ZCode 遇到未知键会把整份配置当空，因此宁可报错也不写出这样的文件）。ZCode 不认但本程序能读的兼容性问题会单独列出并提供一键修复。
+- 保存到 ZCode 新版配置会重写为规范结构：旧版专有、无法映射的字段不会写入；未知键仍然会被拒绝（ZCode 遇到未知键会把整份配置当空，因此宁可报错也不写出这样的文件）。该检查位于唯一的写盘入口，任何写入路径都无法绕过。ZCode 不认但本程序能读的兼容性问题会单独列出并提供一键修复。
+- OpenCode 供应商导入、配置合并和跨 Agent 迁移目前仍是旧版实现：目标为 ZCode 新版配置时它们会明确报错并保持文件不变，而不是把旧版的顶层 `provider` 映射并进新版文档。
 - 程序不会替用户判断第三方服务商是否可信；HTTP、API Key、备份和剪贴板风险由使用者承担。
 
 ### 开发与贡献
@@ -215,7 +216,7 @@ The product is currently **Windows-only**. It uses Wails and WebView2, and the W
 
 #### Download a Release
 
-1. Download `AgentProviderManager-2.0.6-windows-amd64.zip` from GitHub Releases.
+1. Download `AgentProviderManager-2.0.7-windows-amd64.zip` from GitHub Releases.
 2. Extract it to a directory where you have execute permission.
 3. Install Microsoft Edge WebView2 Runtime if it is not already present.
 4. Run `AgentProviderManager.exe`.
@@ -244,7 +245,7 @@ wails build
 3. Edit providers and model cards in **Manage**. Review auto-filled model limits before saving.
 4. Use **Import** to call a compatible JSON `/v1/models` endpoint. This is not a universal discovery API for every vendor.
 5. Use **Keychain** for local key organization, but protect configuration files and backups as well. Clipboard and `sessionStorage` are sensitive surfaces.
-6. Use **Migrate** only after reviewing the preview. DeepSeek and other agents do not share identical schemas; some migration directions are intentionally rejected.
+6. Use **Migrate** only after reviewing the preview. DeepSeek and other agents do not share identical schemas; some migration directions, including a ZCode new-format target, are intentionally rejected.
 7. Restore from a listed backup only after checking its timestamp and target path.
 
 ### Known limitations
@@ -253,7 +254,8 @@ wails build
 - Frontend behavior is not covered by a full E2E suite; validate the real Wails window before shipping.
 - Very large model collections near the 2,000-model backend limit may be slower on low-end hardware.
 - Saving reserializes configuration files and may change comments or formatting.
-- Saving to the new ZCode format rewrites it in the canonical structure: legacy-only fields with no mapping are not written, and unknown keys are still rejected (ZCode treats a configuration containing unknown keys as empty, so the application refuses to write one). Compatibility problems that this tool can read but ZCode rejects are listed separately with a one-click repair.
+- Saving to the new ZCode format rewrites it in the canonical structure: legacy-only fields with no mapping are not written, and unknown keys are still rejected (ZCode treats a configuration containing unknown keys as empty, so the application refuses to write one). That check sits at the single byte-write entry point, so no write path can bypass it. Compatibility problems that this tool can read but ZCode rejects are listed separately with a one-click repair.
+- OpenCode import, configuration merge and cross-agent migration are still legacy-only implementations: when the target is a ZCode new-format file they now fail with a clear error and leave the file untouched, instead of merging a legacy top-level `provider` map into it.
 - Users remain responsible for provider trust, HTTP exposure, API-key handling, backup security, and clipboard hygiene.
 
 ### Development and license

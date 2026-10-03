@@ -1600,6 +1600,20 @@ func (a *App) ApplyModelPresets(cards []core.ModelCard) map[string]interface{} {
 	return map[string]interface{}{"success": true, "cards": updated, "filled": filled}
 }
 
+// importProviderPayload 把 ImportProvider 的表单字段整理成 backend 的编辑器 payload，
+// 键名与 BuildProviderCfgEditor 的入参保持一致。
+func importProviderPayload(pid, providerName, baseURL, apiKey, kind string, cards []core.ModelCard) core.ProviderPayload {
+	return core.ProviderPayload{
+		"id":               pid,
+		"name":             providerName,
+		"kind":             kind,
+		"base_url":         baseURL,
+		"api_key":          apiKey,
+		"api_key_required": strings.TrimSpace(apiKey) != "",
+		"cards":            cards,
+	}
+}
+
 func (a *App) ImportProvider(payload map[string]interface{}) map[string]interface{} {
 	if payload == nil {
 		return map[string]interface{}{"success": false, "error": "参数格式错误"}
@@ -1682,6 +1696,54 @@ func (a *App) ImportProvider(payload map[string]interface{}) map[string]interfac
 		}
 		return map[string]interface{}{"success": true, "count": count, "provider_id": pid, "target": target, "backup": latestBak, "latest_backup": latestBak, "agent": agent}
 	}
+	// ZCode 分支：文档变换必须走 backend 分发（v2 / legacy）。
+	// 绝不能沿用下面的 legacy 路径：MergeProviderIntoConfig 会把旧版的顶层 provider 映射
+	// 合并进新版文档，WriteConfig 再原样落盘，于是 provider_config.json 多出一个 ZCode
+	// .strict() 不认的键——ZCode 会把整份个人配置当成空，所有供应商在使用端消失。
+	if agent == string(core.AgentZCode) {
+		backend, berr := core.GetBackend(agent, target)
+		if berr != nil {
+			return map[string]interface{}{"success": false, "error": berr.Error()}
+		}
+		doc, fingerprint, rerr := backend.ReadWithFingerprint(target)
+		if rerr != nil {
+			return map[string]interface{}{"success": false, "error": rerr.Error()}
+		}
+		store := backend.Store(doc)
+		if existingEdit, getErr := store.Get(doc, pid); getErr == nil && existingEdit != nil && len(existingEdit.Cards) > 0 {
+			if !mergeModels {
+				if len(cards) == 0 {
+					return map[string]interface{}{"success": false, "error": "检测到模型列表为空。为避免误删已有模型，已取消导入；如需清空模型，请逐个删除。"}
+				}
+			} else {
+				// backend 的 Upsert 是“模型集合整体替换”，先把已有模型并进来，
+				// 复刻 legacy MergeProviderIntoConfig(mergeModels=true) 的合并语义。
+				cards = core.MergeModelCards(existingEdit.Cards, cards)
+			}
+		}
+		snapshot, errResp := a.prepareChange(target, agent, core.OpImportProvider, pid, "", "导入供应商")
+		if errResp != nil {
+			return errResp
+		}
+		bak := snapshot.BackupPath
+		merged, uerr := store.Upsert(doc, pid, importProviderPayload(pid, providerName, baseURL, apiKey, kind, cards), core.SaveOptions{MergeModels: mergeModels})
+		if uerr != nil {
+			return map[string]interface{}{"success": false, "error": fmt.Sprintf("写入配置文件时出错：\n%s", core.ShortText(uerr.Error(), 300))}
+		}
+		if err := backend.Write(target, merged, fingerprint); err != nil {
+			return map[string]interface{}{"success": false, "error": fmt.Sprintf("写入配置文件时出错：\n%s", core.ShortText(err.Error(), 300))}
+		}
+		latestBak := bak
+		if latestBak == "" {
+			latestBak = core.FindLatestBackup(target)
+		}
+		count := 0
+		if m, ok := providerCfg["models"].(map[string]interface{}); ok {
+			count = len(m)
+		}
+		return map[string]interface{}{"success": true, "count": count, "provider_id": pid, "target": target, "backup": latestBak, "latest_backup": latestBak, "agent": agent}
+	}
+	// 其它 Agent（OpenCode 等）没有注册 config backend，保持原有 legacy 路径不变。
 	if !mergeModels {
 		if cfg, _ := core.LoadConfig(target); cfg != nil {
 			if providers, ok := cfg["provider"].(map[string]interface{}); ok {
