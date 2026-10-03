@@ -18,11 +18,11 @@ Agent Provider Manager（简称 **APM**）是一个 Windows 桌面工具，用�
 
 | Agent | 默认配置位置 | 支持的操作 |
 |---|---|---|
-| **ZCode** | `%USERPROFILE%\\.zcode\\v2\\provider_config.json`（新版，优先）/ `%USERPROFILE%\\.zcode\\v2\\config.json`（旧版） | 读取、编辑、保存、备份、恢复、provider/model 管理、旧版供应商一次性导入、跨 Agent 迁移目标 |
+| **ZCode** | `%USERPROFILE%\.zcode\v2\provider_config.json`（新版，优先）/ `%USERPROFILE%\.zcode\v2\config.json`（旧版） | 读取、编辑、保存、还原点、provider/model 管理、旧版供应商一次性导入、ZCode 3.14 兼容性检查与一键修复、跨 Agent 迁移目标 |
 | **OpenCode** | `%USERPROFILE%\\.config\\opencode\\opencode.json` | 读取、编辑、保存、备份、恢复、provider/model 管理、导入和迁移 |
 | **DeepSeek Harness** | `%USERPROFILE%\\.dsh\\settings.yaml`（也支持 `.yml` / `.json`） | 读取、编辑、保存、备份、恢复、provider/model 管理；凭据写入 `.credentials.yaml` |
 
-DeepSeek 支持通过 `DSH_HOME` 覆盖默认目录，并会优先探测已有的 `settings.yaml`、`settings.yml` 和 `settings.json`。ZCode 新版文件的位置可用 `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` 覆盖，程序会按文件内容判定当前目标是旧版（`config.json`）还是新版（`provider_config.json`）。顶部栏也可以选择已探测路径或通过文件选择器指定配置文件。保存时会重新序列化 JSON/YAML，因此不保证保留原文件的注释、缩进和键顺序。
+DeepSeek 支持通过 `DSH_HOME` 覆盖默认目录，并会优先探测已有的 `settings.yaml`、`settings.yml` 和 `settings.json`。ZCode 新版文件的位置可用 `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` 覆盖，程序会按文件内容判定当前目标是旧版（`config.json`）还是新版（`provider_config.json`）。顶部栏也可以选择已探测路径或通过文件选择器指定配置文件。保存时会重新序列化 JSON/YAML，因此不保证保留原文件的注释、缩进和键顺序。ZCode 新版（`provider_config.json`，`schemaVersion` 1）的读写规则已与 ZCode 3.14 对齐：只写 ZCode 接受的键与取值，并按 ZCode 的键序输出，避免它读到后又把文件重写一遍；如果文件里存在 ZCode 会拒绝的内容（例如个人规则里的 `builtinModelIds`、家族 `group`、旧式 `logo`），程序会把它列出来并提供一键修复（修复前照例建立还原点）。
 
 > 当前程序定位为 **Windows-only**：使用 Wails + WebView2，Windows 钥匙串使用 Windows DPAPI。非 Windows 平台没有完整的产品支持承诺。
 
@@ -37,7 +37,8 @@ DeepSeek 支持通过 `DSH_HOME` 覆盖默认目录，并会优先探测已有�
 - 通过 `/v1/models` 获取模型列表；Base URL 会规范化后再请求，响应仅支持 JSON。
 - 常用模型上下文长度和输出长度自动匹配，可在导入页或管理页批量执行。
 - API Key 钥匙串：Windows 使用 DPAPI 加密；旧版本可逆 Base64 数据只用于一次性迁移读取，新的保存不会再静默降级为 Base64。
-- 配置备份、指纹检查和恢复；默认最多保留 2 份备份。
+- 还原点：每次修改配置前自动保存改动前的文件原文（逐字节保留注释与键序），并记录 Agent、绝对路径、格式、文件当时是否存在、大小、SHA-256、操作类型等元数据；“还原点”页可任选时间点回滚，回滚前会先给当前状态再建一个还原点，因此回滚本身也能再回滚；单个目标保留最近 50 个、合计不超过 64 MB。
+- 同级 `.bak_<时间戳>` 备份、指纹检查与“恢复最近备份”；默认每个文件最多保留 2 份同级备份。
 - 从 OpenCode 导入 provider，或在支持的 Agent 之间迁移配置。
 - 输入框提供只含“剪切 / 复制 / 粘贴”的自定义右键菜单。
 - 不包含模型代理、计费、遥测或自动上传；可选的自动更新只从本项目 GitHub Release 检查并下载正式版本。
@@ -47,10 +48,10 @@ DeepSeek 支持通过 `DSH_HOME` 覆盖默认目录，并会优先探测已有�
 1. 模型请求只允许 `http` / `https`。默认仅允许 HTTPS；用户显式开启“允许 HTTP”后，外部 HTTP 地址才会被允许。HTTP 会以明文传输 API Key 和请求内容，不建议在生产环境开启。
 2. 发请求前及重定向过程中会校验 host，默认拒绝 localhost、环回、私有、链路本地、未指定和其他保留地址；用户显式开启“允许本地与内网地址”后才会放行（例如访问本机模型服务）。此校验是 SSRF 防护，不等同于完整的网络隔离。
 3. 点击获取模型时，API Key 会通过 `Authorization: Bearer ...` 发送到用户输入的 Base URL；服务商可能记录请求、来源 IP、模型列表和认证信息。项目本身不会把模型配置或凭据上传到项目方，也没有遥测；可选自动更新只访问固定的 GitHub Release 地址。
-4. DeepSeek 的 `.credentials.yaml`、provider 配置、备份和恢复快照可能包含 API Key。不要把这些文件提交 Git、上传工单或发送给他人。
+4. DeepSeek 的 `.credentials.yaml`、provider 配置、同级 `.bak_` 备份、恢复快照与还原点内容都可能包含 API Key。还原点只写在本机 `%LOCALAPPDATA%\AgentProviderManager\restorepoints`（文件权限 0600），不上传、不写日志，但仍是明文副本：不要把这些文件提交 Git、上传工单或发送给他人，并可在“还原点”页按需删除或清理。
 5. 导入页的临时流程可能使用前端 `sessionStorage` 传递 API Key；钥匙串页面的复制功能会把密钥放入系统剪贴板。使用后请清理剪贴板，避免剪贴板管理器、录屏和共享用户配置泄露密钥。
 6. Windows DPAPI 绑定当前 Windows 用户环境。更换用户、迁移到另一台电脑或重装系统前，请先按业务需要迁移凭据；不要把 DPAPI 文件当作跨设备备份。
-7. 配置写入采用临时文件、重命名、SHA-256 指纹检查和备份轮转，但不是数据库事务，也不能替代用户自己的离线备份。
+7. 配置写入采用临时文件、重命名、SHA-256 指纹检查、同级备份轮转与还原点，但不是数据库事务，也不能替代用户自己的离线备份。还原点默认每个目标保留最近 50 个、合计不超过 64 MB，超出后按最旧优先清理。
 
 ### 快速开始
 
@@ -132,7 +133,7 @@ wails build
 - 没有内置前端 E2E 测试；发布前应在真实 Wails 窗口验证剪贴板、WebView2、DPAPI、配置备份和恢复。
 - 大量模型会产生较多 DOM，2000 个模型接近后端上限时可能降低低配机器上的交互流畅度。
 - 配置保存会重新序列化文件，注释和原始格式可能变化。
-- 保存到 ZCode 新版配置会重写为规范结构：旧版专有、无法映射的字段不会写入，读取或写入含未知键的文件会直接报错，而不会静默改写。
+- 保存到 ZCode 新版配置会重写为规范结构：旧版专有、无法映射的字段不会写入；未知键仍然会被拒绝（ZCode 遇到未知键会把整份配置当空，因此宁可报错也不写出这样的文件）。ZCode 不认但本程序能读的兼容性问题会单独列出并提供一键修复。
 - 程序不会替用户判断第三方服务商是否可信；HTTP、API Key、备份和剪贴板风险由使用者承担。
 
 ### 开发与贡献
@@ -174,11 +175,11 @@ APM is a local configuration manager. It is not a proxy, model gateway, hosted s
 
 | Agent | Default configuration | Supported operations |
 |---|---|---|
-| **ZCode** | `%USERPROFILE%\\.zcode\\v2\\provider_config.json` (new format, preferred) / `%USERPROFILE%\\.zcode\\v2\\config.json` (legacy) | Read/edit/save, backups, restore, provider/model management, one-time legacy provider import, migration target |
+| **ZCode** | `%USERPROFILE%\.zcode\v2\provider_config.json` (new format, preferred) / `%USERPROFILE%\.zcode\v2\config.json` (legacy) | Read/edit/save, restore points, provider/model management, one-time legacy provider import, ZCode 3.14 compatibility check and one-click repair, migration target |
 | **OpenCode** | `%USERPROFILE%\\.config\\opencode\\opencode.json` | Read/edit/save, backups, restore, provider/model management, import and migration |
 | **DeepSeek Harness** | `%USERPROFILE%\\.dsh\\settings.yaml` (`.yml` / `.json` also supported) | Read/edit/save, backups, restore, provider/model management; credentials in `.credentials.yaml` |
 
-DeepSeek supports the `DSH_HOME` override and probes existing `settings.yaml`, `settings.yml`, and `settings.json`. ZCode's new-format location can be overridden with `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE`; the application decides from the file contents whether the target is the legacy (`config.json`) or the new (`provider_config.json`) format. You can also choose a configuration file from the application. Saving re-serializes JSON/YAML; comments, indentation, and original key order are not guaranteed to survive.
+DeepSeek supports the `DSH_HOME` override and probes existing `settings.yaml`, `settings.yml`, and `settings.json`. ZCode's new-format location can be overridden with `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE`; the application decides from the file contents whether the target is the legacy (`config.json`) or the new (`provider_config.json`) format. You can also choose a configuration file from the application. Saving re-serializes JSON/YAML; comments, indentation, and original key order are not guaranteed to survive. The new ZCode format (`provider_config.json`, `schemaVersion` 1) is read and written according to the rules of ZCode 3.14: only keys and values ZCode accepts are written, in ZCode's own key order, so it does not rewrite the file after a save. If the file contains something ZCode rejects (for example `builtinModelIds` in a personal rule, a family `group`, or an old-style `logo`), the application lists it and offers a one-click repair that creates a restore point first.
 
 The product is currently **Windows-only**. It uses Wails and WebView2, and the Windows keychain uses Windows DPAPI.
 
@@ -193,7 +194,8 @@ The product is currently **Windows-only**. It uses Wails and WebView2, and the W
 - Discover models through a JSON `/v1/models` endpoint with response, model-count, and redirect limits.
 - Apply built-in context/output presets to common models.
 - Store API keys in a Windows DPAPI-protected keychain. Legacy reversible Base64 files are accepted only for one-time migration; new writes do not silently downgrade to Base64.
-- Create, rotate, inspect, and restore up to two recent configuration backups.
+- Restore points: every change first stores the previous file byte-for-byte (comments and key order included) together with metadata (agent, absolute path, format, whether the file existed, size, SHA-256, operation, provider/model) under `%LOCALAPPDATA%\AgentProviderManager\restorepoints`. The **Restore Points** page can roll back to any of them; a rollback first snapshots the current state, so the rollback itself can be undone. 50 points per target path and 64 MB in total are kept.
+- Sibling `.bak_<timestamp>` backups with fingerprint checks and "restore recent backup"; two sibling backups are kept per file.
 - Import OpenCode providers and migrate supported configurations between agents.
 - Show only Cut, Copy, and Paste in the custom context menu for text inputs.
 - No proxying, telemetry, or background upload is included. Optional updates use the fixed GitHub Release source and always require explicit restart confirmation.
@@ -203,11 +205,11 @@ The product is currently **Windows-only**. It uses Wails and WebView2, and the W
 - Only `http` and `https` URLs are accepted. HTTPS is the default. External HTTP is allowed only after the user explicitly enables the HTTP option, and it exposes API keys and request data in plaintext.
 - Hosts are checked before requests and again across redirects. Localhost, loopback, private, link-local, unspecified, and other reserved addresses are rejected by default; they are only allowed after the user explicitly enables the "Allow local & private addresses" option (for example, to reach a local model server). This is SSRF protection, not a complete network isolation boundary.
 - When the user requests model discovery, the API key is sent as `Authorization: Bearer ...` to the user-provided Base URL. The provider may log requests, source IPs, model information, and authentication data. APM does not upload data to the project owner and contains no telemetry or updater.
-- DeepSeek credentials, provider files, backups, and restore snapshots may contain API keys. Never commit, upload, or share them.
+- DeepSeek credentials, provider files, sibling `.bak_` backups, restore snapshots and restore-point content may contain API keys. Restore points are written only locally under `%LOCALAPPDATA%\AgentProviderManager\restorepoints` (mode 0600) and are never uploaded or logged, but they are plaintext copies: never commit, upload, or share them, and delete or prune them from the Restore Points page when no longer needed.
 - Optional updates use only HTTPS GitHub API/release hosts for this repository. Stable Windows amd64 assets are size-limited and SHA-256 checked before staging; installation waits for the current process to exit and requires an explicit restart confirmation. The updater does not accept arbitrary URLs or shell commands.
 - The import flow may temporarily use browser `sessionStorage`, and copying a key places it in the system clipboard. Clear the clipboard and avoid screen sharing or shared browser profiles when handling secrets.
 - DPAPI is tied to the current Windows user. Plan credential migration before moving to another account or machine.
-- Atomic temporary-file replacement, SHA-256 fingerprints, and backup rotation reduce accidental loss but do not provide a database transaction or replace independent backups.
+- Atomic temporary-file replacement, SHA-256 fingerprints, sibling backup rotation, and restore points reduce accidental loss, but they do not provide a database transaction and do not replace your own offline backups. Restore points keep the 50 most recent entries per target path (64 MB in total) and prune the oldest first.
 
 ### Quick start
 
@@ -251,7 +253,7 @@ wails build
 - Frontend behavior is not covered by a full E2E suite; validate the real Wails window before shipping.
 - Very large model collections near the 2,000-model backend limit may be slower on low-end hardware.
 - Saving reserializes configuration files and may change comments or formatting.
-- Saving to the new ZCode format rewrites it in the canonical structure: legacy-only fields with no mapping are not written, and a file containing unknown keys is rejected instead of silently rewritten.
+- Saving to the new ZCode format rewrites it in the canonical structure: legacy-only fields with no mapping are not written, and unknown keys are still rejected (ZCode treats a configuration containing unknown keys as empty, so the application refuses to write one). Compatibility problems that this tool can read but ZCode rejects are listed separately with a one-click repair.
 - Users remain responsible for provider trust, HTTP exposure, API-key handling, backup security, and clipboard hygiene.
 
 ### Development and license

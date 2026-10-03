@@ -9,7 +9,7 @@ import (
 )
 
 // sampleV2JSON 是一份 canonical v2 个人文件，覆盖了本包建模与被刻意“不建模”的
-// 合法字段（templateId、enabled、logo、visibility、headers、builtinModelIds、
+// 合法字段（templateId、enabled、logo、visibility、headers、
 // apiKeyManagementUrl、requiresMfjsToolSchema、optionSpecs.map 等）。
 // 所有密钥均为占位值。
 const sampleV2JSON = `{
@@ -25,7 +25,7 @@ const sampleV2JSON = `{
           "enabled": true,
           "config": {
             "group": "standard-personal",
-            "logo": "https://example.invalid/logo.png",
+            "logo": {"type": "builtin", "key": "acme"},
             "visibility": "visible",
             "access": {
               "type": "api-key",
@@ -37,7 +37,6 @@ const sampleV2JSON = `{
               "baseUrl": "https://api.example.invalid/v1",
               "headers": {"X-Trace": "on"}
             },
-            "builtinModelIds": ["acme-builtin"],
             "personalModelIds": ["acme-large", "acme-small"],
             "modelOrder": ["acme-small", "acme-large"]
           }
@@ -194,8 +193,12 @@ func TestUnmodeledFieldsSurviveRoundTrip(t *testing.T) {
 		t.Errorf("enabled = %v, want true", got)
 	}
 	pcfg := childMap(t, rule, "config")
-	if got := pcfg["logo"]; got != "https://example.invalid/logo.png" {
-		t.Errorf("logo = %v", got)
+	logo, ok := pcfg["logo"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("logo 不是对象：%T", pcfg["logo"])
+	}
+	if logo["type"] != LogoTypeBuiltin || logo["key"] != "acme" {
+		t.Errorf("logo = %v", pcfg["logo"])
 	}
 	if got := pcfg["visibility"]; got != "visible" {
 		t.Errorf("visibility = %v", got)
@@ -210,9 +213,6 @@ func TestUnmodeledFieldsSurviveRoundTrip(t *testing.T) {
 	api := childMap(t, pcfg, "api")
 	if got := childMap(t, api, "headers")["X-Trace"]; got != "on" {
 		t.Errorf("headers.X-Trace = %v, want on", got)
-	}
-	if got := childSlice(t, pcfg, "builtinModelIds")[0]; got != "acme-builtin" {
-		t.Errorf("builtinModelIds[0] = %v", got)
 	}
 
 	modelConfigRules := childMap(t, cfg, "modelConfigRules")

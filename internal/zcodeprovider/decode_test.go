@@ -60,12 +60,36 @@ func TestDecodeValidDocuments(t *testing.T) {
 			t.Fatalf("Decode 失败：%v", err)
 		}
 	})
-	t.Run("group 枚举允许内建取值", func(t *testing.T) {
-		data := mutateSample(t, func(doc map[string]interface{}) {
-			firstProviderRuleConfig(doc)["group"] = GroupZAIFamily
-		})
-		if _, err := Decode(data); err != nil {
-			t.Fatalf("Decode 失败：%v", err)
+	t.Run("可空字段为 null 时合法", func(t *testing.T) {
+		// ZCode 3.14 里 group / api / access / logo / providerName / apiKey / baseUrl
+		// 都是 nullable+optional，缺省或 null 都必须能解码。
+		cases := []func(doc map[string]interface{}){
+			func(doc map[string]interface{}) { firstProviderRuleConfig(doc)["group"] = nil },
+			func(doc map[string]interface{}) { delete(firstProviderRuleConfig(doc), "group") },
+			func(doc map[string]interface{}) { firstProviderRuleConfig(doc)["api"] = nil },
+			func(doc map[string]interface{}) { firstProviderRuleConfig(doc)["access"] = nil },
+			func(doc map[string]interface{}) { firstProviderRuleConfig(doc)["logo"] = nil },
+			func(doc map[string]interface{}) { firstProviderRuleConfig(doc)["visibility"] = nil },
+			func(doc map[string]interface{}) {
+				rules := doc["config"].(map[string]interface{})["providerConfigRules"].(map[string]interface{})["providerRules"].([]interface{})
+				rules[0].(map[string]interface{})["providerName"] = nil
+			},
+			func(doc map[string]interface{}) {
+				api := firstProviderRuleConfig(doc)["api"].(map[string]interface{})
+				api["baseUrl"] = nil
+			},
+			func(doc map[string]interface{}) {
+				delete(firstProviderRuleConfig(doc)["api"].(map[string]interface{}), "baseUrl")
+			},
+			func(doc map[string]interface{}) {
+				firstProviderRuleConfig(doc)["access"].(map[string]interface{})["apiKey"] = nil
+			},
+		}
+		for i, mutate := range cases {
+			data := mutateSample(t, mutate)
+			if _, err := Decode(data); err != nil {
+				t.Fatalf("第 %d 个可空用例 Decode 失败：%v", i+1, err)
+			}
 		}
 	})
 }
@@ -159,17 +183,11 @@ func TestDecodeRejectsInvalidValues(t *testing.T) {
 			rules := cfg["providerConfigRules"].(map[string]interface{})["providerRules"].([]interface{})
 			rules[0].(map[string]interface{})["providerId"] = ""
 		})},
-		{"缺少 group", mutateSample(t, func(doc map[string]interface{}) {
-			delete(firstProviderRuleConfig(doc), "group")
-		})},
 		{"group 非枚举值", mutateSample(t, func(doc map[string]interface{}) {
 			firstProviderRuleConfig(doc)["group"] = "unknown-group"
 		})},
 		{"api.type 非枚举值", mutateSample(t, func(doc map[string]interface{}) {
 			firstProviderRuleConfig(doc)["api"].(map[string]interface{})["type"] = "openai-completions"
-		})},
-		{"缺少 api.baseUrl", mutateSample(t, func(doc map[string]interface{}) {
-			delete(firstProviderRuleConfig(doc)["api"].(map[string]interface{}), "baseUrl")
 		})},
 		{"access.type 非枚举值", mutateSample(t, func(doc map[string]interface{}) {
 			firstProviderRuleConfig(doc)["access"].(map[string]interface{})["type"] = "oauth"
@@ -180,9 +198,9 @@ func TestDecodeRejectsInvalidValues(t *testing.T) {
 		{"contextWindow 为负", mutateSample(t, func(doc map[string]interface{}) {
 			firstModelRuleConfig(doc)["properties"].(map[string]interface{})["contextWindow"] = -1
 		})},
-		{"reasoningLevel 缺 values", mutateSample(t, func(doc map[string]interface{}) {
+		{"reasoningLevel.values 非字符串数组", mutateSample(t, func(doc map[string]interface{}) {
 			specs := firstModelRuleConfig(doc)["optionSpecs"].(map[string]interface{})
-			specs["reasoningLevel"] = map[string]interface{}{}
+			specs["reasoningLevel"] = map[string]interface{}{"values": []interface{}{1}}
 		})},
 		{"maxOutputTokens.max 非法", mutateSample(t, func(doc map[string]interface{}) {
 			specs := firstModelRuleConfig(doc)["optionSpecs"].(map[string]interface{})

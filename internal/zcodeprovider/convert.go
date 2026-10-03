@@ -8,12 +8,24 @@ import (
 
 // legacyProviderKnownKeys 是 FromLegacy 能映射的 legacy provider 顶层键。
 // 其余键（source、zcode、apiKeyRequired 之外的额外 options 等）都进 DroppedFields。
+//
+// 键集与 ZCode 3.14 的旧版 zod schema 对齐：enabled / apiFormat / defaultKind /
+// headers / apiKeyUrl 都会被映射到新版，因此不再算“丢失”。
 var legacyProviderKnownKeys = map[string]bool{
-	"id":      true, // provider 映射的键本身即 ID，个别配置会冗余带上，不算丢失
-	"name":    true,
-	"kind":    true,
-	"options": true,
-	"models":  true,
+	"id":          true, // provider 映射的键本身即 ID，个别配置会冗余带上，不算丢失
+	"name":        true,
+	"kind":        true,
+	"options":     true,
+	"models":      true,
+	"enabled":     true,
+	"apiFormat":   true,
+	"defaultKind": true,
+	"headers":     true,
+	"apiKeyUrl":   true,
+	"api":         true, // 顶层 api 字符串：baseUrl 的兜底来源
+	// endpoints 由 DroppedFields 单独按子键处理（baseURL 可能被用掉，paths 一定丢失），
+	// 这里列入已知键只是为了不让通用展开把它整块报成丢失。
+	"endpoints": true,
 }
 
 var legacyOptionKnownKeys = map[string]bool{
@@ -21,10 +33,17 @@ var legacyOptionKnownKeys = map[string]bool{
 	"apiKey":  true,
 }
 
+var legacyEndpointKnownKeys = map[string]bool{
+	"baseURL": true,
+}
+
 var legacyModelKnownKeys = map[string]bool{
-	"limit":      true,
-	"reasoning":  true,
-	"modalities": true,
+	"limit":           true,
+	"reasoning":       true,
+	"modalities":      true,
+	"contextWindow":   true,
+	"maxOutputTokens": true,
+	"deleted":         true, // deleted 模型会被跳过（与 ZCode 的迁移一致）
 }
 
 var legacyLimitKnownKeys = map[string]bool{
@@ -89,18 +108,33 @@ func providerRuleFromLegacy(pid string, raw map[string]interface{}) (map[string]
 	if strings.TrimSpace(name) == "" {
 		name = pid
 	}
-	apiType, err := apiTypeFromLegacyKind(stringValue(raw["kind"]))
+	apiType, err := apiTypeFromLegacy(raw)
 	if err != nil {
 		return nil, nil, fmt.Errorf("提供商「%s」：%v", pid, err)
 	}
 	opts, _ := raw["options"].(map[string]interface{})
-	baseURL := stringValue(opts["baseURL"])
 
 	rule := NewProviderRule(pid, name, GroupStandardPersonal)
 	providerCfg := RuleConfig(rule)
-	providerCfg["api"] = NewAPI(apiType, baseURL)
+	providerCfg["api"] = NewAPI(apiType, legacyBaseURL(raw, opts))
+	if headers, ok := raw["headers"].(map[string]interface{}); ok && len(headers) > 0 {
+		api := ProviderAPI(providerCfg)
+		api["headers"] = headers
+	}
+	access := map[string]interface{}{}
 	if apiKey := stringValue(opts["apiKey"]); strings.TrimSpace(apiKey) != "" {
-		providerCfg["access"] = NewAPIKeyAccess(apiKey)
+		access["type"] = AccessTypeAPIKey
+		access["apiKey"] = apiKey
+	}
+	if keyURL := strings.TrimSpace(stringValue(raw["apiKeyUrl"])); keyURL != "" {
+		access["type"] = AccessTypeAPIKey
+		access["apiKeyManagementUrl"] = keyURL
+	}
+	if len(access) > 0 {
+		providerCfg["access"] = access
+	}
+	if enabled, ok := raw["enabled"].(bool); ok {
+		rule["enabled"] = enabled
 	}
 
 	var modelRules []map[string]interface{}
@@ -110,8 +144,20 @@ func providerRuleFromLegacy(pid string, raw map[string]interface{}) (map[string]
 			return nil, nil, fmt.Errorf("提供商「%s」的 models 字段格式错误（应为对象）", pid)
 		}
 		mids := sortedStringKeys(models)
-		providerCfg["personalModelIds"] = toInterfaceSlice(mids)
+		// ZCode 的迁移会跳过带 deleted 标记的模型；列表与模型规则都要跳过，
+		// 否则这些墓碑模型会重新出现在模型列表里。
+		kept := make([]string, 0, len(mids))
 		for _, mid := range mids {
+			mraw, _ := models[mid].(map[string]interface{})
+			if mraw != nil {
+				if deleted, ok := mraw["deleted"].(bool); ok && deleted {
+					continue
+				}
+			}
+			kept = append(kept, mid)
+		}
+		providerCfg["personalModelIds"] = toInterfaceSlice(kept)
+		for _, mid := range kept {
 			mraw, _ := models[mid].(map[string]interface{})
 			if mraw == nil {
 				continue
@@ -122,6 +168,20 @@ func providerRuleFromLegacy(pid string, raw map[string]interface{}) (map[string]
 	return rule, modelRules, nil
 }
 
+// legacyBaseURL 复刻 ZCode 迁移时的 baseUrl 取值顺序：
+// options.baseURL → endpoints.baseURL → 顶层 api 字符串。
+func legacyBaseURL(raw, opts map[string]interface{}) string {
+	if base := strings.TrimSpace(stringValue(opts["baseURL"])); base != "" {
+		return base
+	}
+	if endpoints, ok := raw["endpoints"].(map[string]interface{}); ok {
+		if base := strings.TrimSpace(stringValue(endpoints["baseURL"])); base != "" {
+			return base
+		}
+	}
+	return strings.TrimSpace(stringValue(raw["api"]))
+}
+
 func modelRuleFromLegacy(pid, mid string, mraw map[string]interface{}) map[string]interface{} {
 	rule := NewProviderModelRule(pid, mid)
 	mcfg := RuleConfig(rule)
@@ -129,12 +189,22 @@ func modelRuleFromLegacy(pid, mid string, mraw map[string]interface{}) map[strin
 	properties := map[string]interface{}{}
 	optionSpecs := map[string]interface{}{}
 
-	limit, _ := mraw["limit"].(map[string]interface{})
-	if n, ok := positiveIntValue(limit["context"]); ok {
+	// 上下文窗口：模型级 contextWindow 优先于 limit.context（与 ZCode 的迁移一致）。
+	if n, ok := positiveIntValue(mraw["contextWindow"]); ok {
 		properties["contextWindow"] = n
+	} else {
+		limit, _ := mraw["limit"].(map[string]interface{})
+		if n, ok := positiveIntValue(limit["context"]); ok {
+			properties["contextWindow"] = n
+		}
 	}
-	if n, ok := positiveIntValue(limit["output"]); ok {
+	if n, ok := positiveIntValue(mraw["maxOutputTokens"]); ok {
 		optionSpecs["maxOutputTokens"] = map[string]interface{}{"max": n}
+	} else {
+		limit, _ := mraw["limit"].(map[string]interface{})
+		if n, ok := positiveIntValue(limit["output"]); ok {
+			optionSpecs["maxOutputTokens"] = map[string]interface{}{"max": n}
+		}
 	}
 
 	if values := legacyReasoningVariants(mraw); len(values) > 0 {
@@ -310,6 +380,16 @@ func DroppedFields(legacyProvider map[string]interface{}) []string {
 	if options, ok := legacyProvider["options"].(map[string]interface{}); ok {
 		collectUnknown(set, "options", options, legacyOptionKnownKeys)
 	}
+	// endpoints 只有 baseURL 会被当作 baseUrl 兜底用掉；paths 等其余内容在 v2 里
+	// 没有对应位置（api.type 只承载“用哪种 API”，不承载路径后缀），因此照实上报。
+	if endpoints, ok := legacyProvider["endpoints"].(map[string]interface{}); ok {
+		opts, _ := legacyProvider["options"].(map[string]interface{})
+		known := map[string]bool{}
+		if endpointsBaseURLUsed(legacyProvider, opts) {
+			known["baseURL"] = true
+		}
+		collectUnknown(set, "endpoints", endpoints, known)
+	}
 	if models, ok := legacyProvider["models"].(map[string]interface{}); ok {
 		for mid, raw := range models {
 			mraw, ok := raw.(map[string]interface{})
@@ -354,6 +434,75 @@ func collectUnknown(set map[string]bool, prefix string, m map[string]interface{}
 		}
 		set[path] = true
 	}
+}
+
+// apiTypeFromLegacy 复刻 ZCode 3.14 迁移时的 api.type 取值顺序：
+// apiFormat → defaultKind → kind → endpoints.paths → 兜底 chat-completions。
+//
+// kind 存在但无法映射时返回错误（与旧行为一致）：宁可直接报错，
+// 也不要把提供商写成一个错误的 API 类型。
+func apiTypeFromLegacy(raw map[string]interface{}) (string, error) {
+	for _, key := range []string{"apiFormat", "defaultKind"} {
+		v := strings.TrimSpace(stringValue(raw[key]))
+		if v == "" {
+			continue
+		}
+		if t, ok := apiTypeFromFormat(v); ok {
+			return t, nil
+		}
+	}
+	kind := strings.TrimSpace(stringValue(raw["kind"]))
+	if t, err := apiTypeFromLegacyKind(kind); err == nil {
+		return t, nil
+	} else if kind != "" {
+		return "", err
+	}
+	if t, ok := apiTypeFromEndpoints(raw); ok {
+		return t, nil
+	}
+	return APITypeOpenAIChatCompletions, nil
+}
+
+func apiTypeFromFormat(v string) (string, bool) {
+	switch v {
+	case APITypeAnthropicMessages, APITypeOpenAIChatCompletions, APITypeOpenAIResponses:
+		return v, true
+	}
+	return "", false
+}
+
+// apiTypeFromEndpoints 用 endpoints.paths 判定 API 类型（ZCode 的兜底顺序）。
+func apiTypeFromEndpoints(raw map[string]interface{}) (string, bool) {
+	endpoints, ok := raw["endpoints"].(map[string]interface{})
+	if !ok {
+		return "", false
+	}
+	paths, ok := endpoints["paths"].(map[string]interface{})
+	if !ok {
+		return "", false
+	}
+	if _, ok := paths["anthropic"]; ok {
+		return APITypeAnthropicMessages, true
+	}
+	if _, ok := paths["openai"]; ok {
+		return APITypeOpenAIResponses, true
+	}
+	if _, ok := paths["openai-compatible"]; ok {
+		return APITypeOpenAIChatCompletions, true
+	}
+	return "", false
+}
+
+// endpointsBaseURLUsed 判断 endpoints.baseURL 是否被用作最终的 baseUrl。
+func endpointsBaseURLUsed(raw, opts map[string]interface{}) bool {
+	if strings.TrimSpace(stringValue(opts["baseURL"])) != "" {
+		return false
+	}
+	endpoints, ok := raw["endpoints"].(map[string]interface{})
+	if !ok {
+		return false
+	}
+	return strings.TrimSpace(stringValue(endpoints["baseURL"])) != ""
 }
 
 func apiTypeFromLegacyKind(kind string) (string, error) {

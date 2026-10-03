@@ -306,8 +306,12 @@ func MigrateExecuteAtPaths(sourceAgent, targetAgent, sourcePath, targetPath stri
 		}
 		// Fingerprint before modification
 		fp, _ := FileFingerprint(tgtPath)
-		// Ensure backup
-		bak, _ := BackupConfig(tgtPath)
+		// 写盘前统一建立同级备份与还原点
+		snapshot, err := PrepareChange(ChangeContext{Target: tgtPath, AgentID: tgtNorm, Operation: OpMigrate, Note: "跨 Agent 迁移目标"})
+		if err != nil {
+			return nil, err
+		}
+		bak := snapshot.BackupPath
 		// Determine llm mode
 		// Hybrid file: keep original location per provider; new providers go to llm if it exists
 		llmModeGlobal := isDeepSeekLLMMode(cfg)
@@ -437,7 +441,11 @@ func MigrateExecuteAtPaths(sourceAgent, targetAgent, sourcePath, targetPath stri
 		cfg = map[string]interface{}{}
 	}
 	NormalizeConfigKinds(cfg)
-	bak, _ := BackupConfig(tgtPath)
+	snapshot, err := PrepareChange(ChangeContext{Target: tgtPath, AgentID: tgtNorm, Operation: OpMigrate, Note: "跨 Agent 迁移目标"})
+	if err != nil {
+		return nil, err
+	}
+	bak := snapshot.BackupPath
 	if mode == "overwrite" {
 		// Keep non-provider top-level keys, replace provider map with migrated set
 		newProviders := map[string]interface{}{}

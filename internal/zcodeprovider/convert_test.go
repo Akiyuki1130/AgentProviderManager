@@ -368,3 +368,119 @@ func containsString(arr []string, s string) bool {
 	}
 	return false
 }
+
+// ZCode 3.14 迁移规则的补充映射：apiFormat/defaultKind 优先、endpoints 兜底、
+// headers/apiKeyUrl/enabled 不再丢失、模型级 contextWindow/maxOutputTokens 优先、
+// deleted 模型被跳过。
+func TestFromLegacyZCode314Mapping(t *testing.T) {
+	legacy := map[string]interface{}{"provider": map[string]interface{}{
+		"acme": map[string]interface{}{
+			"name":        "Acme",
+			"kind":        "openai-compatible",
+			"apiFormat":   APITypeOpenAIResponses,
+			"enabled":     false,
+			"apiKeyUrl":   "https://acme.example.invalid/keys",
+			"headers":     map[string]interface{}{"X-Test": "1"},
+			"options":     map[string]interface{}{},
+			"endpoints":   map[string]interface{}{"baseURL": "https://endpoint.example.invalid/v1", "paths": map[string]interface{}{"anthropic": "/anthropic"}},
+			"models": map[string]interface{}{
+				"m1": map[string]interface{}{
+					"limit":           map[string]interface{}{"context": 1000, "output": 100},
+					"contextWindow":   200000,
+					"maxOutputTokens": 32000,
+				},
+				"m2": map[string]interface{}{"deleted": true, "limit": map[string]interface{}{"context": 10}},
+			},
+		},
+	}}
+
+	cfg, dropped, err := FromLegacy(legacy)
+	if err != nil {
+		t.Fatalf("FromLegacy 失败：%v", err)
+	}
+	rule := cfg.ProviderRule("acme")
+	if rule == nil {
+		t.Fatal("缺少 providerRule acme")
+	}
+	if enabled, ok := RuleEnabled(rule); !ok || enabled {
+		t.Errorf("enabled 应映射为 false，得到 %v（ok=%v）", enabled, ok)
+	}
+	pcfg := RuleConfig(rule)
+	if got := ProviderAPIType(pcfg); got != APITypeOpenAIResponses {
+		t.Errorf("apiFormat 应优先于 kind，得到 %q", got)
+	}
+	if got := ProviderAPIBaseURL(pcfg); got != "https://endpoint.example.invalid/v1" {
+		t.Errorf("baseUrl 应回退到 endpoints.baseURL，得到 %q", got)
+	}
+	if got := ProviderAPIHeaders(pcfg)["X-Test"]; got != "1" {
+		t.Errorf("headers 应映射到 api.headers，得到 %v", got)
+	}
+	if got := ProviderAccessAPIKeyManagementURL(pcfg); got != "https://acme.example.invalid/keys" {
+		t.Errorf("apiKeyUrl 应映射到 access.apiKeyManagementUrl，得到 %q", got)
+	}
+	if got := ProviderAccessType(pcfg); got != AccessTypeAPIKey {
+		t.Errorf("access.type = %q", got)
+	}
+	// deleted 模型不进模型列表，也不产生模型规则。
+	if got := ProviderPersonalModelIDs(pcfg); !reflect.DeepEqual(got, []string{"m1"}) {
+		t.Errorf("personalModelIds = %v, want [m1]", got)
+	}
+	if cfg.ProviderModelRule("acme", "m2") != nil {
+		t.Error("deleted 模型不应产生 providerModelRule")
+	}
+	mcfg := ModelRuleConfig(cfg.ProviderModelRule("acme", "m1"))
+	if got, ok := ModelContextWindow(mcfg); !ok || got != 200000 {
+		t.Errorf("模型级 contextWindow 应优先，得到 %d（ok=%v）", got, ok)
+	}
+	if got, ok := ModelMaxOutputTokens(mcfg); !ok || got != 32000 {
+		t.Errorf("模型级 maxOutputTokens 应优先，得到 %d（ok=%v）", got, ok)
+	}
+	// endpoints 的路径后缀在 v2 没有对应位置，必须如实上报。
+	if !containsString(dropped, "acme:endpoints.paths.anthropic") {
+		t.Errorf("dropped 应包含 endpoints.paths.anthropic，实际 %v", dropped)
+	}
+	if containsString(dropped, "acme:endpoints.baseURL") {
+		t.Errorf("endpoints.baseURL 已被用作 baseUrl，不应上报为丢失：%v", dropped)
+	}
+	if containsString(dropped, "acme:headers") || containsString(dropped, "acme:enabled") || containsString(dropped, "acme:apiKeyUrl") {
+		t.Errorf("已映射的字段不应上报为丢失：%v", dropped)
+	}
+	if _, err := Encode(cfg); err != nil {
+		t.Fatalf("产物应能通过严格校验：%v", err)
+	}
+}
+
+// endpoints 只在没有任何其它 baseUrl 来源时才算“用掉”。
+func TestDroppedFieldsEndpointsBaseURL(t *testing.T) {
+	legacy := map[string]interface{}{"provider": map[string]interface{}{
+		"x": map[string]interface{}{
+			"kind":      "anthropic",
+			"options":   map[string]interface{}{"baseURL": "https://x.example.invalid"},
+			"endpoints": map[string]interface{}{"baseURL": "https://unused.example.invalid"},
+		},
+	}}
+	_, dropped, err := FromLegacy(legacy)
+	if err != nil {
+		t.Fatalf("FromLegacy 失败：%v", err)
+	}
+	if !containsString(dropped, "x:endpoints.baseURL") {
+		t.Errorf("未被使用的 endpoints.baseURL 应上报为丢失，实际 %v", dropped)
+	}
+}
+
+// endpoints.paths 可以作为 api.type 的兜底来源。
+func TestFromLegacyAPITypeFromEndpoints(t *testing.T) {
+	legacy := map[string]interface{}{"provider": map[string]interface{}{
+		"x": map[string]interface{}{
+			"options":   map[string]interface{}{"baseURL": "https://x.example.invalid"},
+			"endpoints": map[string]interface{}{"paths": map[string]interface{}{"openai-compatible": "/v1"}},
+		},
+	}}
+	cfg, _, err := FromLegacy(legacy)
+	if err != nil {
+		t.Fatalf("FromLegacy 失败：%v", err)
+	}
+	if got := ProviderAPIType(RuleConfig(cfg.ProviderRule("x"))); got != APITypeOpenAIChatCompletions {
+		t.Errorf("endpoints.paths 兜底 = %q", got)
+	}
+}

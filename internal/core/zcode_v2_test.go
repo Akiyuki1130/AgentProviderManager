@@ -652,7 +652,7 @@ func zcodeV2DocForStore(t *testing.T) Doc {
 	rule["templateId"] = "tpl-1"
 	rule["enabled"] = true
 	providerCfg := zcodeprovider.RuleConfig(rule)
-	providerCfg["logo"] = map[string]interface{}{"kind": "emoji", "value": "🧪"}
+	providerCfg["logo"] = map[string]interface{}{"type": zcodeprovider.LogoTypeBuiltin, "key": "acme"}
 	providerCfg["visibility"] = "visible"
 	providerCfg["modelOrder"] = []interface{}{"m1"}
 	providerCfg["api"] = map[string]interface{}{

@@ -1,5 +1,25 @@
 # Changelog
 
+## 2.0.6 — 2026-09-26
+
+### Added
+
+- Restore points: before every change to an agent configuration file the previous file is now kept as a restore point under `%LOCALAPPDATA%\AgentProviderManager\restorepoints`, together with its metadata — agent, absolute target path, detected format (`v2` / `legacy` / `opencode` / `deepseek` / `unknown`), whether the file existed at all, byte size, SHA-256, fingerprint, app version, the operation that caused it, the affected provider/model, and a note. The content is a byte-for-byte copy, so comments, indentation and key order of the previous file survive. Every write path goes through a single `PrepareChange` entry point, and the sibling `.bak_<timestamp>` backup is still written.
+- New **Restore Points** page: lists the history (time, agent, format badge, target path, operation, affected provider/model, size, "did not exist yet"), restores any single point, deletes one point, opens the storage directory, and prunes old points. Restoring first snapshots the current state, so a restore can itself be undone. Restoring a point that recorded "the file did not exist" renames the current file to `<file>.removed_<timestamp>` instead of deleting it.
+- ZCode compatibility check and one-click repair: problems that ZCode 3.14 rejects but this tool can still read are listed with their path and reason, and can be repaired in one step (the repair creates a restore point first).
+
+### Changed
+
+- Aligned the ZCode new-format (`provider_config.json`, `schemaVersion` 1) rules with ZCode 3.14: a personal provider rule no longer accepts `builtinModelIds` (the repair merges the value into `personalModelIds`), `config.group` must be `standard-personal` or absent/null (the family values only exist in ZCode's built-in file), `config.logo` must be `{"type":"builtin","key":"…"}` or null, `api` / `access` / `api.baseUrl` / `access.apiKey` / `access.apiKeyManagementUrl` / `providerName` / `templateId` may be absent or null, `providerId` must be unique, and the same `(providerId, modelId)` must not appear in both `providerModelRules` and `manualProviderModelRules`. Writing always enforces these rules, so a save can no longer produce a file that makes ZCode treat the whole configuration as empty.
+- New-format files are written in ZCode's own key order, so ZCode no longer rewrites the file on its next read.
+- Reading a new-format file is now lenient about the compatibility problems above: they are reported instead of making the configuration impossible to open.
+- Legacy → new mapping now follows ZCode's own migration more closely: `apiFormat` / `defaultKind` are preferred when deciding `api.type`, `endpoints.baseURL` and the top-level `api` string are used as base URL fallbacks, `headers` → `api.headers`, `apiKeyUrl` → `access.apiKeyManagementUrl`, provider `enabled` is carried over, model-level `contextWindow` / `maxOutputTokens` take precedence over `limit.context` / `limit.output`, and models marked `deleted` are skipped. The "will be lost" list stays accurate (for example `endpoints.paths` is reported because the new format has no place for path suffixes).
+
+### Fixed
+
+- A `schemaVersion` 1 file containing keys or values that ZCode 3.14 rejects no longer makes the provider list unreadable; the reason is shown and the file can be repaired in place.
+- Rolling back a configuration no longer requires guessing: every change can be reverted to any earlier state instead of only the most recent sibling backup.
+
 ## 2.0.5 — 2026-09-18
 
 ### Added

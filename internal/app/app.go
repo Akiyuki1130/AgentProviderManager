@@ -453,6 +453,114 @@ func (a *App) SetConfigPath(path string) map[string]interface{} {
 	return map[string]interface{}{"success": true, "path": a.targetConfigPath}
 }
 
+// GetRestorePoints 返回全部还原点（按时间倒序），以及当前目标与存储目录。
+// 每个还原点自带 target_path / format / operation，前端按需分组或过滤。
+func (a *App) GetRestorePoints() map[string]interface{} {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	core.PruneRestorePoints()
+	points := core.ListRestorePoints(core.RestorePointFilter{})
+	if points == nil {
+		points = []core.RestorePoint{}
+	}
+	return map[string]interface{}{
+		"success": true,
+		"points":  points,
+		"target":  a.targetConfigPath,
+		"agent":   a.currentAgent,
+		"dir":     core.RestorePointsDir(),
+	}
+}
+
+// RestoreRestorePoint 把某个还原点写回它的原始路径。
+// 回滚前会先给当前状态建一个还原点（返回值的 snapshot），因此回滚本身可撤销。
+func (a *App) RestoreRestorePoint(id string) map[string]interface{} {
+	if strings.TrimSpace(id) == "" {
+		return map[string]interface{}{"success": false, "error": "参数格式错误"}
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	outcome, err := core.RestoreRestorePoint(id)
+	if err != nil {
+		return map[string]interface{}{"success": false, "error": core.ShortText(err.Error(), 300)}
+	}
+	// 回滚的正是当前 Agent 已知的配置位置时，把目标指回该文件（格式可能由 legacy 变回 v2）。
+	switched := false
+	if a.restorePointPathKnownLocked(outcome.TargetPath) {
+		a.targetConfigPath = outcome.TargetPath
+		a.agentPaths[a.currentAgent] = outcome.TargetPath
+		a.persistAgentStateLocked()
+		switched = true
+	}
+	return map[string]interface{}{
+		"success":         true,
+		"id":              outcome.ID,
+		"target":          outcome.TargetPath,
+		"removed_path":    outcome.RemovedPath,
+		"snapshot":        outcome.Snapshot,
+		"warning":         outcome.Warning,
+		"target_switched": switched,
+		"current_target":  a.targetConfigPath,
+	}
+}
+
+// DeleteRestorePoint 删除一个还原点。
+func (a *App) DeleteRestorePoint(id string) map[string]interface{} {
+	if strings.TrimSpace(id) == "" {
+		return map[string]interface{}{"success": false, "error": "参数格式错误"}
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if err := core.DeleteRestorePoint(id); err != nil {
+		return map[string]interface{}{"success": false, "error": core.ShortText(err.Error(), 300)}
+	}
+	return map[string]interface{}{"success": true, "id": id}
+}
+
+// PruneRestorePoints 手动触发一次保留策略清理。
+func (a *App) PruneRestorePoints() map[string]interface{} {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	removed := core.PruneRestorePoints()
+	points := core.ListRestorePoints(core.RestorePointFilter{})
+	if points == nil {
+		points = []core.RestorePoint{}
+	}
+	return map[string]interface{}{"success": true, "removed": removed, "points": points}
+}
+
+// OpenRestorePointsDir 在文件管理器里打开还原点目录。
+func (a *App) OpenRestorePointsDir() map[string]interface{} {
+	dir := core.RestorePointsDir()
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return map[string]interface{}{"success": false, "error": core.ShortText(err.Error(), 300)}
+	}
+	if a.ctx == nil {
+		return map[string]interface{}{"success": false, "error": "窗口未就绪"}
+	}
+	runtime.BrowserOpenURL(a.ctx, "file:///"+filepath.ToSlash(dir))
+	return map[string]interface{}{"success": true, "dir": dir}
+}
+
+// restorePointPathKnownLocked 判断某路径是否属于当前 Agent 的已探测配置位置。
+// 调用方必须已持有 a.mu。
+func (a *App) restorePointPathKnownLocked(path string) bool {
+	if strings.TrimSpace(path) == "" {
+		return false
+	}
+	target, err := filepath.Abs(path)
+	if err != nil {
+		return false
+	}
+	for _, loc := range core.DetectConfigLocationsForAgent(a.currentAgent) {
+		p, err := filepath.Abs(loc.Path)
+		if err == nil && strings.EqualFold(p, target) {
+			return true
+		}
+	}
+	return false
+}
+
 func (a *App) GetBackupInfo() map[string]interface{} {
 	p := a.targetConfigPath
 	core.PruneBackups(p)
@@ -718,6 +826,25 @@ func writeDeepSeekConfigCompat(path string, cfg map[string]interface{}, fingerpr
 	return core.WriteConfig(path, cfg, fingerprint)
 }
 
+// prepareChange 是所有写配置路径的统一前置动作：先做同级 .bak_ 备份，再建立还原点。
+// 返回的第二个值非 nil 时，调用方直接把它当作错误响应返回即可。
+//
+// 任何新增的写配置路径都必须调用它，否则会破坏“每次变更都有还原点”的保证。
+func (a *App) prepareChange(target, agent, operation, providerID, modelID, note string) (core.ChangeSnapshot, map[string]interface{}) {
+	snapshot, err := core.PrepareChange(core.ChangeContext{
+		Target:     target,
+		AgentID:    agent,
+		Operation:  operation,
+		ProviderID: providerID,
+		ModelID:    modelID,
+		Note:       note,
+	})
+	if err != nil {
+		return core.ChangeSnapshot{}, map[string]interface{}{"success": false, "error": core.ShortText(err.Error(), 300)}
+	}
+	return snapshot, nil
+}
+
 func providersFromConfig(cfg map[string]interface{}, agent string) map[string]interface{} {
 	if cfg == nil {
 		return nil
@@ -844,10 +971,11 @@ func (a *App) SaveProvider(providerID string, provider map[string]interface{}) m
 		if existsDeepSeek && newID != providerID {
 			return map[string]interface{}{"success": false, "error": fmt.Sprintf("提供商「%s」已存在", newID)}
 		}
-		bak, backupErr := core.BackupConfig(target)
-		if backupErr != nil {
-			return map[string]interface{}{"success": false, "error": fmt.Sprintf("创建配置备份失败：%s", core.ShortText(backupErr.Error(), 300))}
+		snapshot, errResp := a.prepareChange(target, agent, core.OpSaveProvider, newID, "", "")
+		if errResp != nil {
+			return errResp
 		}
+		bak := snapshot.BackupPath
 		if newID != providerID {
 			if def, ok := cfg["agent-default-model"].(map[string]interface{}); ok && strings.TrimSpace(fmt.Sprint(def["provider"])) == providerID {
 				def["provider"] = newID
@@ -907,10 +1035,11 @@ func (a *App) SaveProvider(providerID string, provider map[string]interface{}) m
 				return map[string]interface{}{"success": false, "error": "检测到模型列表为空。为避免误删已有模型，已取消保存；如需清空模型，请逐个删除。"}
 			}
 		}
-		bak, backupErr := core.BackupConfig(target)
-		if backupErr != nil {
-			return map[string]interface{}{"success": false, "error": fmt.Sprintf("创建配置备份失败：%s", core.ShortText(backupErr.Error(), 300))}
+		snapshot, errResp := a.prepareChange(target, agent, core.OpSaveProvider, newID, "", "")
+		if errResp != nil {
+			return errResp
 		}
+		bak := snapshot.BackupPath
 		if newID != providerID {
 			delete(providers, providerID)
 		}
@@ -947,10 +1076,11 @@ func (a *App) SaveProvider(providerID string, provider map[string]interface{}) m
 			return map[string]interface{}{"success": false, "error": "检测到模型列表为空。为避免误删已有模型，已取消保存；如需清空模型，请逐个删除。"}
 		}
 	}
-	bak, backupErr := core.BackupConfig(target)
-	if backupErr != nil {
-		return map[string]interface{}{"success": false, "error": fmt.Sprintf("创建配置备份失败：%s", core.ShortText(backupErr.Error(), 300))}
+	snapshot, errResp := a.prepareChange(target, agent, core.OpSaveProvider, newID, "", "")
+	if errResp != nil {
+		return errResp
 	}
+	bak := snapshot.BackupPath
 	merged, mergeErr := backend.Store(config).Upsert(config, providerID, provider, core.SaveOptions{MergeModels: false})
 	if mergeErr != nil {
 		return map[string]interface{}{"success": false, "error": fmt.Sprintf("写入配置文件时出错：\n%s", core.ShortText(mergeErr.Error(), 300))}
@@ -982,10 +1112,11 @@ func (a *App) DeleteProvider(providerID string) map[string]interface{} {
 		if allProviders == nil || allProviders[providerID] == nil {
 			return map[string]interface{}{"success": false, "error": fmt.Sprintf("提供商「%s」不存在", providerID)}
 		}
-		bak, backupErr := core.BackupConfig(target)
-		if backupErr != nil {
-			return map[string]interface{}{"success": false, "error": fmt.Sprintf("创建配置备份失败：%s", core.ShortText(backupErr.Error(), 300))}
+		snapshot, errResp := a.prepareChange(target, agent, core.OpDeleteProvider, providerID, "", "")
+		if errResp != nil {
+			return errResp
 		}
+		bak := snapshot.BackupPath
 		src, _ := core.DeepSeekProviderSource(cfg, providerID)
 		if src == "llm" {
 			if llm, ok := cfg["llm-pi-ai"].(map[string]interface{}); ok {
@@ -1034,10 +1165,11 @@ func (a *App) DeleteProvider(providerID string) map[string]interface{} {
 		if !found {
 			return map[string]interface{}{"success": false, "error": fmt.Sprintf("提供商「%s」不存在", providerID)}
 		}
-		bak, backupErr := core.BackupConfig(target)
-		if backupErr != nil {
-			return map[string]interface{}{"success": false, "error": fmt.Sprintf("创建配置备份失败：%s", core.ShortText(backupErr.Error(), 300))}
+		snapshot, errResp := a.prepareChange(target, agent, core.OpDeleteProvider, providerID, "", "")
+		if errResp != nil {
+			return errResp
 		}
+		bak := snapshot.BackupPath
 		if err := backend.Write(target, newDoc, fingerprint); err != nil {
 			return map[string]interface{}{"success": false, "error": fmt.Sprintf("删除提供商时出错：\n%s", core.ShortText(err.Error(), 300))}
 		}
@@ -1055,10 +1187,11 @@ func (a *App) DeleteProvider(providerID string) map[string]interface{} {
 	if providers == nil || providers[providerID] == nil {
 		return map[string]interface{}{"success": false, "error": fmt.Sprintf("提供商「%s」不存在", providerID)}
 	}
-	bak, backupErr := core.BackupConfig(target)
-	if backupErr != nil {
-		return map[string]interface{}{"success": false, "error": fmt.Sprintf("创建配置备份失败：%s", core.ShortText(backupErr.Error(), 300))}
+	snapshot, errResp := a.prepareChange(target, agent, core.OpDeleteProvider, providerID, "", "")
+	if errResp != nil {
+		return errResp
 	}
+	bak := snapshot.BackupPath
 	delete(providers, providerID)
 	if err := core.WriteConfig(target, config, fingerprint); err != nil {
 		return map[string]interface{}{"success": false, "error": fmt.Sprintf("删除提供商时出错：\n%s", core.ShortText(err.Error(), 300))}
@@ -1126,10 +1259,11 @@ func (a *App) DeleteModel(providerID, modelID string) map[string]interface{} {
 			if !found {
 				return map[string]interface{}{"success": false, "error": fmt.Sprintf("模型「%s」不存在", modelID)}
 			}
-			bak, backupErr := core.BackupConfig(target)
-			if backupErr != nil {
-				return map[string]interface{}{"success": false, "error": fmt.Sprintf("创建配置备份失败：%s", core.ShortText(backupErr.Error(), 300))}
+			snapshot, errResp := a.prepareChange(target, agent, core.OpDeleteModel, providerID, modelID, "")
+			if errResp != nil {
+				return errResp
 			}
+			bak := snapshot.BackupPath
 			prov["models"] = newArr
 			core.EnsureDeepSeekDefaultModel(cfg)
 			if err := writeConfigForAgent(target, cfg, fingerprint, agent); err != nil {
@@ -1145,10 +1279,11 @@ func (a *App) DeleteModel(providerID, modelID string) map[string]interface{} {
 		if models == nil || models[modelID] == nil {
 			return map[string]interface{}{"success": false, "error": fmt.Sprintf("模型「%s」不存在", modelID)}
 		}
-		bak, backupErr := core.BackupConfig(target)
-		if backupErr != nil {
-			return map[string]interface{}{"success": false, "error": fmt.Sprintf("创建配置备份失败：%s", core.ShortText(backupErr.Error(), 300))}
+		snapshot, errResp := a.prepareChange(target, agent, core.OpDeleteModel, providerID, modelID, "")
+		if errResp != nil {
+			return errResp
 		}
+		bak := snapshot.BackupPath
 		delete(models, modelID)
 		core.EnsureDeepSeekDefaultModel(cfg)
 		if err := writeConfigForAgent(target, cfg, fingerprint, agent); err != nil {
@@ -1177,10 +1312,11 @@ func (a *App) DeleteModel(providerID, modelID string) map[string]interface{} {
 		if !found {
 			return map[string]interface{}{"success": false, "error": fmt.Sprintf("模型「%s」不存在", modelID)}
 		}
-		bak, backupErr := core.BackupConfig(target)
-		if backupErr != nil {
-			return map[string]interface{}{"success": false, "error": fmt.Sprintf("创建配置备份失败：%s", core.ShortText(backupErr.Error(), 300))}
+		snapshot, errResp := a.prepareChange(target, agent, core.OpDeleteModel, providerID, modelID, "")
+		if errResp != nil {
+			return errResp
 		}
+		bak := snapshot.BackupPath
 		if err := backend.Write(target, newDoc, fingerprint); err != nil {
 			return map[string]interface{}{"success": false, "error": fmt.Sprintf("删除模型时出错：\n%s", core.ShortText(err.Error(), 300))}
 		}
@@ -1206,10 +1342,11 @@ func (a *App) DeleteModel(providerID, modelID string) map[string]interface{} {
 	if models == nil || models[modelID] == nil {
 		return map[string]interface{}{"success": false, "error": fmt.Sprintf("模型「%s」不存在", modelID)}
 	}
-	bak, backupErr := core.BackupConfig(target)
-	if backupErr != nil {
-		return map[string]interface{}{"success": false, "error": fmt.Sprintf("创建配置备份失败：%s", core.ShortText(backupErr.Error(), 300))}
+	snapshot, errResp := a.prepareChange(target, agent, core.OpDeleteModel, providerID, modelID, "")
+	if errResp != nil {
+		return errResp
 	}
+	bak := snapshot.BackupPath
 	delete(models, modelID)
 	if err := core.WriteConfig(target, config, fingerprint); err != nil {
 		return map[string]interface{}{"success": false, "error": fmt.Sprintf("删除模型时出错：\n%s", core.ShortText(err.Error(), 300))}
@@ -1262,6 +1399,43 @@ func (a *App) GetZCodeFormat() map[string]interface{} {
 		"format":                 core.ZCodeFormatName(format),
 		"path":                   path,
 		"supports_legacy_import": supports,
+	}
+}
+
+// GetZCodeCompat 检查当前 ZCode 新版配置里“ZCode 3.14 会拒绝”的问题（只读）。
+// 这些问题会让 ZCode 把整份个人配置当成空，所以要在保存前提示并修复。
+func (a *App) GetZCodeCompat() map[string]interface{} {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	report := core.InspectZCodeCompat(a.zcodeFormatTargetPath())
+	return map[string]interface{}{
+		"success": true,
+		"path":    report.Path,
+		"format":  report.Format,
+		"issues":  report.Issues,
+	}
+}
+
+// RepairZCodeCompat 一键修复上述兼容性问题并写回（写盘前照例备份 + 建还原点）。
+func (a *App) RepairZCodeCompat() map[string]interface{} {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	target := a.zcodeFormatTargetPath()
+	if target == "" {
+		return map[string]interface{}{"success": false, "error": "请先选择目标配置文件"}
+	}
+	report, fixes, snapshot, err := core.RepairZCodeCompatAt(target, a.currentAgent)
+	if err != nil {
+		return map[string]interface{}{"success": false, "error": core.ShortText(err.Error(), 300)}
+	}
+	return map[string]interface{}{
+		"success":       true,
+		"path":          report.Path,
+		"fixes":         fixes,
+		"issues":        report.Issues,
+		"backup":        snapshot.BackupPath,
+		"restore_point": snapshot.RestorePoint,
+		"target":        target,
 	}
 }
 
@@ -1490,10 +1664,11 @@ func (a *App) ImportProvider(payload map[string]interface{}) map[string]interfac
 				}
 			}
 		}
-		bak, backupErr := core.BackupConfig(target)
-		if backupErr != nil {
-			return map[string]interface{}{"success": false, "error": fmt.Sprintf("创建配置备份失败：%s", core.ShortText(backupErr.Error(), 300))}
+		snapshot, errResp := a.prepareChange(target, agent, core.OpImportProvider, pid, "", "导入供应商")
+		if errResp != nil {
+			return errResp
 		}
+		bak := snapshot.BackupPath
 		if err := core.DeepSeekSaveProviderWithMerge(target, pid, providerCfg, fingerprint, mergeModels); err != nil {
 			return map[string]interface{}{"success": false, "error": fmt.Sprintf("写入配置文件时出错：\n%s", core.ShortText(err.Error(), 300))}
 		}
@@ -1525,10 +1700,11 @@ func (a *App) ImportProvider(payload map[string]interface{}) map[string]interfac
 		return map[string]interface{}{"success": false, "error": err.Error()}
 	}
 	core.NormalizeConfigKinds(existing)
-	bak, backupErr := core.BackupConfig(target)
-	if backupErr != nil {
-		return map[string]interface{}{"success": false, "error": fmt.Sprintf("创建配置备份失败：%s", core.ShortText(backupErr.Error(), 300))}
+	snapshot, errResp := a.prepareChange(target, agent, core.OpImportProvider, pid, "", "导入供应商")
+	if errResp != nil {
+		return errResp
 	}
+	bak := snapshot.BackupPath
 	merged, err := core.MergeProviderIntoConfig(existing, pid, providerCfg, mergeModels)
 	if err != nil {
 		return map[string]interface{}{"success": false, "error": err.Error()}
@@ -1627,10 +1803,11 @@ func (a *App) ImportOpencode(payload map[string]interface{}) map[string]interfac
 	if err != nil {
 		return map[string]interface{}{"success": false, "error": err.Error()}
 	}
-	bak, backupErr := core.BackupConfig(target)
-	if backupErr != nil {
-		return map[string]interface{}{"success": false, "error": fmt.Sprintf("创建配置备份失败：%s", core.ShortText(backupErr.Error(), 300))}
+	snapshot, errResp := a.prepareChange(target, agent, core.OpImportProvider, "", "", "导入 OpenCode 供应商")
+	if errResp != nil {
+		return errResp
 	}
+	bak := snapshot.BackupPath
 	if err := core.WriteConfig(target, result, fingerprint); err != nil {
 		return map[string]interface{}{"success": false, "error": fmt.Sprintf("写入配置文件时出错：\n%s", core.ShortText(err.Error(), 300))}
 	}
@@ -1721,10 +1898,11 @@ func (a *App) MergeConfig(payload map[string]interface{}) map[string]interface{}
 	if err != nil {
 		return map[string]interface{}{"success": false, "error": err.Error()}
 	}
-	bak, backupErr := core.BackupConfig(target)
-	if backupErr != nil {
-		return map[string]interface{}{"success": false, "error": fmt.Sprintf("创建配置备份失败：%s", core.ShortText(backupErr.Error(), 300))}
+	snapshot, errResp := a.prepareChange(target, agent, core.OpImportProvider, "", "", "合并配置")
+	if errResp != nil {
+		return errResp
 	}
+	bak := snapshot.BackupPath
 	if err := core.WriteConfig(target, result, fingerprint); err != nil {
 		return map[string]interface{}{"success": false, "error": fmt.Sprintf("写入配置文件时出错：\n%s", core.ShortText(err.Error(), 300))}
 	}

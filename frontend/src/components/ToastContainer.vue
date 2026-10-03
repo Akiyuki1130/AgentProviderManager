@@ -35,6 +35,7 @@ onMounted(() => { window.__toast = showToast })
 .toast.success { border-left-color: #107c10; }
 .toast.error { border-left-color: #d13438; }
 .toast.info { border-left-color: #0078d4; }
+.toast.warning { border-left-color: #ca5010; }
 .toast-title { font-weight: 600; font-size: 13px; }
 .toast-msg { font-size: 12px; color: var(--fluent-text-soft); white-space: pre-wrap; margin-top: 4px; }
 .toast-enter-active { transition: all 0.25s ease; }

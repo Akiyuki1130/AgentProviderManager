@@ -8,6 +8,7 @@ const router = createRouter({
     { path: '/manage', name: 'Manage', component: () => import('../pages/ManagePage.vue') },
     { path: '/import', name: 'Import', component: () => import('../pages/ImportPage.vue') },
     { path: '/keychain', name: 'Keychain', component: () => import('../pages/KeychainPage.vue') },
+    { path: '/restorepoints', name: 'RestorePoints', component: () => import('../pages/RestorePointPage.vue') },
     { path: '/migrate', name: 'Migrate', component: () => import('../pages/MigratePage.vue') },
     { path: '/options', name: 'Options', component: () => import('../pages/OptionsPage.vue') },
     { path: '/:pathMatch(.*)*', redirect: '/manage' },

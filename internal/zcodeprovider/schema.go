@@ -20,10 +20,27 @@ import (
 const SchemaVersionV1 = 1
 
 // provider.config.group 的合法枚举值。
+//
+// ZCode 3.14 起，个人文件的 providerRule.config.group 只能是 GroupStandardPersonal
+// （或缺省 / null）；ZAIFamily / BigModelFamily 只允许出现在 ZCode 内建配置里，
+// 写进个人文件会让 ZCode 判定整份配置非法。
 const (
 	GroupStandardPersonal = "standard-personal"
 	GroupZAIFamily        = "zai-family"
 	GroupBigModelFamily   = "bigmodel-family"
+)
+
+// provider.config.logo 的合法形状（ZCode 3.14 起）：
+//
+//	{"type":"builtin","key":"<非空字符串>"} 或 null
+//
+// 早期出现过的字符串 URL 形状会被当前 ZCode 拒绝。
+const LogoTypeBuiltin = "builtin"
+
+// provider.config.visibility 的合法枚举值。
+const (
+	VisibilityVisible = "visible"
+	VisibilityHidden  = "hidden"
 )
 
 // access.type 的合法枚举值。
@@ -32,6 +49,35 @@ const (
 	AccessTypeZhipuCodingPlanAPIKey = "zhipu-coding-plan-api-key"
 	AccessTypeZhipuAccount          = "zhipu-account"
 )
+
+// access.type = zhipu-account 分支的 accountType 枚举值。
+const (
+	AccountTypeZAI      = "zai"
+	AccountTypeBigModel = "bigmodel"
+)
+
+// AccountModes 是 access.type = zhipu-account 分支的 mode 枚举值。
+var AccountModes = []string{"start-plan", "individual-coding-plan", "team-coding-plan", "off-peak"}
+
+// ValidVisibility 判断 visibility 是否合法。
+func ValidVisibility(v string) bool {
+	return v == VisibilityVisible || v == VisibilityHidden
+}
+
+// ValidAccountType 判断 accountType 是否合法。
+func ValidAccountType(v string) bool {
+	return v == AccountTypeZAI || v == AccountTypeBigModel
+}
+
+// ValidAccountMode 判断 mode 是否合法。
+func ValidAccountMode(v string) bool {
+	for _, m := range AccountModes {
+		if v == m {
+			return true
+		}
+	}
+	return false
+}
 
 // api.type 的合法枚举值（恰好三个）。
 const (
@@ -73,6 +119,9 @@ var (
 		"config":       true,
 	}
 
+	// 注意：builtinModelIds 在这里是“可解析”的，但个人文件不接受它（ZCode 3.14 的
+	// 个人 providerRule 用 qo.omit({builtinModelIds})）。保留该键是为了让带它的文件
+	// 仍能打开并提示修复（见 decode.go 的 IssueBuiltinModelIDs），而不是直接报未知键。
 	providerRuleConfigKeys = map[string]bool{
 		"group":            true,
 		"logo":             true,
@@ -84,11 +133,26 @@ var (
 		"visibility":       true,
 	}
 
-	// api-key 分支的字段；其余分支的字段逆向未确认，不在此拒绝，原样保留。
+	// logo 的键集（严格：ZCode 用 {type, key} 的 strict object）。
+	logoKeys = map[string]bool{
+		"type": true,
+		"key":  true,
+	}
+
+	// access.type = api-key 与 zhipu-coding-plan-api-key 共用的键集
+	// （ZCode 里两者同属一个 zod object）。
 	accessAPIKeyKeys = map[string]bool{
 		"type":                true,
 		"apiKey":              true,
 		"apiKeyManagementUrl": true,
+	}
+
+	// access.type = zhipu-account 的键集。
+	accessZhipuAccountKeys = map[string]bool{
+		"type":        true,
+		"accountType": true,
+		"mode":        true,
+		"entitled":    true,
 	}
 
 	apiKeys = map[string]bool{

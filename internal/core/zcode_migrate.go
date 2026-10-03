@@ -132,10 +132,11 @@ func ApplyLegacyImport(v2Doc, legacyDoc Doc, selectedIDs []string, targetPath st
 		path = ZCodeProviderConfigPath()
 	}
 	fingerprint, _ := FileFingerprint(path)
-	backup, err := BackupConfig(path)
+	snapshot, err := PrepareChange(ChangeContext{Target: path, AgentID: string(AgentZCode), Operation: OpImportLegacy, Note: "旧版供应商导入新版"})
 	if err != nil {
-		return nil, report, fmt.Errorf("创建配置备份失败：%s", ShortText(err.Error(), 300))
+		return nil, report, err
 	}
+	backup := snapshot.BackupPath
 	report.Backup = backup
 	data, err := zcodeprovider.Encode(cfg)
 	if err != nil {

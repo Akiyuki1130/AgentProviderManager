@@ -44,6 +44,7 @@ import {
   KeyOutline,
   SwapHorizontalOutline,
   OptionsOutline,
+  TimeOutline,
   ChevronBackOutline,
   ChevronForwardOutline,
 } from '@vicons/ionicons5'
@@ -69,6 +70,7 @@ const navItems = computed<NavItem[]>(() => {
     { key: '/import', label: t('tab.import', l), icon: CloudDownloadOutline },
     { key: '/migrate', label: t('tab.migrate', l), icon: SwapHorizontalOutline },
     { key: '/keychain', label: t('tab.keychain', l), icon: KeyOutline },
+    { key: '/restorepoints', label: t('tab.restorePoints', l), icon: TimeOutline },
     { key: '/options', label: t('tab.options', l), icon: OptionsOutline },
   ]
 })

@@ -1,4 +1,15 @@
-import type { ZCodeFormatInfo, LegacyImportPreview, LegacyImportResult } from '../types'
+import type {
+  ZCodeFormatInfo,
+  LegacyImportPreview,
+  LegacyImportResult,
+  RestorePointListResult,
+  RestorePointRestoreResult,
+  RestorePointDeleteResult,
+  RestorePointPruneResult,
+  RestorePointsDirResult,
+  ZCodeCompatResult,
+  ZCodeCompatRepairResult,
+} from '../types'
 
 type WailsApp = Record<string, (...args: unknown[]) => Promise<unknown>>
 
@@ -181,4 +192,27 @@ export async function PreviewLegacyImport(): Promise<LegacyImportPreview> {
 }
 export async function ApplyLegacyImport(ids: string[]): Promise<LegacyImportResult> {
   return call<LegacyImportResult>('ApplyLegacyImport', ids)
+}
+
+// 还原点（配置修改前的自动快照）与 ZCode 兼容性检查/一键修复同样走上面的动态 Wails 桥。
+export async function GetRestorePoints(): Promise<RestorePointListResult> {
+  return call<RestorePointListResult>('GetRestorePoints')
+}
+export async function RestoreRestorePoint(id: string): Promise<RestorePointRestoreResult> {
+  return call<RestorePointRestoreResult>('RestoreRestorePoint', id)
+}
+export async function DeleteRestorePoint(id: string): Promise<RestorePointDeleteResult> {
+  return call<RestorePointDeleteResult>('DeleteRestorePoint', id)
+}
+export async function PruneRestorePoints(): Promise<RestorePointPruneResult> {
+  return call<RestorePointPruneResult>('PruneRestorePoints')
+}
+export async function OpenRestorePointsDir(): Promise<RestorePointsDirResult> {
+  return call<RestorePointsDirResult>('OpenRestorePointsDir')
+}
+export async function GetZCodeCompat(): Promise<ZCodeCompatResult> {
+  return call<ZCodeCompatResult>('GetZCodeCompat')
+}
+export async function RepairZCodeCompat(): Promise<ZCodeCompatRepairResult> {
+  return call<ZCodeCompatRepairResult>('RepairZCodeCompat')
 }

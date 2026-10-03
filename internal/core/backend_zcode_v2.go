@@ -31,8 +31,12 @@ func (zcodeV2Backend) Descriptor() BackendDescriptor {
 	}
 }
 
-// Read 读取并严格校验新版配置。文件不存在等价于一份空的新版配置（与 LoadConfig
+// Read 读取并校验新版配置。文件不存在等价于一份空的新版配置（与 LoadConfig
 // 对缺失文件返回空 map 的语义对齐）。
+//
+// 这里用宽松解码：ZCode 3.14 会拒绝、但本包仍能读写的兼容性问题（builtinModelIds、
+// 家族 group、旧 logo 形状等）不该让配置打不开——它们由 InspectZCodeCompat
+// 单独列出，UI 再提示修复。结构性问题（JSON 形状、必填字段）仍然返回错误。
 func (zcodeV2Backend) Read(path string) (Doc, error) {
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return zcodeprovider.NewConfig().Doc(), nil
@@ -41,7 +45,7 @@ func (zcodeV2Backend) Read(path string) (Doc, error) {
 	if err != nil {
 		return nil, &ConfigParseError{Msg: fmt.Sprintf("读取配置文件失败：%v", err)}
 	}
-	cfg, err := zcodeprovider.Decode(data)
+	cfg, _, err := zcodeprovider.DecodeInspect(data)
 	if err != nil {
 		return nil, &ConfigParseError{Msg: err.Error()}
 	}
