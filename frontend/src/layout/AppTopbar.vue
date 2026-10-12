@@ -57,7 +57,6 @@ const isMaximised = ref(false)
 
 const agentOptions = [
   { label: 'ZCode', value: 'zcode' },
-  { label: 'OpenCode', value: 'opencode' },
   { label: 'DeepSeek Harness', value: 'deepseek' },
 ]
 

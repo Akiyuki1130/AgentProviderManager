@@ -44,11 +44,13 @@ function loadBool(key: string, def: boolean): boolean {
   if (v === 'false') return false
   return def
 }
+// OpenCode 入口已隐藏：本地历史值 "opencode" 归一化回落到 zcode，
+// 避免应用停在一个不可选的 Agent 上。AgentID 类型保留并集以兼容历史数据。
 function loadAgent(): AgentID {
   const v = localStorage.getItem(AGENT_KEY)
-  if (v === 'zcode' || v === 'opencode' || v === 'deepseek') return v
+  if (v === 'zcode' || v === 'deepseek') return v
   const legacy = localStorage.getItem('zcode-pm:agent')
-  if (legacy === 'zcode' || legacy === 'opencode' || legacy === 'deepseek') return legacy as AgentID
+  if (legacy === 'zcode' || legacy === 'deepseek') return legacy as AgentID
   return 'zcode'
 }
 

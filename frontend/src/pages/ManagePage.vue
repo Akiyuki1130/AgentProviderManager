@@ -96,10 +96,6 @@
                 <span class="batch-group-label">默认档位</span>
                 <n-select v-model:value="batchDefault" :options="variantSelectOpts" placeholder="—" style="width: 100px" size="small" clearable @update:value="batchSetDefault" />
               </div>
-              <div v-if="settingStore.agent === 'opencode'" class="batch-row batch-row--wrap batch-capability-row">
-                <span class="batch-group-label">OpenCode 能力</span>
-                <button class="batch-capability-pill" :class="{ checked: batchAttachmentOn }" type="button" @click="batchToggleCapability('attachment')">支持附件</button>
-              </div>
               <div class="batch-row batch-row--wrap">
                 <span class="batch-group-label">上下文长度</span>
                 <n-input v-model:value="batchContext" placeholder="回车应用" size="small" style="width: 100px" @keydown.enter="applyBatchLimit('context')" />
@@ -203,7 +199,6 @@ const filteredCards = computed(() => {
 const allSelected = computed(() => filteredCards.value.length > 0 && filteredCards.value.every((c) => c.select))
 const hasSelected = computed(() => filteredCards.value.some((c) => c.select))
 const batchReasoningOn = computed(() => filteredCards.value.length > 0 && filteredCards.value.every((c) => c.reasoning))
-const batchAttachmentOn = computed(() => filteredCards.value.length > 0 && filteredCards.value.every((c) => c.attachment === true))
 
 watch(hideBuiltinNoKey, (v) => { localStorage.setItem('zcpm.hideBuiltinNoKey', v ? '1' : '0') })
 
@@ -379,10 +374,6 @@ function batchSetDefault(v: string) {
   }
   batchDefault.value = ''
 }
-function batchToggleCapability(field: 'attachment') {
-  const next = !filteredCards.value.every((c) => c[field] === true)
-  for (const c of filteredCards.value) c[field] = next
-}
 function applyBatchLimit(field: 'context' | 'output') {
   const val = field === 'context' ? batchContext.value : batchOutput.value
   for (const c of filteredCards.value) (c as Record<string, unknown>)[field] = val
@@ -548,10 +539,6 @@ onUnmounted(() => {
 .batch-hint { font-size: 10px; color: var(--fluent-text-soft); opacity: 0.75; }
 .batch-pill { font-size: 11px; border: 1px solid var(--fluent-border); border-radius: 999px; padding: 2px 8px; cursor: pointer; }
 .batch-pill:hover { border-color: var(--accent); }
-.batch-capability-row { border-top: 1px solid var(--fluent-border); padding-top: 8px; }
-.batch-capability-pill { font-size: 11px; border: 1px solid var(--fluent-border); border-radius: 999px; padding: 3px 10px; cursor: pointer; background: var(--fluent-card-bg); color: inherit; }
-.batch-capability-pill:hover, .batch-capability-pill.checked { border-color: var(--accent); }
-.batch-capability-pill.checked { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); }
 .list-scroll { display: flex; flex-direction: column; min-height: 0; }
 @media (max-width: 1099px) { .manage-layout { grid-template-columns: 1fr; } .provider-sidebar { height: auto; max-height: 32vh; } }
 .empty-state { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 24px; color: var(--fluent-text-soft); text-align: center; }

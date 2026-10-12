@@ -108,9 +108,14 @@ function toast(type: string, title: string, msg?: string) {
   if (fn) fn(type, title, msg)
 }
 
+// OpenCode 已从入口隐藏：历史/异常值 "opencode" 一律按 ZCode 处理。
+function normalizeAgentID(v: string): AgentID {
+  if (v === 'deepseek') return 'deepseek'
+  return 'zcode'
+}
+
 function agentLabel(agent: string): string {
-  if (agent === 'zcode') return 'ZCode'
-  if (agent === 'opencode') return 'OpenCode'
+  if (agent === 'zcode' || agent === 'opencode') return 'ZCode'
   if (agent === 'deepseek') return 'DeepSeek Harness'
   return agent
 }
@@ -138,13 +143,14 @@ function onChangeAgent(agent: string) {
 }
 
 async function doChangeAgent(agent: string) {
-  const res = await api.SetCurrentAgent(agent) as Record<string, unknown>
+  const agentID = normalizeAgentID(agent)
+  const res = await api.SetCurrentAgent(agentID) as Record<string, unknown>
   if (res['success']) {
-    settingStore.setAgent(agent as AgentID)
+    settingStore.setAgent(agentID)
     targetPath.value = (res['path'] as string) || targetPath.value
     await refreshBackup()
-    window.dispatchEvent(new CustomEvent('agent-changed', { detail: agent }))
-    toast('success', '已切换 Agent', `${agentLabel(agent)} → ${targetPath.value}`)
+    window.dispatchEvent(new CustomEvent('agent-changed', { detail: agentID }))
+    toast('success', '已切换 Agent', `${agentLabel(agentID)} → ${targetPath.value}`)
   } else {
     toast('error', '切换失败', res['error'] as string)
   }
@@ -235,7 +241,7 @@ onMounted(async () => {
     const ag = await api.GetCurrentAgent() as Record<string, unknown>
     const cur = ag['agent'] as string
     if (cur === 'zcode' || cur === 'opencode' || cur === 'deepseek') {
-      settingStore.setAgent(cur as AgentID)
+      settingStore.setAgent(normalizeAgentID(cur))
     }
   } catch { /* ignore */ }
   try {
@@ -243,7 +249,7 @@ onMounted(async () => {
     targetPath.value = (info['path'] as string) || ''
     if (info['agent'] && typeof info['agent'] === 'string') {
       const ag = info['agent'] as string
-      if (ag === 'zcode' || ag === 'opencode' || ag === 'deepseek') settingStore.setAgent(ag as AgentID)
+      if (ag === 'zcode' || ag === 'opencode' || ag === 'deepseek') settingStore.setAgent(normalizeAgentID(ag))
     }
     await refreshBackup()
   } catch { /* ignore */ }

@@ -114,18 +114,17 @@ type Side = { agent: string; label: string; path: string; exists: boolean; error
 
 const agentOptions = [
   { label: 'ZCode', value: 'zcode' },
-  { label: 'OpenCode', value: 'opencode' },
   { label: 'DeepSeek Harness', value: 'deepseek' },
 ]
 
 const sourceAgent = ref('zcode')
-const targetAgent = ref('opencode')
+const targetAgent = ref('deepseek')
 const mode = ref<'merge' | 'overwrite'>('merge')
 const previewing = ref(false)
 const migrating = ref(false)
 const previewError = ref('')
 const sourceSide = ref<Side>({ agent: 'zcode', label: 'ZCode', path: '', exists: false, error: '', providers: [], raw_text: '', format: 'json' })
-const targetSide = ref<Side>({ agent: 'opencode', label: 'OpenCode', path: '', exists: false, error: '', providers: [], raw_text: '', format: 'json' })
+const targetSide = ref<Side>({ agent: 'deepseek', label: 'DeepSeek Harness', path: '', exists: false, error: '', providers: [], raw_text: '', format: 'json' })
 const selectedIds = ref<string[]>([])
 
 const sourceProviders = computed(() => sourceSide.value.providers || [])

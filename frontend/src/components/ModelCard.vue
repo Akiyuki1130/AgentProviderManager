@@ -60,21 +60,6 @@
             <option v-for="v in variantOptions" :key="v" :value="v">{{ v }}</option>
           </select>
         </div>
-        <div v-if="isOpenCode" class="mc-capabilities">
-          <label><input type="checkbox" v-model="card.attachment" /> 支持附件</label>
-        </div>
-        <div v-if="isOpenCode" class="mc-field mc-json-field">
-          <label title="输入/输出模态，使用逗号分隔">输入/输出模态（逗号分隔）</label>
-          <input class="field" :value="modalitiesValue" @change="onModalitiesChange" placeholder="text,image" />
-        </div>
-        <div v-if="isOpenCode" class="mc-field mc-json-field">
-          <label>模型 Headers JSON</label>
-          <input class="field" :value="jsonValue(card.headers)" @change="onHeadersChange" placeholder='{"x-api-key":"..."}' />
-        </div>
-        <div v-if="isOpenCode" class="mc-field mc-json-field">
-          <label>模型 Options JSON</label>
-          <input class="field" :value="jsonValue(card.options)" @change="onOptionsChange" placeholder='{"reasoningEffort":"high"}' />
-        </div>
         <div class="mc-field">
           <label>上下文长度 (tokens)</label>
           <input class="field" :value="card.context" @input="onContextInput" placeholder="留空自动匹配" />
@@ -99,28 +84,7 @@ const emit = defineEmits<{ (e: 'delete'): void; (e: 'update'): void }>()
 const settingStore = useSettingStore()
 
 const expanded = ref(false)
-const isOpenCode = computed(() => props.agent === 'opencode')
 const variantOptions = computed(() => props.agent === 'deepseek' ? ['off', 'low', 'high', 'max'] : ['off', 'low', 'medium', 'high', 'xhigh', 'max'])
-const supportedModalities = ['text', 'audio', 'image', 'video', 'pdf']
-const modalitiesValue = computed(() => {
-  const modalities = props.card.modalities
-  if (!modalities || typeof modalities !== 'object') return ''
-  const values = [...toModalityList(modalities.input), ...toModalityList(modalities.output)]
-  return [...new Set(values)].join(',')
-})
-function toModalityList(value: unknown): string[] {
-  if (!Array.isArray(value)) return []
-  return value.filter((item): item is string => typeof item === 'string' && supportedModalities.includes(item))
-}
-function jsonValue(value: unknown) { return value == null ? '' : JSON.stringify(value) }
-function parseJsonField(e: Event, key: 'modalities' | 'options') { const value = (e.target as HTMLInputElement).value.trim(); if (!value) { props.card[key] = undefined; return }; try { const parsed = JSON.parse(value); if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) props.card[key] = parsed as never } catch { /* keep last valid value */ } }
-function onModalitiesChange(e: Event) {
-  const values = [...new Set((e.target as HTMLInputElement).value.split(',').map((item) => item.trim().toLowerCase()).filter((item) => supportedModalities.includes(item)))]
-  props.card.modalities = values.length ? { input: [...values], output: [...values] } : undefined
-  emit('update')
-}
-function onOptionsChange(e: Event) { parseJsonField(e, 'options'); emit('update') }
-function onHeadersChange(e: Event) { const value = (e.target as HTMLInputElement).value.trim(); if (!value) { props.card.headers = undefined; emit('update'); return }; try { const parsed = JSON.parse(value); if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && Object.values(parsed).every((v) => typeof v === 'string')) props.card.headers = parsed as Record<string, string>; emit('update') } catch { /* keep last valid value */ } }
 
 function toggleExpand() { expanded.value = !expanded.value }
 function onSelectChange(e: Event) { props.card.select = (e.target as HTMLInputElement).checked; emit('update') }
@@ -171,11 +135,9 @@ function onOutputInput(e: Event) { props.card.output = (e.target as HTMLInputEle
 .mc-params > *, .mc-field { min-width: 0; }
 .mc-field { display: flex; flex-direction: column; gap: 2px; }
 .mc-field.span-2 { grid-column: span 2; }
-.mc-json-field { grid-column: 1 / -1; }
 .mc-field label { min-width: 0; font-size: 11px; color: var(--fluent-text-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mc-field .field { height: 30px; font-size: 12px; }
 .mc-field .switch-row { display: flex; align-items: center; height: 30px; }
-.mc-capabilities { grid-column: 1 / -1; display: flex; gap: 14px; align-items: center; flex-wrap: wrap; font-size: 11px; color: var(--fluent-text-soft); }
 .mc-tip { grid-column: 1 / -1; font-size: 10px; color: var(--fluent-text-soft); }
 .mc-effort { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; background: color-mix(in srgb, var(--accent, #0078d4) 8%, transparent); border: 1px solid var(--fluent-border); border-radius: 8px; padding: 8px 12px; }
 .mc-effort label { font-size: 11px; color: var(--fluent-text-soft); white-space: nowrap; }
