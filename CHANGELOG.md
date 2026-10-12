@@ -1,5 +1,43 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **DeepSeek Harness 0.2 configuration backend.** DSH 0.2 (today's desktop app and the CLI `web` profile) keeps user configuration in per-profile patch layers, so the agent now has real config backends instead of hardcoded branches: `~/.dsh/profiles/desktop/cordis.patch.yml` (desktop), `~/.dsh/profiles/web/cordis.patch.yml` (`dsh web` / `dsh --profile web`), any other `profiles/<name>/cordis.patch.yml`, and the home-level `~/.dsh/cordis.patch.yml`. Providers are read from and written to the `id: llm-pi-ai` entry's `config.providers` (plugin `@deepseek-ai/dsh-llm-pi-ai`); entries are created the same way DSH's own config editor creates them, and the surrounding rows, comments and `!!js` expressions are preserved because the patch is edited as a YAML node tree.
+- `internal/dshprovider`: format detection (desktop / web / custom profile / legacy settings), profile-patch read/write with `yaml.v3` node trees, and the `version: 1` + `refs`/`records` credentials document. A 0.1 flat credentials file is upgraded to the versioned layout on write and existing `records`/comments survive.
+- Config location detection for DeepSeek Harness now lists the desktop patch, the web patch, every other discovered profile patch and the home-level patch alongside the legacy `settings.*` files, with their real provider counts. A fresh install prefers the 0.2 desktop patch on startup, and an already-configured 0.1 `settings.yaml` target is switched to the 0.2 profile patch when one exists.
+
+### Changed
+
+- The backend registry is no longer ZCode-specific: `RegisterBackendForFormat`/`RegisterFormatDetector` take a `BackendFormat`, so ZCode (v2/legacy) and DeepSeek Harness (profile/settings) both route through `GetBackend`.
+- `ListProviders`, `GetProvider`, `SaveProvider`, `DeleteProvider`, `DeleteModel`, `RefreshProviderModels`, `ImportProvider`, target validation and the config IO helpers now go through `GetBackend` for every agent that registers backends; the shelved OpenCode keeps its generic JSON path but has no UI entry point. Responses carry a `format` field so the caller can tell a 0.2 profile patch from a 0.1 `settings.yaml`.
+- DeepSeek provider entries are encoded in one place (`deepSeekBuildEntry`): a route always declares its pi-ai protocol (`openai-completions` / `openai-responses` / `anthropic-messages`), the API key becomes an `apiKeyEnv` reference and the secret is written to `.credentials.yaml`; renaming a provider follows `agent-default-model` in both the legacy settings document and the profile patch.
+- Cross-agent migration is now backend-driven on both sides: source and target are resolved with `GetBackend`, providers are read as `ProviderEdit` and written through the target's `Store.Upsert`, and previews list each side from the file the user actually selected (falling back to the new-format-first default paths). ZCode (new `provider_config.json` / legacy `config.json`) and DeepSeek Harness (0.2 profile patch / 0.1 `settings.yaml`) can be migrated into each other in both directions and in both merge and overwrite mode; the old `deepSeekMigratePathGuard` refusal (and the `AgentOpenCode` default target) are gone. Migrating into a profile patch that a home-level patch shadows still fails with the explicit override error, and a patch's comments / `!!js` rows survive because the write goes through the YAML node-tree editor.
+
+### Changed (UI)
+
+- OpenCode is shelved and no longer offered anywhere in the app: the agent switcher, the migration page and the OpenCode-only editor rows are gone, and a stored `agent: opencode` setting falls back to ZCode on load. The `AgentOpenCode` constant, the conversion/import code and the historical restore-point badge/label stay in place.
+
+### Fixed
+
+- Switching agents in the top bar used to point the target at the legacy file (`config.json` for ZCode, `settings.yaml` for DeepSeek Harness) even when the new format existed; it now resolves the target exactly like startup does (new-format-first), so switching to DeepSeek Harness lands on the 0.2 profile patch instead of the 0.1 settings file.
+- `MergeConfig` / `PreviewConfigMerge` (merging providers out of a chosen configuration file) no longer use the legacy-only provider map: they detect the source file's agent/format, read it through the matching backend and write through the target's backend, so a ZCode new-format target stays strictly decodable, a DeepSeek Harness 0.2 target is no longer rejected, and API keys are staged into the right place (`.credentials.yaml` for DSH).
+- Historical restore points created for OpenCode still show `OpenCode` as their agent label now that `AllAgents()` no longer contains it.
+- **A fresh ZCode install could write a legacy provider map into `provider_config.json`.** When the new-format file did not exist yet (or existed but was empty), content-based format detection returned `unknown` and the legacy backend took over, so the first `SaveProvider` / `ImportProvider` / migration produced `{"provider": {...}}` inside `provider_config.json`. ZCode's `.strict()` schema rejects that document and the agent behaves as if the whole personal configuration were empty. `provider_config.json` (the default location, the `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` override, or any file with that name) is now routed to the v2 backend by path as well as by content, and an empty new-format file is read as an empty configuration instead of failing with `EOF`.
+- Writing a profile patch no longer loses `!!js` expressions, comments, or key order inside the `llm-pi-ai` entry's `config`: `SetProviders`/`SetAgentDefaultModel` now update only the changed nodes of the YAML tree instead of decoding the whole `config` into a map and re-encoding it (which silently turned `!!js process.env.X` into the literal string `process.env.X`). Provider entries whose values actually changed are still re-encoded.
+- The home-level `$DSH_HOME/cordis.patch.yml` is recognised as a patch even when it does not exist yet or is empty / comment-only. Previously such a file was classified as unknown, fell back to the 0.1 settings backend, and a save rewrote it with the `llm-pi-ai:` settings layout, which DSH 0.2 cannot read.
+- Model discovery no longer sends an empty `Authorization: Bearer ` header when a redirect returns to the original host with no API key, and the redirect-auth code cannot panic on an unparsable URL. Cross-host redirects still drop the API key.
+- Reasoning variant lists read from a model map are now sorted in the canonical UI order, so the same configuration no longer produces a different variant order (and a rewritten file) on every read.
+- Private/reserved address filtering now strips an IPv6 zone id (`fe80::1%eth0`, `::1%eth0`, `fd00::1%eth0`) before parsing, closing a bypass in the SSRF pre-check.
+- The updater's helper argument replacement is deterministic (fixed placeholder order, single pass) instead of iterating a map.
+- `ImportProvider` now reports the model count of the written provider, so a merge that keeps existing models reports the final total instead of only the submitted cards.
+- Cross-agent migration keeps provider-level extras that both sides can express: a ZCode new-format provider's `api.headers` now lands in the DSH route's `headers`, and a DSH route's `headers` come back as `api.headers` (the DSH store exposes the pi-ai profile's passthrough fields through `options_json`, the v2 store lifts `options.headers` into the rule, and unknown keys are still never copied into a DSH patch).
+- A write that is refused because the home-level patch shadows `llm-pi-ai` no longer leaves an empty restore point and a sibling `.bak_` file behind: the override is detected before the snapshot is taken.
+- The `ImportProvider` guard for "empty model list with merge_models=false" now reports its own message ("为避免误删已有模型，已取消导入") instead of being unreachable behind the generic `BuildProviderCfg` validation error.
+- DeepSeek credentials were written in the pre-0.2 flat layout, which DSH 0.2 rejects at startup (`uses the pre-release flat layout`); writes now always produce `version: 1` with a `refs` section while preserving `records`.
+- An `llm-pi-ai` configuration in the home-level patch shadows the profile layer; the app now reports the effective providers from the home patch and refuses writes/deletes that would silently have no effect.
+
 ## 2.0.7 — 2026-10-03
 
 ### Fixed
