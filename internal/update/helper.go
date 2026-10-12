@@ -148,18 +148,17 @@ func ReplaceHelperArgs(args []string, req InstallRequest) ([]string, error) {
 		return nil, err
 	}
 	digest, _ := normalizeDigest(req.ExpectedSHA256)
-	replacements := map[string]string{
-		"{parent_pid}":  strconv.Itoa(req.ParentPID),
-		"{staged_path}": req.StagedPath,
-		"{target_path}": req.TargetPath,
-		"{sha256}":      digest,
-	}
+	// 固定顺序的单次替换：既保证结果与 map 迭代顺序无关，也不会把替换进来的
+	// 路径文本再当成占位符处理（strings.NewReplacer 不会重新扫描已替换的内容）。
+	replacer := strings.NewReplacer(
+		"{parent_pid}", strconv.Itoa(req.ParentPID),
+		"{staged_path}", req.StagedPath,
+		"{target_path}", req.TargetPath,
+		"{sha256}", digest,
+	)
 	out := make([]string, len(args))
 	for i, arg := range args {
-		for from, to := range replacements {
-			arg = strings.ReplaceAll(arg, from, to)
-		}
-		out[i] = arg
+		out[i] = replacer.Replace(arg)
 	}
 	return out, nil
 }
