@@ -3,8 +3,10 @@ package core
 import (
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
+	"agentprovidermanager/internal/dshprovider"
 	"agentprovidermanager/internal/zcodeprovider"
 )
 
@@ -24,16 +26,19 @@ type AgentDef struct {
 }
 
 func AllAgents() []AgentDef {
+	// OpenCode 入口已在应用内完全隐藏：AllAgents 只返回当前可选的 Agent。
+	// AgentOpenCode 常量与 NormalizeAgentID 的识别能力保留，供历史数据与内部兼容使用。
 	return []AgentDef{
 		{ID: AgentZCode, Label: "ZCode", LabelEn: "ZCode", DetectLabel: "ZCode 全局配置"},
-		{ID: AgentOpenCode, Label: "OpenCode", LabelEn: "OpenCode", DetectLabel: "OpenCode 配置"},
 		{ID: AgentDeepSeek, Label: "DeepSeek Harness", LabelEn: "DeepSeek Harness", DetectLabel: "DeepSeek 配置"},
 	}
 }
 
+// IsValidAgent 只把当前可选的 Agent 视为合法；已雪藏的 OpenCode 返回 false，
+// app.go 的 loadAgentState 借此让本地已存的 "opencode" 回落。
 func IsValidAgent(id string) bool {
 	switch AgentID(strings.ToLower(strings.TrimSpace(id))) {
-	case AgentZCode, AgentOpenCode, AgentDeepSeek:
+	case AgentZCode, AgentDeepSeek:
 		return true
 	}
 	return false
@@ -119,6 +124,167 @@ func ZCodeFormatName(f zcodeprovider.Format) string {
 func IsZCodeV2Path(path string) bool {
 	return DetectZCodeFormatAt(path) == zcodeprovider.FormatV2
 }
+
+// AgentFormatName 返回目标文件在 UI 上的形态名，用于提示用户当前正在编辑哪种格式。
+func AgentFormatName(agentID, path string) string {
+	switch NormalizeAgentID(agentID) {
+	case AgentZCode:
+		return ZCodeFormatName(DetectZCodeFormatAt(path))
+	case AgentDeepSeek:
+		return DeepSeekFormatName(DetectDeepSeekFormatAt(path))
+	}
+	return ""
+}
+
+// DeepSeek Harness 0.2 的配置位置。
+//
+// 桌面端与 CLI 的 web profile 是同一套 bundle 栈（dsh-base + dsh-web-app），
+// 因此二者的 patch 结构完全一致，区别只在 profile 目录：桌面端用 Electron
+// 保留的 profiles/desktop，CLI 用 profiles/web（dsh web 等价于 dsh --profile web）。
+// 自定义 profile（dsh --profile <name>）同样是 profiles/<name>/cordis.patch.yml。
+//
+//	$DSH_HOME/profiles/<name>/cordis.patch.yml   每个 profile 的用户 patch
+//	$DSH_HOME/cordis.patch.yml                   home 级 patch（优先级更高，会覆盖 profile 层）
+//	$DSH_HOME/.credentials.yaml                  凭据（version 1 + refs/records）
+//	$DSH_HOME/settings.yaml                      0.1 的旧格式，0.2 只导入一次
+
+// DeepSeekProfilesDir 返回 $DSH_HOME/profiles。
+func DeepSeekProfilesDir() string {
+	return filepath.Join(DshHome(), dshprovider.ProfilesDirName)
+}
+
+// DeepSeekProfileDir 返回某个 profile 的目录。
+func DeepSeekProfileDir(name string) string {
+	return dshprovider.ProfileDir(DshHome(), name)
+}
+
+// DeepSeekProfilePatch 返回某个 profile 的用户 patch 路径。
+func DeepSeekProfilePatch(name string) string {
+	return dshprovider.ProfilePatchPath(DshHome(), name)
+}
+
+// DeepSeekDesktopProfilePatch 返回桌面端 profile 的 patch 路径。
+func DeepSeekDesktopProfilePatch() string {
+	return DeepSeekProfilePatch(dshprovider.DesktopProfileName)
+}
+
+// DeepSeekWebProfilePatch 返回 web profile 的 patch 路径。
+func DeepSeekWebProfilePatch() string {
+	return DeepSeekProfilePatch(dshprovider.WebProfileName)
+}
+
+// DeepSeekHomePatch 返回 home 级 patch 路径。
+func DeepSeekHomePatch() string {
+	return dshprovider.HomePatchPath(DshHome())
+}
+
+// DeepSeekProfilePatches 返回已存在的 profile patch（按 profile 名排序，桌面端优先）。
+func DeepSeekProfilePatches() []string {
+	entries, err := os.ReadDir(DeepSeekProfilesDir())
+	if err != nil {
+		return nil
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() {
+			names = append(names, e.Name())
+		}
+	}
+	sort.Slice(names, func(i, j int) bool {
+		if names[i] == dshprovider.DesktopProfileName {
+			return true
+		}
+		if names[j] == dshprovider.DesktopProfileName {
+			return false
+		}
+		if names[i] == dshprovider.WebProfileName {
+			return true
+		}
+		if names[j] == dshprovider.WebProfileName {
+			return false
+		}
+		return names[i] < names[j]
+	})
+	out := make([]string, 0, len(names))
+	for _, name := range names {
+		path := DeepSeekProfilePatch(name)
+		if _, err := os.Stat(path); err == nil {
+			out = append(out, path)
+		}
+	}
+	return out
+}
+
+// DeepSeekDefaultPath 选择 DSH 的默认目标：
+// 已存在的 desktop patch -> web patch -> 其它 profile patch -> home patch ->
+// 旧版 settings.* -> 新装用户的 desktop patch。只允许 app 层调用。
+func DeepSeekDefaultPath() string {
+	for _, path := range []string{DeepSeekDesktopProfilePatch(), DeepSeekWebProfilePatch()} {
+		if _, err := os.Stat(path); err == nil {
+			return path
+		}
+	}
+	if patches := DeepSeekProfilePatches(); len(patches) > 0 {
+		return patches[0]
+	}
+	if _, err := os.Stat(DeepSeekHomePatch()); err == nil {
+		return DeepSeekHomePatch()
+	}
+	if _, err := os.Stat(DeepSeekSettingsPath()); err == nil {
+		return DeepSeekSettingsPath()
+	}
+	return DeepSeekDesktopProfilePatch()
+}
+
+// IsDeepSeekProfilePath 表示该路径是 DSH 0.2 的 profile patch（cordis.patch.yml）。
+func IsDeepSeekProfilePath(path string) bool {
+	if strings.TrimSpace(path) == "" {
+		return false
+	}
+	format := DetectDeepSeekFormatAt(path)
+	return format == dshprovider.FormatProfileDesktop || format == dshprovider.FormatProfileWeb || format == dshprovider.FormatProfileOther
+}
+
+// DetectDeepSeekFormatAt 读取目标文件并判定 DSH 配置形态。
+func DetectDeepSeekFormatAt(path string) dshprovider.Format {
+	if strings.TrimSpace(path) == "" {
+		return dshprovider.FormatUnknown
+	}
+	return dshprovider.DetectFile(path)
+}
+
+// DeepSeekFormatName 把形态映射为前端字面量。
+func DeepSeekFormatName(f dshprovider.Format) string {
+	switch f {
+	case dshprovider.FormatProfileDesktop:
+		return "profile-desktop"
+	case dshprovider.FormatProfileWeb:
+		return "profile-web"
+	case dshprovider.FormatProfileOther:
+		return "profile-other"
+	case dshprovider.FormatSettingsLegacy:
+		return "settings-legacy"
+	default:
+		return "unknown"
+	}
+}
+
+// DeepSeekFormatLabel 返回给用户看的形态名称。
+func DeepSeekFormatLabel(f dshprovider.Format) string {
+	switch f {
+	case dshprovider.FormatProfileDesktop:
+		return "DeepSeek Harness 桌面端 profile（0.2）"
+	case dshprovider.FormatProfileWeb:
+		return "DeepSeek Harness web profile（0.2）"
+	case dshprovider.FormatProfileOther:
+		return "DeepSeek Harness 自定义 profile（0.2）"
+	case dshprovider.FormatSettingsLegacy:
+		return "DeepSeek Harness 旧版 settings（0.1，仅导入）"
+	default:
+		return "DeepSeek Harness 配置"
+	}
+}
+
 
 func DshHome() string {
 	if v := strings.TrimSpace(os.Getenv("DSH_HOME")); v != "" {

@@ -449,10 +449,15 @@ func TestGetBackendZCodeFormatRouting(t *testing.T) {
 	}
 
 	// 其它 agent 的既有行为不变：未注册 backend -> 报错。
-	for _, agentID := range []string{"opencode", "deepseek", "opvcode", ""} {
+	for _, agentID := range []string{"opencode", "opvcode", ""} {
 		if _, err := GetBackend(agentID, v2Path); err == nil {
 			t.Errorf("agent「%s」不应有 backend", agentID)
 		}
+	}
+	// DeepSeek Harness 现在也有 backend（profile patch / settings 两种形态），
+	// 且目标路径不落在 profiles/<name>/ 时回落到 settings backend。
+	if _, err := GetBackend("deepseek", v2Path); err != nil {
+		t.Errorf("deepseek 应已有 backend：%v", err)
 	}
 }
 

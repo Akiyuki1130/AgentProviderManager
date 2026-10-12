@@ -1,6 +1,7 @@
 package core
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"sort"
@@ -19,7 +20,7 @@ import (
 type zcodeV2Backend struct{}
 
 func init() {
-	RegisterBackendForFormat(string(AgentZCode), zcodeprovider.FormatV2, zcodeV2Backend{})
+	RegisterBackendForFormat(string(AgentZCode), BackendFormatZCodeV2, zcodeV2Backend{})
 }
 
 func (zcodeV2Backend) Descriptor() BackendDescriptor {
@@ -44,6 +45,11 @@ func (zcodeV2Backend) Read(path string) (Doc, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, &ConfigParseError{Msg: fmt.Sprintf("读取配置文件失败：%v", err)}
+	}
+	// 空文件（例如刚被创建出来、或上次写入中断留下 0 字节）等价于一份空的新版配置：
+	// 否则第一次保存会以“解析失败：EOF”直接拒绝，用户只能手动填内容。
+	if strings.TrimSpace(string(data)) == "" {
+		return zcodeprovider.NewConfig().Doc(), nil
 	}
 	cfg, _, err := zcodeprovider.DecodeInspect(data)
 	if err != nil {
@@ -137,6 +143,14 @@ func (zcodeV2Store) Get(doc Doc, providerID string) (*ProviderEdit, error) {
 	sort.Slice(cards, func(i, j int) bool {
 		return strings.ToLower(cards[i].ModelID) < strings.ToLower(cards[j].ModelID)
 	})
+	// headers 之类“未单独建模但可表达”的字段通过 options_json 暴露：
+	// 跨 Agent 迁移与编辑器保存都靠它把这些字段带到目标格式，否则会被静默丢掉。
+	optionsJSON := ""
+	if headers := zcodeprovider.ProviderAPIHeaders(providerCfg); len(headers) > 0 {
+		if b, err := json.Marshal(map[string]interface{}{"headers": headers}); err == nil {
+			optionsJSON = string(b)
+		}
+	}
 	return &ProviderEdit{
 		ID:             providerID,
 		Name:           name,
@@ -144,6 +158,7 @@ func (zcodeV2Store) Get(doc Doc, providerID string) (*ProviderEdit, error) {
 		BaseURL:        zcodeprovider.ProviderAPIBaseURL(providerCfg),
 		APIKey:         apiKey,
 		APIKeyRequired: strings.TrimSpace(apiKey) != "",
+		OptionsJSON:    optionsJSON,
 		Cards:          cards,
 	}, nil
 }
@@ -160,6 +175,13 @@ func (zcodeV2Store) Upsert(doc Doc, providerID string, p ProviderPayload, _ Save
 	newID, providerCfg, err := BuildProviderCfgEditor(p)
 	if err != nil {
 		return nil, err
+	}
+	// FromLegacy 读取的是 provider 顶层的 headers（旧版 ZCode 形状），而编辑器/迁移载荷把
+	// 额外字段放在 options 里；这里把它抬到顶层，否则 headers 在导入与跨 Agent 迁移时会丢。
+	if opts, ok := providerCfg["options"].(map[string]interface{}); ok {
+		if headers, ok := opts["headers"].(map[string]interface{}); ok && len(headers) > 0 {
+			providerCfg["headers"] = headers
+		}
 	}
 	cfg := zcodeprovider.NewConfigFromDoc(doc)
 	converted, _, err := zcodeprovider.FromLegacy(map[string]interface{}{

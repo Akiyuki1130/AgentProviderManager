@@ -2,6 +2,7 @@ package core
 
 import (
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -80,6 +81,22 @@ func canonicalVariant(value string) string {
 	}
 }
 
+// variantOrderIndex 返回规范化档位在固定 UI 顺序中的下标；未知档位排最后。
+func variantOrderIndex(v string) int {
+	for i, o := range ZCodeVariantOptions {
+		if o == v {
+			return i
+		}
+	}
+	return len(ZCodeVariantOptions)
+}
+
+// sortVariantsCanonical 把从 map 迭代收集来的档位按固定顺序排好。
+// map 的迭代顺序是随机的，不排序会让同一份配置每次读出的档位顺序都不同。
+func sortVariantsCanonical(v []string) []string {
+	sort.SliceStable(v, func(i, j int) bool { return variantOrderIndex(v[i]) < variantOrderIndex(v[j]) })
+	return v
+}
 // NormalizeVariants normalizes reasoning variants to deduplicated lowercase list.
 func NormalizeVariants(value interface{}) []string {
 	if value == nil {

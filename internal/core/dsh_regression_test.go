@@ -143,7 +143,9 @@ func TestDeepSeekCredentialsWritePreservesRefs(t *testing.T) {
 	}
 }
 
-func TestDeepSeekCredentialsWriteLegacyFormat(t *testing.T) {
+// DSH 0.2 的凭据文件是 version: 1 + refs/records 布局，
+// 0.1 的扁平顶层键会被 DSH 直接拒绝，因此写入必须把旧布局升级掉。
+func TestDeepSeekCredentialsWriteUpgradesLegacyFormat(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("DSH_HOME", dir)
 	path := DeepSeekCredentialsPath()
@@ -161,11 +163,15 @@ func TestDeepSeekCredentialsWriteLegacyFormat(t *testing.T) {
 	if err := yaml.Unmarshal(data, &raw); err != nil {
 		t.Fatal(err)
 	}
-	if raw["NEW_KEY"] != "new-value" || raw["EXISTING_KEY"] != "existing-value" {
-		t.Fatalf("legacy credentials not preserved: %#v", raw)
+	if raw["version"] != 1 {
+		t.Fatalf("legacy layout must be upgraded to version 1: %#v", raw)
 	}
-	if _, ok := raw["refs"]; ok {
-		t.Fatal("legacy format unexpectedly changed")
+	refs, ok := raw["refs"].(map[string]interface{})
+	if !ok || refs["NEW_KEY"] != "new-value" || refs["EXISTING_KEY"] != "existing-value" {
+		t.Fatalf("legacy credentials not preserved under refs: %#v", raw)
+	}
+	if _, ok := raw["NEW_KEY"]; ok {
+		t.Fatal("new credential must not be written at the root")
 	}
 }
 
@@ -246,6 +252,9 @@ func TestDshReasoningEffortsPreserveEnabledAndSingleVariant(t *testing.T) {
 
 func TestZCodeToDeepSeekPreservesReasoningState(t *testing.T) {
 	dir := t.TempDir()
+	// 迁移的 overwrite 路径会调用目标 store.List，DSH 的 List 会读凭据文件；
+	// 把 DSH_HOME 指到临时目录，确保测试不读取真实用户凭据。
+	t.Setenv("DSH_HOME", t.TempDir())
 	sourcePath := filepath.Join(dir, "zcode.json")
 	targetPath := filepath.Join(dir, "dsh.json")
 	source := map[string]interface{}{

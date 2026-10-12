@@ -1,6 +1,12 @@
 package core
 
-import "fmt"
+import (
+	"fmt"
+	"path/filepath"
+	"strings"
+
+	"agentprovidermanager/internal/zcodeprovider"
+)
 
 // zcodeLegacyBackend 是现有 ZCode config.json（旧版格式）的 backend。
 // 方法体照搬既有实现（LoadConfig / LoadConfigWithFingerprint / WriteConfig /
@@ -8,7 +14,48 @@ import "fmt"
 // NormalizeConfigKinds），只做接口化封装，不改变行为，也不做备份与指纹校验（由 app 层负责）。
 type zcodeLegacyBackend struct{}
 
-func init() { RegisterBackend(zcodeLegacyBackend{}) }
+func init() {
+	RegisterBackendFor(string(AgentZCode), zcodeLegacyBackend{})
+	RegisterFormatDetector(string(AgentZCode), detectZCodeBackendFormat)
+}
+
+// detectZCodeBackendFormat 按目标文件内容分流：新版 provider_config.json 走 v2 backend，
+// 其余情况（旧版 / 无法判定）落到注册为默认的 legacy backend。
+//
+// 内容判定不出新版、但目标就是“新版文件”本身时（全新安装时文件还不存在、文件为空、
+// 或者 zcodeprovider 暂时读不出内容）必须仍按新版处理：退回 legacy 会把旧版顶层
+// provider 映射写进 provider_config.json，ZCode 的严格校验会拒绝整份文档并把它当成空，
+// 所有供应商在使用端消失。
+func detectZCodeBackendFormat(path string) BackendFormat {
+	if DetectZCodeFormatAt(path) == zcodeprovider.FormatV2 {
+		return BackendFormatZCodeV2
+	}
+	if isZCodeV2TargetPath(path) {
+		return BackendFormatZCodeV2
+	}
+	// 其余旧版 / 无法判定的情况回退到默认（legacy）backend。
+	return BackendFormatDefault
+}
+
+// isZCodeV2TargetPath 判断路径是否就是 ZCode 新版配置文件本身：
+// 默认位置、ZCODE_PERSONAL_PROVIDER_CONFIG_FILE 覆盖的位置，或任何名为
+// provider_config.json 的文件。
+func isZCodeV2TargetPath(path string) bool {
+	if strings.TrimSpace(path) == "" {
+		return false
+	}
+	if strings.EqualFold(filepath.Base(path), "provider_config.json") {
+		return true
+	}
+	return strings.EqualFold(cleanAbsPath(path), cleanAbsPath(ZCodeProviderConfigPath()))
+}
+
+func cleanAbsPath(path string) string {
+	if abs, err := filepath.Abs(path); err == nil {
+		path = abs
+	}
+	return strings.ToLower(filepath.Clean(path))
+}
 
 func (zcodeLegacyBackend) Descriptor() BackendDescriptor {
 	// Label 与 AllAgents() 中 AgentZCode 的 Label 一致。

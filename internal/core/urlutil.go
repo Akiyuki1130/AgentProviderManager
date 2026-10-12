@@ -54,10 +54,15 @@ func PrivateHostsAllowed() bool {
 
 func isPrivateOrReservedHost(host string) bool {
 	low := strings.ToLower(host)
+	// IPv6 作用域地址（如 fe80::1%eth0）带 zone 后缀，net.ParseIP 会拒绝整个
+	// 字符串并返回 nil，从而绕过下面的私有地址判断；先去掉 zone 再解析。
+	if i := strings.IndexByte(low, '%'); i >= 0 {
+		low = low[:i]
+	}
 	if low == "localhost" || low == "::1" || strings.HasSuffix(low, ".localhost") {
 		return true
 	}
-	ip := net.ParseIP(host)
+	ip := net.ParseIP(low)
 	if ip == nil {
 		return false
 	}

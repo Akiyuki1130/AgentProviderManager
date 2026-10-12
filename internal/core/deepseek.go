@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 
+	"agentprovidermanager/internal/dshprovider"
 	"gopkg.in/yaml.v3"
 )
 
@@ -157,7 +157,8 @@ func loadCredentials(credsPath string) map[string]string {
 	}
 	out := map[string]string{}
 	for k, v := range raw {
-		if k == "version" || k == "refs" {
+		// version/refs/records 是 0.2 的布局键（records 是插件的登录记录，不是密钥引用）。
+		if k == "version" || k == "refs" || k == "records" {
 			continue
 		}
 		if s, ok := v.(string); ok {
@@ -375,11 +376,10 @@ func ConvertDeepSeekProvider(providerID string, raw map[string]interface{}, kind
 		resolvedKind = InferKind(baseURL)
 		if rk, ok := raw["kind"].(string); ok && strings.TrimSpace(rk) != "" {
 			resolvedKind = ConfigKindToUIKind(strings.TrimSpace(rk), baseURL)
-		} else if api, ok := raw["api"].(string); ok {
-			low := strings.ToLower(api)
-			if strings.Contains(low, "anthropic") {
-				resolvedKind = "anthropic"
-			}
+		} else if api, ok := raw["api"].(string); ok && strings.TrimSpace(api) != "" {
+			// 0.2 的路由用 api 声明协议（openai-completions / openai-responses /
+			// anthropic-messages），据此判定 UI 类型。
+			resolvedKind = kindFromDeepSeekAPI(api, baseURL)
 		}
 	}
 	kindNorm, err := ValidateKind(resolvedKind)
@@ -479,7 +479,15 @@ func DeepSeekProviderToEdit(providerID string, raw map[string]interface{}) (*Pro
 		}
 	}
 	name := stringOr(normalized["name"], pid)
-	return &ProviderEdit{ID: pid, Name: name, Kind: stringOr(normalized["kind"], "openai-compatible"), BaseURL: baseURL, APIKey: apiKey, APIKeyRequired: apiKey != "", Cards: cards, RawProvider: deepCopyMap(raw)}, nil
+	// 把可透传给 pi-ai 路由（headers、timeoutMs、compat…）的字段交给调用方，
+	// 迁移到别处或经编辑器保存时才不会丢。
+	optionsJSON := ""
+	if extra := deepSeekRouteExtras(opts); len(extra) > 0 {
+		if b, merr := json.Marshal(extra); merr == nil {
+			optionsJSON = string(b)
+		}
+	}
+	return &ProviderEdit{ID: pid, Name: name, Kind: stringOr(normalized["kind"], "openai-compatible"), BaseURL: baseURL, APIKey: apiKey, APIKeyRequired: apiKey != "", OptionsJSON: optionsJSON, Cards: cards, RawProvider: deepCopyMap(raw)}, nil
 }
 
 func DeepSeekImportPreview(path string) ImportPreview {
@@ -490,69 +498,41 @@ func DeepSeekImportPreview(path string) ImportPreview {
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return item
 	}
-	cfg, err := DeepSeekLoadConfig(path)
+	item.Exists = true
+
+	format := DetectDeepSeekFormatAt(path)
+	var providers map[string]interface{}
+	var err error
+	switch format {
+	case dshprovider.FormatProfileDesktop, dshprovider.FormatProfileWeb, dshprovider.FormatProfileOther:
+		// 0.2：provider 在 profile patch 的 llm-pi-ai 条目里；home 级 patch 覆盖时以它为准。
+		data, rerr := os.ReadFile(path)
+		if rerr != nil {
+			item.Error = fmt.Sprintf("读取配置文件失败：%v", rerr)
+			return item
+		}
+		patch, perr := dshprovider.LoadPatch(data)
+		if perr != nil {
+			item.Error = perr.Error()
+			return item
+		}
+		providers, err = dshEffectiveProviders(newDeepSeekProfileDoc(path, patch))
+	default:
+		var cfg map[string]interface{}
+		cfg, err = DeepSeekLoadConfig(path)
+		if err == nil {
+			providers = deepSeekProvidersMap(cfg)
+		}
+	}
 	if err != nil {
-		item.Exists = true
 		item.Error = err.Error()
 		return item
 	}
-	item.Exists = true
-	providers := deepSeekProvidersMap(cfg)
-	if providers == nil || len(providers) == 0 {
+	if len(providers) == 0 {
 		item.Error = "该文件中没有可管理的 provider 配置"
 		return item
 	}
-	creds := loadCredentials("")
-	for pid, raw := range providers {
-		m, ok := raw.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		baseURL, _ := m["baseURL"].(string)
-		apiKey, _ := m["apiKey"].(string)
-		apiKeyEnv, _ := m["apiKeyEnv"].(string)
-		if opts, ok := m["options"].(map[string]interface{}); ok {
-			if baseURL == "" {
-				baseURL, _ = opts["baseURL"].(string)
-			}
-			if apiKey == "" {
-				apiKey, _ = opts["apiKey"].(string)
-			}
-			if apiKeyEnv == "" {
-				apiKeyEnv, _ = opts["apiKeyEnv"].(string)
-			}
-		}
-		hasKey := strings.TrimSpace(apiKey) != ""
-		if !hasKey && apiKeyEnv != "" {
-			if v, ok := creds[apiKeyEnv]; ok && strings.TrimSpace(v) != "" {
-				hasKey = true
-			} else if v := os.Getenv(apiKeyEnv); strings.TrimSpace(v) != "" {
-				hasKey = true
-			}
-		}
-		modelCount := 0
-		if arr, ok := m["models"].([]interface{}); ok {
-			modelCount = len(arr)
-		} else if mp, ok := m["models"].(map[string]interface{}); ok {
-			modelCount = len(mp)
-		}
-		kind := InferKind(baseURL)
-		if api, ok := m["api"].(string); ok && strings.Contains(strings.ToLower(api), "anthropic") {
-			kind = "anthropic"
-		}
-		name := stringOr(m["displayName"], stringOr(m["name"], pid))
-		item.Providers = append(item.Providers, ProviderSummary{
-			ID: pid, Name: name, Kind: kind,
-			BaseURL: baseURL, HasAPIKey: hasKey, ModelCount: modelCount,
-		})
-	}
-	for i := 0; i < len(item.Providers); i++ {
-		for j := i + 1; j < len(item.Providers); j++ {
-			if strings.ToLower(item.Providers[j].ID) < strings.ToLower(item.Providers[i].ID) {
-				item.Providers[i], item.Providers[j] = item.Providers[j], item.Providers[i]
-			}
-		}
-	}
+	item.Providers = deepSeekSummariesFromProviders(providers)
 	return item
 }
 
@@ -562,6 +542,10 @@ func DeepSeekSaveProvider(path string, providerID string, providerCfg map[string
 	return DeepSeekSaveProviderWithMerge(path, providerID, providerCfg, fingerprint, false)
 }
 
+// DeepSeekSaveProviderWithMerge 是低层写入入口，直接接收已构建好的 providerCfg。
+// 它没有 UI 卡片载荷，无法判断“用户显式关闭推理”，因此不会应用
+// dshApplyExplicitReasoningOff；生产链路一律走 backend 的 store.Upsert，
+// 由后者用 payload 里的卡片补齐该语义。
 func DeepSeekSaveProviderWithMerge(path string, providerID string, providerCfg map[string]interface{}, fingerprint string, mergeModels bool) error {
 	cfg, err := DeepSeekLoadConfig(path)
 	if err != nil {
@@ -578,104 +562,11 @@ func DeepSeekSaveProviderInConfigWithMerge(path string, cfg map[string]interface
 	if cfg == nil {
 		cfg = map[string]interface{}{}
 	}
-	src, _ := deepSeekProviderSource(cfg, providerID)
-	llmMode := isDeepSeekLLMMode(cfg)
-	if src == "llm" {
-		llmMode = true
-	} else if src == "provider" {
-		llmMode = false
-	}
-	if llmMode {
-		llm, _ := cfg["llm-pi-ai"].(map[string]interface{})
-		if llm == nil {
-			llm = map[string]interface{}{}
-			cfg["llm-pi-ai"] = llm
-		}
-		providers, _ := llm["providers"].(map[string]interface{})
-		if providers == nil {
-			providers = map[string]interface{}{}
-			llm["providers"] = providers
-		}
-		opts, _ := providerCfg["options"].(map[string]interface{})
-		baseURL, _ := opts["baseURL"].(string)
-		apiKey, _ := opts["apiKey"].(string)
-		modelsMap, _ := providerCfg["models"].(map[string]interface{})
-		kind, _ := providerCfg["kind"].(string)
-		uiKind := ConfigKindToUIKind(kind, baseURL)
-		entry := map[string]interface{}{}
-		if existing, ok := providers[providerID].(map[string]interface{}); ok {
-			entry = deepCopyMap(existing)
-		}
-		// Preserve the original array order; new cards are appended deterministically.
-		ordered := make([]interface{}, 0, len(modelsMap))
-		seen := map[string]bool{}
-		if old, ok := entry["models"].([]interface{}); ok {
-			for _, value := range old {
-				mm, _ := value.(map[string]interface{})
-				mid := strings.TrimSpace(stringOr(mm["id"], ""))
-				if mid == "" || seen[mid] {
-					continue
-				}
-				if next, ok := modelsMap[mid].(map[string]interface{}); ok {
-					ordered = append(ordered, dshModelToRaw(CfgToCard(mid, next), uiKind))
-					seen[mid] = true
-				} else if mergeModels {
-					ordered = append(ordered, deepCopyValue(value))
-					seen[mid] = true
-				}
-			}
-		}
-		ids := make([]string, 0, len(modelsMap))
-		for mid := range modelsMap {
-			if !seen[mid] {
-				ids = append(ids, mid)
-			}
-		}
-		sort.Strings(ids)
-		for _, mid := range ids {
-			mm, _ := modelsMap[mid].(map[string]interface{})
-			ordered = append(ordered, dshModelToRaw(CfgToCard(mid, mm), uiKind))
-		}
-		entry["displayName"] = providerCfg["name"]
-		entry["baseURL"] = baseURL
-		envName, _ := entry["apiKeyEnv"].(string)
-		if strings.TrimSpace(apiKey) != "" {
-			if strings.TrimSpace(envName) == "" {
-				envName = strings.ToUpper(strings.ReplaceAll(strings.ReplaceAll(providerID, "-", "_"), ":", "_")) + "_API_KEY"
-			}
-			if err := saveDeepSeekCredential(envName, apiKey); err != nil {
-				return err
-			}
-			entry["apiKeyEnv"] = envName
-			delete(entry, "apiKey")
-		} else if strings.TrimSpace(envName) == "" {
-			delete(entry, "apiKey")
-		}
-		if uiKind == "anthropic" {
-			entry["api"] = "anthropic-messages"
-		} else if uiKind == "responses" {
-			entry["api"] = "openai-responses"
-		} else {
-			entry["api"] = "openai-completions"
-		}
-		entry["models"] = ordered
-		providers[providerID] = entry
-	} else {
-		providers, _ := cfg["provider"].(map[string]interface{})
-		if providers == nil {
-			providers = map[string]interface{}{}
-			cfg["provider"] = providers
-		}
-		entry, _ := providers[providerID].(map[string]interface{})
-		if entry == nil {
-			entry = map[string]interface{}{}
-		} else {
-			entry = deepCopyMap(entry)
-		}
-		for k, v := range providerCfg {
-			entry[k] = deepCopyValue(v)
-		}
-		providers[providerID] = entry
+	// 文档变换与 legacy backend 共用同一条路径，避免两处逻辑漂移。
+	deepSeekUpsertEntry(cfg, providerID, providerID, providerCfg, mergeModels)
+	deepSeekApplyDefaultModel(cfg, deepSeekProvidersMap(cfg))
+	if err := flushDeepSeekCredentials(cfg); err != nil {
+		return err
 	}
 	return writeDeepSeekConfig(path, cfg, fingerprint)
 }
@@ -708,15 +599,20 @@ func dshModelToRaw(card ModelCard, _ string) map[string]interface{} {
 	// state independently from the selected variants so cross-agent migration
 	// does not silently turn reasoning off or on.
 	enabled := card.Reasoning
+	explicit := false
 	if card.RawReasoningEnabled != nil {
 		// The editor updates this field whenever the user toggles reasoning, so
 		// it preserves both the source state and an explicit UI change.
 		enabled = *card.RawReasoningEnabled
+		explicit = true
 	}
-	delete(m, "reasoningEffort")
-	if !enabled {
+	switch {
+	case explicit && !enabled:
+		// 显式关闭：DSH 用 reasoningEfforts: false 表示。
+		delete(m, "reasoningEffort")
 		m["reasoningEfforts"] = false
-	} else {
+	case enabled:
+		delete(m, "reasoningEffort")
 		re := map[string]interface{}{}
 		for _, v := range card.Variants {
 			v = canonicalVariant(v)
@@ -745,6 +641,10 @@ func dshModelToRaw(card ModelCard, _ string) map[string]interface{} {
 		} else {
 			delete(m, "reasoningEffort")
 		}
+	default:
+		// 卡片没有任何推理信息（既非显式关闭，也没有档位）：此时不能写
+		// reasoningEfforts: false——那是 DSH 的“显式关闭推理”标记，会把原本
+		// 没有推理信息的模型静默关掉推理。保持 RawCfg 里已有的推理键不动。
 	}
 	if card.Context != nil || card.Output != nil {
 		ctx := ParseTokens(card.Context)
@@ -808,43 +708,11 @@ func writeDeepSeekConfig(path string, cfg map[string]interface{}, fingerprint st
 	return os.Rename(tmpName, path)
 }
 
+// saveDeepSeekCredential 写入一条凭据 ref。
+//
+// DSH 0.2 的凭据文件是 version: 1 + refs/records 布局：0.1 的扁平顶层键会被
+// DSH 拒绝，因此写盘一律走 dshprovider（内部会把扁平布局升级为 version 1，
+// 并保留 records 与注释）。
 func saveDeepSeekCredential(envName, apiKey string) error {
-	credsPath := DeepSeekCredentialsPath()
-	dir := filepath.Dir(credsPath)
-	_ = os.MkdirAll(dir, 0700)
-	var existing map[string]interface{}
-	data, err := os.ReadFile(credsPath)
-	if err == nil && len(data) > 0 {
-		if err := yaml.Unmarshal(data, &existing); err != nil {
-			return fmt.Errorf("读取 DeepSeek 凭据文件失败：%w", err)
-		}
-	} else if err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("读取 DeepSeek 凭据文件失败：%w", err)
-	}
-	if existing == nil {
-		existing = map[string]interface{}{}
-	}
-	if refs, ok := existing["refs"].(map[string]interface{}); ok {
-		refs[envName] = apiKey
-	} else {
-		existing[envName] = apiKey
-	}
-	out, err := yaml.Marshal(existing)
-	if err != nil {
-		return err
-	}
-	tmpFile, err := os.CreateTemp(dir, ".credentials.tmp_*")
-	if err != nil {
-		return err
-	}
-	tmpName := tmpFile.Name()
-	if _, err := tmpFile.Write(out); err != nil {
-		tmpFile.Close()
-		_ = os.Remove(tmpName)
-		return err
-	}
-	_ = tmpFile.Sync()
-	tmpFile.Close()
-	_ = os.Chmod(tmpName, 0600)
-	return os.Rename(tmpName, credsPath)
+	return dshprovider.SetCredentialRef(DeepSeekCredentialsPath(), envName, apiKey)
 }

@@ -123,6 +123,7 @@ func CfgToCard(modelID string, modelCfg map[string]interface{}) ModelCard {
 				}
 			}
 		}
+		variants = sortVariantsCanonical(variants)
 	}
 	if len(variants) == 0 {
 		if efforts, ok := modelCfg["reasoningEfforts"].(map[string]interface{}); ok {
@@ -134,6 +135,7 @@ func CfgToCard(modelID string, modelCfg map[string]interface{}) ModelCard {
 					}
 				}
 			}
+			variants = sortVariantsCanonical(variants)
 			if !enabledKnown {
 				enabled = len(variants) > 1 || (len(variants) == 1 && variants[0] != "off")
 			}

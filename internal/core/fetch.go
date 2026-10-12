@@ -120,17 +120,7 @@ func FetchModelsRaw(baseURL, apiKey string, timeout time.Duration) ([]struct {
 			if err := ValidateFetchURL(nextStr); err != nil {
 				return nil, NewModelFetchError(fmt.Sprintf("请求被重定向到不安全地址：%v", err), "BAD_URL")
 			}
-			if nextURL.Host != originalHost && nextURL.Host != mustParse(currentURL).Host {
-				delete(headers, "Authorization")
-			} else if nextURL.Host == originalHost && strings.TrimSpace(apiKey) != "" {
-				headers["Authorization"] = "Bearer " + strings.TrimSpace(apiKey)
-			}
-			// Same-host redirect keeps auth
-			if nextURL.Host == mustParse(currentURL).Host {
-				// keep headers
-			} else if nextURL.Host == originalHost {
-				headers["Authorization"] = "Bearer " + strings.TrimSpace(apiKey)
-			}
+			applyRedirectAuth(headers, nextURL.Host, originalHost, apiKey)
 			currentURL = nextStr
 			continue
 		}
@@ -232,7 +222,14 @@ func FetchModelsRaw(baseURL, apiKey string, timeout time.Duration) ([]struct {
 	return nil, NewModelFetchError("服务器重定向次数过多", "BAD_URL")
 }
 
-func mustParse(s string) *url.URL {
-	u, _ := url.Parse(s)
-	return u
+// applyRedirectAuth 只在重定向回到原始主机时保留 Bearer 凭据：
+// 主机一变就删除，避免把 API Key 转发给第三方；空 Key 时不会写出 "Bearer "，
+// 与首次请求（不带 Authorization 头）保持一致。
+func applyRedirectAuth(headers map[string]string, nextHost, originalHost, apiKey string) {
+	key := strings.TrimSpace(apiKey)
+	if key != "" && nextHost == originalHost {
+		headers["Authorization"] = "Bearer " + key
+		return
+	}
+	delete(headers, "Authorization")
 }

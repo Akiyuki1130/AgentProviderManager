@@ -168,11 +168,10 @@ func countV2ModelRules(cfg *zcodeprovider.Config, providerID string) int {
 		}
 	}
 	return n
-}
-// ImportOpencode 与 MergeConfig 仍是纯旧版实现（只写顶层 provider 映射）。
-// 对 v2 目标它们必须在写盘前失败：统一写盘闸门会拒绝写出 ZCode 不接受的文档，
-// 而不是像以前那样把新版配置写坏（ZCode 会把整份配置当成空）。
-func TestLegacyOnlyFlowsRefuseToCorruptV2Target(t *testing.T) {
+}// ImportOpencode 仍是纯旧版实现（只写顶层 provider 映射）：对 v2 目标它必须在写盘前失败，
+// 统一写盘闸门会拒绝写出 ZCode 不接受的文档，而不是像以前那样把新版配置写坏。
+// MergeConfig 已改为与其它写路径一致地经过 config backend，因此对 v2 目标是安全的。
+func TestLegacyOpencodeImportRefusesV2TargetWhileMergeIsSafe(t *testing.T) {
 	a := sandboxApp(t)
 	target := core.ZCodeProviderConfigPath()
 	writeText(t, target, v2ImportFixture)
@@ -204,13 +203,15 @@ func TestLegacyOnlyFlowsRefuseToCorruptV2Target(t *testing.T) {
 		"selected_ids": []interface{}{"acme"},
 		"merge":        true,
 	})
-	if ok, _ := mergeResp["success"].(bool); ok {
-		t.Fatalf("对 v2 目标不应合并成功：%v", mergeResp)
+	requireSuccess(t, mergeResp, "MergeConfig")
+	cfg, err := zcodeprovider.Decode([]byte(readText(t, target)))
+	if err != nil {
+		t.Fatalf("合并后的 v2 目标必须保持严格合法：%v", err)
 	}
-	if got := readText(t, target); got != before {
-		t.Fatal("合并失败时不应改动 v2 目标文件")
+	if _, ok := cfg.Doc()["provider"]; ok {
+		t.Fatal("v2 文档里不应出现旧版顶层 provider 映射，否则 ZCode 会把整份配置当成空")
 	}
-	if _, err := zcodeprovider.Decode([]byte(readText(t, target))); err != nil {
-		t.Fatalf("v2 目标必须保持严格合法：%v", err)
+	if cfg.ProviderRule("acme") == nil {
+		t.Fatal("合并进来的供应商应写入 providerConfigRules")
 	}
 }

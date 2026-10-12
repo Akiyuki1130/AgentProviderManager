@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"agentprovidermanager/internal/dshprovider"
 	"agentprovidermanager/internal/zcodeprovider"
 )
 
@@ -622,9 +623,19 @@ func DetectConfigLocationsForAgent(agentID string) []ConfigLocation {
 	}
 	normAgent := NormalizeAgentID(agentID)
 	if normAgent == AgentDeepSeek {
-		add("DeepSeek 配置 (settings.yaml)", filepath.Join(DshHome(), "settings.yaml"))
-		add("DeepSeek 配置 (settings.yml)", filepath.Join(DshHome(), "settings.yml"))
-		add("DeepSeek 配置 (settings.json)", filepath.Join(DshHome(), "settings.json"))
+		// 0.2：桌面端与 web profile 各自一个 patch；home 级 patch 优先级更高。
+		add("DeepSeek Harness 桌面端 profile（0.2）", DeepSeekDesktopProfilePatch())
+		add("DeepSeek Harness web profile（0.2）", DeepSeekWebProfilePatch())
+		for _, path := range DeepSeekProfilePatches() {
+			if name := dshprovider.ProfileNameAt(path); name != "" && name != dshprovider.DesktopProfileName && name != dshprovider.WebProfileName {
+				add(fmt.Sprintf("DeepSeek Harness profile「%s」（0.2）", name), path)
+			}
+		}
+		add("DeepSeek Harness home 级 patch（0.2，优先级最高）", DeepSeekHomePatch())
+		// 0.1 的 settings.* 只作为旧格式保留（0.2 只会导入一次）。
+		add("DeepSeek 旧版配置 (settings.yaml)", filepath.Join(DshHome(), "settings.yaml"))
+		add("DeepSeek 旧版配置 (settings.yml)", filepath.Join(DshHome(), "settings.yml"))
+		add("DeepSeek 旧版配置 (settings.json)", filepath.Join(DshHome(), "settings.json"))
 	} else if normAgent == AgentOpenCode {
 		add("OpenCode 配置", OpencodeConfig())
 	} else if agentID == "" {
