@@ -1429,8 +1429,8 @@ func (a *App) ApplyModelPresets(cards []core.ModelCard) map[string]interface{} {
 
 // importProviderPayload 把 ImportProvider 的表单字段整理成 backend 的编辑器 payload，
 // 键名与 BuildProviderCfgEditor 的入参保持一致。
-func importProviderPayload(pid, providerName, baseURL, apiKey, kind string, cards []core.ModelCard) core.ProviderPayload {
-	return core.ProviderPayload{
+func importProviderPayload(pid, providerName, baseURL, apiKey, kind string, cards []core.ModelCard, optionsJSON string) core.ProviderPayload {
+	payload := core.ProviderPayload{
 		"id":               pid,
 		"name":             providerName,
 		"kind":             kind,
@@ -1439,6 +1439,11 @@ func importProviderPayload(pid, providerName, baseURL, apiKey, kind string, card
 		"api_key_required": strings.TrimSpace(apiKey) != "",
 		"cards":            cards,
 	}
+	// 与 migratePayload 一致：仅在带额外 options 时携带，避免丢失 headers 等键。
+	if strings.TrimSpace(optionsJSON) != "" {
+		payload["options_json"] = optionsJSON
+	}
+	return payload
 }
 
 func (a *App) ImportProvider(payload map[string]interface{}) map[string]interface{} {
@@ -1454,6 +1459,7 @@ func (a *App) ImportProvider(payload map[string]interface{}) map[string]interfac
 	baseURL, _ := payload["base_url"].(string)
 	apiKey, _ := payload["api_key"].(string)
 	kind, _ := payload["kind"].(string)
+	optionsJSON, _ := payload["options_json"].(string)
 	if kind == "" {
 		kind = "openai-compatible"
 	}
@@ -1516,7 +1522,7 @@ func (a *App) ImportProvider(payload map[string]interface{}) map[string]interfac
 			return errResp
 		}
 		bak := snapshot.BackupPath
-		merged, uerr := store.Upsert(doc, pid, importProviderPayload(pid, providerName, baseURL, apiKey, kind, cards), core.SaveOptions{MergeModels: mergeModels})
+		merged, uerr := store.Upsert(doc, pid, importProviderPayload(pid, providerName, baseURL, apiKey, kind, cards, optionsJSON), core.SaveOptions{MergeModels: mergeModels})
 		if uerr != nil {
 			return map[string]interface{}{"success": false, "error": fmt.Sprintf("写入配置文件时出错：\n%s", core.ShortText(uerr.Error(), 300))}
 		}

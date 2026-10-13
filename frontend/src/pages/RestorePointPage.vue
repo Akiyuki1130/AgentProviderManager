@@ -32,6 +32,8 @@
         <span class="rp-count">{{ t('restorePoints.count', lang).replace('{n}', String(points.length)) }}</span>
         <n-button size="small" @click="onOpenDir">{{ t('restorePoints.openDir', lang) }}</n-button>
         <n-button size="small" :loading="pruning" @click="onPrune">{{ t('restorePoints.prune', lang) }}</n-button>
+        <n-button size="small" @click="openExport">{{ t('restorePoints.exportBtn', lang) }}</n-button>
+        <n-button size="small" :loading="openingBackup" @click="openImport">{{ t('restorePoints.importBtn', lang) }}</n-button>
       </div>
     </div>
 
@@ -118,14 +120,119 @@
         </div>
       </template>
     </n-modal>
+
+    <n-modal v-model:show="showExport" preset="card" :title="t('restorePoints.exportTitle', lang)" style="width: 520px" :mask-closable="false">
+      <div class="bk-form">
+        <label class="bk-label">{{ t('restorePoints.bkScope', lang) }}</label>
+        <div class="bk-radios">
+          <n-radio-group v-model:value="exportScope">
+            <n-radio value="all">{{ t('restorePoints.bkScopeAll', lang) }}</n-radio>
+            <n-radio value="some">{{ t('restorePoints.bkScopeSome', lang) }}</n-radio>
+          </n-radio-group>
+        </div>
+        <div v-if="exportScope === 'some'" class="bk-list-box">
+          <div v-if="exportProviders.length === 0" class="bk-hint">{{ t('restorePoints.bkNoProviders', lang) }}</div>
+          <label v-for="p in exportProviders" :key="p.id" class="bk-check">
+            <n-checkbox :checked="exportSelected.includes(p.id)" @update:checked="(v: boolean) => toggleExportProvider(p.id, v)" />
+            <span class="bk-pname">{{ p.name || p.id }}</span>
+            <span class="bk-psub">{{ p.id }}</span>
+          </label>
+        </div>
+        <label class="bk-label">{{ t('restorePoints.bkKeys', lang) }}</label>
+        <div class="bk-radios">
+          <n-radio-group v-model:value="exportKeys">
+            <n-radio value="no">{{ t('restorePoints.bkKeysNo', lang) }}</n-radio>
+            <n-radio value="yes">{{ t('restorePoints.bkKeysYes', lang) }}</n-radio>
+          </n-radio-group>
+        </div>
+        <label class="bk-label">{{ t('restorePoints.bkKeyMode', lang) }}</label>
+        <div class="bk-radios">
+          <n-radio-group v-model:value="exportMode">
+            <n-radio value="plain">{{ t('restorePoints.bkModePlain', lang) }}</n-radio>
+            <n-radio value="sealed">{{ t('restorePoints.bkModeSealed', lang) }}</n-radio>
+            <n-radio value="password">{{ t('restorePoints.bkModePassword', lang) }}</n-radio>
+          </n-radio-group>
+        </div>
+        <n-alert v-if="exportMode === 'plain'" :type="exportKeys === 'yes' ? 'warning' : 'info'" size="small" :show-icon="false">
+          {{ exportKeys === 'yes' ? t('restorePoints.bkPlainWarn', lang) : t('restorePoints.bkPlainInfo', lang) }}
+        </n-alert>
+        <n-alert v-else-if="exportMode === 'sealed'" type="info" size="small" :show-icon="false">{{ t('restorePoints.bkSealedInfo', lang) }}</n-alert>
+        <template v-else>
+          <n-alert type="info" size="small" :show-icon="false">{{ t('restorePoints.bkPasswordInfo', lang) }}</n-alert>
+          <div class="bk-pw">
+            <n-input v-model:value="exportPassword" type="password" show-password-on="click" :placeholder="t('restorePoints.bkPassword', lang)" />
+            <n-input v-model:value="exportPassword2" type="password" show-password-on="click" :placeholder="t('restorePoints.bkPasswordConfirm', lang)" />
+          </div>
+        </template>
+        <div v-if="exportError" class="bk-error">{{ exportError }}</div>
+      </div>
+      <template #footer>
+        <div style="display: flex; justify-content: flex-end; gap: 8px">
+          <n-button :disabled="exporting" @click="showExport = false">{{ t('common.cancel', lang) }}</n-button>
+          <n-button type="primary" :loading="exporting" :disabled="exportScope === 'some' && exportSelected.length === 0" @click="onExport">📤 {{ t('restorePoints.exportDo', lang) }}</n-button>
+        </div>
+      </template>
+    </n-modal>
+
+    <n-modal v-model:show="showKeysWarn" preset="card" :title="'⚠️ ' + t('restorePoints.bkKeysWarnTitle', lang)" style="width: 420px" :mask-closable="false">
+      <div class="bk-warn-body">{{ t('restorePoints.bkKeysWarnBody', lang) }}</div>
+      <template #footer>
+        <div style="display: flex; justify-content: flex-end; gap: 8px">
+          <n-button :disabled="exporting" @click="showKeysWarn = false">{{ t('common.cancel', lang) }}</n-button>
+          <n-button type="error" :loading="exporting" @click="confirmPlainKeysExport">{{ t('restorePoints.bkKeysWarnConfirm', lang) }}</n-button>
+        </div>
+      </template>
+    </n-modal>
+
+    <n-modal v-model:show="showImport" preset="card" :title="t('restorePoints.importTitle', lang)" style="width: 520px" :mask-closable="false">
+      <div class="bk-form">
+        <div class="bk-path" :title="importPath">{{ importPath }}</div>
+        <div v-if="inspecting" class="bk-hint">{{ t('restorePoints.inspecting', lang) }}</div>
+        <template v-else-if="inspect && !inspect.needs_password">
+          <div class="bk-info">
+            <div class="bk-info-row"><span>{{ t('restorePoints.bkAgent', lang) }}</span><span>{{ inspect.agent_label || inspect.agent || '—' }}</span></div>
+            <div class="bk-info-row"><span>{{ t('restorePoints.bkCreated', lang) }}</span><span>{{ formatTime(inspect.created_at || '') }}</span></div>
+            <div class="bk-info-row"><span>{{ t('restorePoints.bkProviders', lang) }}</span><span>{{ inspect.provider_count ?? 0 }}</span></div>
+            <div class="bk-info-row"><span>{{ t('restorePoints.bkKeyMode', lang) }}</span><span class="badge" :class="(inspect.include_keys && inspect.key_mode === 'plain') ? 'badge-warn' : 'badge-ok'">{{ keyModeLabel(inspect) }}</span></div>
+          </div>
+          <div class="bk-list-box">
+            <div v-for="p in inspect.providers || []" :key="p.id" class="bk-provider">
+              <span class="bk-pname">{{ p.name || p.id }}</span>
+              <span class="bk-psub">{{ p.id }} · {{ t('restorePoints.bkModels', lang).replace('{n}', String(p.model_count)) }} · {{ p.has_api_key ? t('restorePoints.bkHasKey', lang) : t('restorePoints.bkNoKey', lang) }}</span>
+            </div>
+          </div>
+          <label class="bk-label">{{ t('restorePoints.bkConflict', lang) }}</label>
+          <div class="bk-radios">
+            <n-radio-group v-model:value="conflict">
+              <n-radio value="skip">{{ t('restorePoints.bkConflictSkip', lang) }}</n-radio>
+              <n-radio value="overwrite">{{ t('restorePoints.bkConflictOverwrite', lang) }}</n-radio>
+            </n-radio-group>
+          </div>
+        </template>
+        <template v-else-if="inspect">
+          <div class="bk-hint">{{ t('restorePoints.bkNeedsPassword', lang) }}</div>
+          <div style="display: flex; gap: 8px">
+            <n-input v-model:value="importPassword" type="password" show-password-on="click" :placeholder="t('restorePoints.bkPassword', lang)" style="flex:1" />
+            <n-button :loading="inspecting" @click="runInspect(importPassword)">{{ t('restorePoints.unlock', lang) }}</n-button>
+          </div>
+        </template>
+        <div v-if="importError" class="bk-error">{{ importError }}</div>
+      </div>
+      <template #footer>
+        <div style="display: flex; justify-content: flex-end; gap: 8px">
+          <n-button :disabled="importing" @click="showImport = false">{{ t('common.cancel', lang) }}</n-button>
+          <n-button type="primary" :loading="importing" :disabled="!inspect || inspect.needs_password || (inspect.provider_count ?? 0) === 0" @click="onImportBackup">{{ t('restorePoints.importDo', lang) }}</n-button>
+        </div>
+      </template>
+    </n-modal>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { NButton, NPopconfirm, NModal } from 'naive-ui'
+import { NButton, NPopconfirm, NModal, NInput, NRadioGroup, NRadio, NCheckbox, NAlert } from 'naive-ui'
 import { useSettingStore } from '../stores/setting'
-import type { CompatIssue, RestorePoint } from '../types'
+import type { CompatIssue, RestorePoint, ProviderSummary, BackupInspectResult } from '../types'
 import { t } from '../i18n'
 import * as api from '../api'
 
@@ -143,6 +250,29 @@ const confirmShow = ref(false)
 const compatIssues = ref<CompatIssue[]>([])
 const compatPath = ref('')
 const fixing = ref(false)
+
+// ---- 备份导出/导入 ----
+const EXPORT_PREF_KEY = 'apm:backupExportPref'
+const showExport = ref(false)
+const exporting = ref(false)
+const exportError = ref('')
+const exportScope = ref<'all' | 'some'>('all')
+const exportKeys = ref<'no' | 'yes'>('no')
+const exportMode = ref<'plain' | 'sealed' | 'password'>('sealed')
+const exportPassword = ref('')
+const exportPassword2 = ref('')
+const showKeysWarn = ref(false)
+const exportProviders = ref<ProviderSummary[]>([])
+const exportSelected = ref<string[]>([])
+const openingBackup = ref(false)
+const showImport = ref(false)
+const importing = ref(false)
+const inspecting = ref(false)
+const importPath = ref('')
+const inspect = ref<BackupInspectResult | null>(null)
+const importPassword = ref('')
+const importError = ref('')
+const conflict = ref<'skip' | 'overwrite'>('skip')
 
 const KNOWN_OPS = ['save_provider', 'delete_provider', 'delete_model', 'import_legacy', 'import_provider', 'migrate', 'restore', 'manual']
 
@@ -343,6 +473,170 @@ async function onRepairCompat() {
   }
 }
 
+// ---- 备份导出 ----
+function backupStamp(): string {
+  const d = new Date()
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`
+}
+function basename(p: string): string {
+  return p.split(/[\\/]/).pop() || p
+}
+
+function openExport() {
+  exportError.value = ''
+  try {
+    const raw = localStorage.getItem(EXPORT_PREF_KEY)
+    if (raw) {
+      const pref = JSON.parse(raw) as { scope?: string; keys?: string; mode?: string }
+      if (pref.scope === 'all' || pref.scope === 'some') exportScope.value = pref.scope
+      if (pref.keys === 'no' || pref.keys === 'yes') exportKeys.value = pref.keys
+      if (pref.mode === 'dpapi') exportMode.value = 'sealed' // 旧版「本机加密」偏好迁移
+      else if (pref.mode === 'plain' || pref.mode === 'sealed' || pref.mode === 'password') exportMode.value = pref.mode
+    }
+  } catch { /* 预设损坏则用默认值 */ }
+  exportSelected.value = []
+  exportPassword.value = ''
+  exportPassword2.value = ''
+  showExport.value = true
+  void api.ListProviders().then((res) => {
+    exportProviders.value = res['success'] ? ((res['providers'] as ProviderSummary[]) || []) : []
+  }).catch(() => { exportProviders.value = [] })
+}
+
+function toggleExportProvider(id: string, v: boolean) {
+  if (v) {
+    if (!exportSelected.value.includes(id)) exportSelected.value = [...exportSelected.value, id]
+  } else {
+    exportSelected.value = exportSelected.value.filter((x) => x !== id)
+  }
+}
+
+async function onExport() {
+  exportError.value = ''
+  if (exportMode.value === 'password') {
+    if (!exportPassword.value) { exportError.value = t('restorePoints.bkPasswordRequired', lang.value); return }
+    if (exportPassword.value !== exportPassword2.value) { exportError.value = t('restorePoints.bkPasswordMismatch', lang.value); return }
+  }
+  if (exportKeys.value === 'yes' && exportMode.value === 'plain') {
+    showKeysWarn.value = true // 明文含密钥是不可逆的泄露面，先二次确认
+    return
+  }
+  await runExport()
+}
+
+async function confirmPlainKeysExport() {
+  showKeysWarn.value = false
+  await runExport()
+}
+
+async function runExport() {
+  exporting.value = true
+  try {
+    const pick = await api.ChooseBackupSavePath(`apm-backup-${settingStore.agent}-${backupStamp()}.json`)
+    if (!pick.success) {
+      // 原生保存对话框取消时后端也返回 success:false（error: 已取消），不当作错误提示
+      if (pick.error && pick.error !== '已取消') toast('error', t('restorePoints.exportFailed', lang.value), pick.error)
+      return
+    }
+    const ids = exportScope.value === 'all' ? exportProviders.value.map((p) => p.id) : [...exportSelected.value]
+    const res = await api.ExportBackup({
+      path: pick.path || '',
+      provider_ids: ids,
+      include_keys: exportKeys.value === 'yes',
+      key_mode: exportMode.value,
+      password: exportMode.value === 'password' ? exportPassword.value : '',
+    })
+    if (!res.success) {
+      exportError.value = res.error || ''
+      toast('error', t('restorePoints.exportFailed', lang.value), res.error || '')
+      return
+    }
+    try { localStorage.setItem(EXPORT_PREF_KEY, JSON.stringify({ scope: exportScope.value, keys: exportKeys.value, mode: exportMode.value })) } catch { /* ignore */ }
+    toast('success', t('restorePoints.exportTitle', lang.value),
+      t('restorePoints.exportResult', lang.value).replace('{n}', String(res.provider_count ?? ids.length)).replace('{path}', basename(pick.path || '')))
+    showExport.value = false
+    exportPassword.value = ''
+    exportPassword2.value = ''
+  } catch (e) {
+    exportError.value = String(e)
+    toast('error', t('restorePoints.exportFailed', lang.value), String(e))
+  } finally { exporting.value = false }
+}
+
+// ---- 备份导入 ----
+function keyModeLabel(res: BackupInspectResult): string {
+  const mode = res.key_mode === 'plain' ? t('restorePoints.bkModePlain', lang.value)
+    : res.key_mode === 'sealed' ? t('restorePoints.bkModeSealed', lang.value)
+    : res.key_mode === 'password' ? t('restorePoints.bkModePassword', lang.value)
+    : (res.key_mode || '—')
+  return `${mode} · ${res.include_keys ? t('restorePoints.bkHasKey', lang.value) : t('restorePoints.bkNoKey', lang.value)}`
+}
+
+async function openImport() {
+  openingBackup.value = true
+  try {
+    const res = await api.OpenBackupFile()
+    if (!res.success) {
+      if (res.error && res.error !== '已取消') toast('error', t('restorePoints.importTitle', lang.value), res.error)
+      return
+    }
+    importPath.value = res.path || ''
+    inspect.value = null
+    importPassword.value = ''
+    importError.value = ''
+    conflict.value = 'skip'
+    showImport.value = true
+    await runInspect('')
+  } catch (e) {
+    toast('error', t('restorePoints.importTitle', lang.value), String(e))
+  } finally { openingBackup.value = false }
+}
+
+async function runInspect(password: string) {
+  inspecting.value = true
+  importError.value = ''
+  try {
+    const res = await api.InspectBackup(importPath.value, password)
+    if (!res.success) {
+      // 「需要密码/密码错误」响应走 success:false + needs_password:true，保留密码面板
+      if (res.needs_password) {
+        inspect.value = res
+        importError.value = password ? res.error || '' : ''
+        return
+      }
+      importError.value = res.error || t('restorePoints.importFailed', lang.value)
+      inspect.value = null
+      return
+    }
+    inspect.value = res
+  } finally { inspecting.value = false }
+}
+
+async function onImportBackup() {
+  if (!inspect.value) return
+  importError.value = ''
+  importing.value = true
+  try {
+    const res = await api.ImportBackup(importPath.value, importPassword.value, conflict.value)
+    if (!res.success) {
+      importError.value = res.error || ''
+      toast('error', t('restorePoints.importFailed', lang.value), res.error || '')
+      return
+    }
+    toast('success', t('restorePoints.importTitle', lang.value),
+      t('restorePoints.importResult', lang.value).replace('{imported}', String((res.imported || []).length)).replace('{skipped}', String((res.skipped || []).length)))
+    const failed = res.failed || []
+    if (failed.length > 0) importError.value = t('restorePoints.importPartial', lang.value) + '\n' + failed.map((f) => `· ${f.id}：${f.error}`).join('\n')
+    else showImport.value = false
+    // 导入会创建新的还原点，刷新列表
+    await loadPoints()
+  } catch (e) {
+    importError.value = String(e)
+    toast('error', t('restorePoints.importFailed', lang.value), String(e))
+  } finally { importing.value = false }
+}
+
 onMounted(async () => {
   await Promise.all([loadPoints(), loadCompat()])
 })
@@ -406,4 +700,23 @@ onMounted(async () => {
 .rp-confirm-path { word-break: break-all; }
 .rp-confirm-warn { font-size: 12px; color: #ca5010; }
 .rp-confirm-meta { font-size: 11px; color: var(--fluent-text-soft); }
+.badge { font-size: 10px; border: 1px solid var(--fluent-border); border-radius: 999px; padding: 0 6px; line-height: 16px; white-space: nowrap; }
+.badge-ok { color: #107c10; border-color: #107c10; background: rgba(16,124,16,0.08); }
+.badge-warn { color: #ca5010; border-color: #ca5010; background: rgba(202,80,16,0.08); }
+.bk-form { display: flex; flex-direction: column; gap: 10px; font-size: 12px; }
+.bk-label { font-size: 12px; color: var(--fluent-text-soft); }
+.bk-hint { font-size: 12px; color: var(--fluent-text-soft); }
+.bk-path { font-size: 11px; color: var(--fluent-text-soft); word-break: break-all; }
+.bk-radios :deep(.n-radio-group) { display: flex; flex-direction: column; gap: 4px; }
+.bk-list-box { display: flex; flex-direction: column; gap: 6px; max-height: 180px; overflow-y: auto; border: 1px solid var(--fluent-border); border-radius: 8px; padding: 8px 10px; background: var(--fluent-bg); }
+.bk-check { display: flex; gap: 8px; align-items: center; cursor: pointer; min-width: 0; }
+.bk-provider { display: flex; gap: 12px; align-items: baseline; justify-content: space-between; min-width: 0; }
+.bk-pname { font-size: 12px; font-weight: 600; word-break: break-all; }
+.bk-psub { font-size: 11px; color: var(--fluent-text-soft); word-break: break-all; text-align: right; }
+.bk-info { display: flex; flex-direction: column; gap: 4px; border: 1px solid var(--fluent-border); border-radius: 8px; padding: 8px 12px; background: var(--fluent-bg); }
+.bk-info-row { display: flex; gap: 12px; align-items: center; justify-content: space-between; }
+.bk-info-row > span:first-child { font-size: 11px; color: var(--fluent-text-soft); white-space: nowrap; }
+.bk-pw { display: flex; flex-direction: column; gap: 8px; }
+.bk-warn-body { font-size: 13px; line-height: 1.6; color: var(--fluent-text); }
+.bk-error { color: #d13438; font-size: 12px; white-space: pre-line; }
 </style>

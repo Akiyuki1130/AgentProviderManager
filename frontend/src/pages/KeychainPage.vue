@@ -30,7 +30,7 @@
         <div v-for="e in filteredEntries" :key="e.id" class="kc-row" :class="{ selected: selectedIds.has(e.id) }">
           <n-checkbox :checked="selectedIds.has(e.id)" @update:checked="(v: boolean) => v ? selectedIds.add(e.id) : selectedIds.delete(e.id)" />
           <div class="kc-main">
-            <div class="kc-name">{{ e.name }}</div>
+            <div class="kc-name">{{ e.name }}<span v-if="linkCount(e.id) > 0" class="badge badge-ok kc-link-badge">🔗 {{ linkCount(e.id) }} 提供商</span></div>
             <div class="kc-key">{{ displayKey(e) }}</div>
             <div v-if="e.note" class="kc-note">{{ e.note }}</div>
           </div>
@@ -89,6 +89,7 @@ const revealed = reactive(new Set<string>())
 const selectedIds = reactive(new Set<string>())
 const secrets = reactive(new Map<string, string>())
 const kcPath = ref('')
+const kcLinks = ref<Record<string, string>>({})
 const showModal = ref(false)
 const editingId = ref('')
 const modalForm = reactive({ name: '', api_key: '', note: '' })
@@ -115,6 +116,19 @@ async function loadKeychain() {
       kcPath.value = (res['path'] as string) || ''
     } else toast('error', '钥匙串加载失败', res['error'] as string)
   } catch (e) { toast('error', '钥匙串加载失败', String(e)) }
+}
+
+// 钥匙串 ↔ 提供商关联：值等于本条目 ID 的 link 数量（键前缀是 agent，无需区分）
+async function loadLinks() {
+  try {
+    const res = await api.GetKeychainLinks()
+    kcLinks.value = res.success ? (res.links || {}) : {}
+  } catch { kcLinks.value = {} }
+}
+function linkCount(entryId: string): number {
+  let n = 0
+  for (const v of Object.values(kcLinks.value)) if (v === entryId) n++
+  return n
 }
 
 function displayKey(e: KeychainEntry): string {
@@ -256,7 +270,7 @@ function toggleAll(e: Event) {
 
 watch(showAll, (enabled) => { if (enabled) void loadAllSecrets() })
 
-onMounted(loadKeychain)
+onMounted(() => { void loadKeychain(); void loadLinks() })
 </script>
 
 <style scoped>
@@ -274,6 +288,9 @@ onMounted(loadKeychain)
 .kc-row.selected { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
 .kc-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .kc-name { font-size: 13px; font-weight: 600; word-break: break-all; }
+.badge { font-size: 10px; border: 1px solid var(--fluent-border); border-radius: 999px; padding: 0 6px; line-height: 16px; white-space: nowrap; }
+.badge-ok { color: #107c10; border-color: #107c10; background: rgba(16,124,16,0.08); }
+.kc-link-badge { margin-left: 6px; font-weight: 400; vertical-align: middle; }
 .kc-key { font-family: Consolas, monospace; font-size: 12px; color: var(--fluent-text-soft); word-break: break-all; }
 .kc-note { font-size: 11px; color: var(--fluent-text-soft); word-break: break-all; }
 .kc-time { font-size: 10px; color: var(--fluent-text-soft); white-space: nowrap; }

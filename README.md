@@ -38,6 +38,9 @@ DeepSeek Harness 0.2（当前桌面端与 CLI 的 web profile）把用户配置�
 - 通过 `/v1/models` 获取模型列表；Base URL 会规范化后再请求，响应仅支持 JSON。
 - 常用模型上下文长度和输出长度自动匹配，可在导入页或管理页批量执行。
 - API Key 钥匙串：Windows 使用 DPAPI 加密；旧版本可逆 Base64 数据只用于一次性迁移读取，新的保存不会再静默降级为 Base64。
+- 钥匙串 ↔ 提供商联动：提供商编辑与导入表单可从钥匙串选择条目一键填入 API Key，也可把当前 Key 存入钥匙串；关联关系记录在应用设置中（不改动 harness 配置文件），编辑页显示同步状态并支持覆盖 / 更新 / 解除，钥匙串页显示每个条目被多少提供商使用。
+- 测试连接：对提供商执行两段探测——先走 `/v1/models` 校验地址与鉴权，再向该协议的真实对话端点发送 1-token 请求实测可用性，并给出分类错误（DNS/超时/HTTP 状态码）与逐段耗时。
+- 备份导出 / 导入：把当前 Agent 的提供商（全部或指定）导出为 `apm-backup v1` JSON 包，是否含密钥与加密方式独立可选：默认不含密钥（安全分享）；加密方式有明文（勾选密钥时弹窗二次确认）、默认加密（内置密钥，任意设备上的本软件均可解密，防止被直接明文读取，但不防有意破解）或密码加密（PBKDF2-SHA256 + AES-256-GCM，跨设备需同一密码）；导入前可预览包内容与冲突策略（跳过/覆盖），用不含密钥的备份覆盖已有提供商时保留本地 Key，导入自动创建还原点。
 - 还原点：每次修改配置前自动保存改动前的文件原文（逐字节保留注释与键序），并记录 Agent、绝对路径、格式、文件当时是否存在、大小、SHA-256、操作类型等元数据；“还原点”页可任选时间点回滚，回滚前会先给当前状态再建一个还原点，因此回滚本身也能再回滚；单个目标保留最近 50 个、合计不超过 64 MB。
 - 同级 `.bak_<时间戳>` 备份、指纹检查与“恢复最近备份”；默认每个文件最多保留 2 份同级备份。
 - 在 ZCode（新版 / 旧版）与 DeepSeek Harness（0.2 profile patch / 0.1 `settings.yaml`）之间选择性迁移 provider（追加/合并或覆盖），或从 `/v1/models` 获取模型后导入当前 Agent。
@@ -52,7 +55,8 @@ DeepSeek Harness 0.2（当前桌面端与 CLI 的 web profile）把用户配置�
 4. DeepSeek 的 `.credentials.yaml`、provider 配置、同级 `.bak_` 备份、恢复快照与还原点内容都可能包含 API Key。还原点只写在本机 `%LOCALAPPDATA%\AgentProviderManager\restorepoints`（文件权限 0600），不上传、不写日志，但仍是明文副本：不要把这些文件提交 Git、上传工单或发送给他人，并可在“还原点”页按需删除或清理。
 5. 导入页的临时流程可能使用前端 `sessionStorage` 传递 API Key；钥匙串页面的复制功能会把密钥放入系统剪贴板。使用后请清理剪贴板，避免剪贴板管理器、录屏和共享用户配置泄露密钥。
 6. Windows DPAPI 绑定当前 Windows 用户环境。更换用户、迁移到另一台电脑或重装系统前，请先按业务需要迁移凭据；不要把 DPAPI 文件当作跨设备备份。
-7. 配置写入采用临时文件、重命名、SHA-256 指纹检查、同级备份轮转与还原点，但不是数据库事务，也不能替代用户自己的离线备份。还原点默认每个目标保留最近 50 个、合计不超过 64 MB，超出后按最旧优先清理。
+7. 备份的“默认加密”（sealed）使用随程序发布的内置密钥，只防止备份被当作明文直接读取；能从程序中提取密钥的人即可解密。需要强保密时请使用“密码加密”。
+8. 配置写入采用临时文件、重命名、SHA-256 指纹检查、同级备份轮转与还原点，但不是数据库事务，也不能替代用户自己的离线备份。还原点默认每个目标保留最近 50 个、合计不超过 64 MB，超出后按最旧优先清理。
 
 ### 快速开始
 
@@ -203,6 +207,9 @@ The product is currently **Windows-only**. It uses Wails and WebView2, and the W
 - Discover models through a JSON `/v1/models` endpoint with response, model-count, and redirect limits.
 - Apply built-in context/output presets to common models.
 - Store API keys in a Windows DPAPI-protected keychain. Legacy reversible Base64 files are accepted only for one-time migration; new writes do not silently downgrade to Base64.
+- Link keychain entries to providers: fill the API key field from a searchable keychain picker, save the current key into the keychain, and the linkage lives in app settings (the harness config file is never modified). The editor shows a sync chip (apply / update / unlink) and the keychain page shows how many providers use each entry.
+- Test a connection with a two-stage probe: `/v1/models` for reachability and auth, then a 1-token chat request against the kind's real endpoint, with classified errors (DNS / timeout / HTTP status) and per-stage latency.
+- Export / import portable backups: pack all or selected providers of the current agent into an `apm-backup v1` JSON file, with key inclusion and encryption mode chosen independently — without keys by default (safe to share); plain (exporting keys this way requires an explicit confirmation), sealed (encrypted with an app-embedded key, decryptable by this app on any device: it stops casual plain-text reading but is not a strong secret), or password-encrypted (PBKDF2-SHA256 + AES-256-GCM, same password required everywhere). Import previews the package and its conflict policy (skip / overwrite); overwriting with a keyless backup keeps the existing local key, and each imported provider gets a restore point automatically.
 - Restore points: every change first stores the previous file byte-for-byte (comments and key order included) together with metadata (agent, absolute path, format, whether the file existed, size, SHA-256, operation, provider/model) under `%LOCALAPPDATA%\AgentProviderManager\restorepoints`. The **Restore Points** page can roll back to any of them; a rollback first snapshots the current state, so the rollback itself can be undone. 50 points per target path and 64 MB in total are kept.
 - Sibling `.bak_<timestamp>` backups with fingerprint checks and "restore recent backup"; two sibling backups are kept per file.
 - Migrate providers between ZCode (new / legacy) and DeepSeek Harness (0.2 profile patch / 0.1 `settings.yaml`), in merge or overwrite mode, or discover models through `/v1/models` and import them into the current agent.
@@ -218,6 +225,7 @@ The product is currently **Windows-only**. It uses Wails and WebView2, and the W
 - Optional updates use only HTTPS GitHub API/release hosts for this repository. Stable Windows amd64 assets are size-limited and SHA-256 checked before staging; installation waits for the current process to exit and requires an explicit restart confirmation. The updater does not accept arbitrary URLs or shell commands.
 - The import flow may temporarily use browser `sessionStorage`, and copying a key places it in the system clipboard. Clear the clipboard and avoid screen sharing or shared browser profiles when handling secrets.
 - DPAPI is tied to the current Windows user. Plan credential migration before moving to another account or machine.
+- The backup "sealed" (default encryption) mode uses an app-embedded key: it only stops the backup from being read as plain text, and anyone able to extract the key from the program can decrypt it. Choose password encryption when you need real confidentiality.
 - Atomic temporary-file replacement, SHA-256 fingerprints, sibling backup rotation, and restore points reduce accidental loss, but they do not provide a database transaction and do not replace your own offline backups. Restore points keep the 50 most recent entries per target path (64 MB in total) and prune the oldest first.
 
 ### Quick start

@@ -9,6 +9,14 @@ import type {
   RestorePointsDirResult,
   ZCodeCompatResult,
   ZCodeCompatRepairResult,
+  ProbeResult,
+  KeychainLinksResult,
+  SimpleResult,
+  PathPickResult,
+  BackupExportOptions,
+  ExportBackupResult,
+  BackupInspectResult,
+  ImportBackupResult,
 } from '../types'
 
 type WailsApp = Record<string, (...args: unknown[]) => Promise<unknown>>
@@ -215,4 +223,36 @@ export async function GetZCodeCompat(): Promise<ZCodeCompatResult> {
 }
 export async function RepairZCodeCompat(): Promise<ZCodeCompatRepairResult> {
   return call<ZCodeCompatRepairResult>('RepairZCodeCompat')
+}
+
+// 连接探测、钥匙串关联与跨 Agent 备份导出/导入同样走上面的动态 Wails 桥。
+export async function TestConnectionRaw(baseURL: string, apiKey: string, kind: string): Promise<ProbeResult> {
+  return call<ProbeResult>('TestConnectionRaw', baseURL, apiKey, kind)
+}
+export async function TestProviderConnection(providerID: string, baseURLOverride: string, apiKeyOverride: string): Promise<ProbeResult> {
+  return call<ProbeResult>('TestProviderConnection', providerID, baseURLOverride, apiKeyOverride)
+}
+export async function GetKeychainLinks(): Promise<KeychainLinksResult> {
+  return call<KeychainLinksResult>('GetKeychainLinks')
+}
+export async function SetKeychainLink(providerID: string, entryID: string): Promise<SimpleResult> {
+  return call<SimpleResult>('SetKeychainLink', providerID, entryID)
+}
+export async function RemoveKeychainLink(providerID: string): Promise<SimpleResult> {
+  return call<SimpleResult>('RemoveKeychainLink', providerID)
+}
+export async function ChooseBackupSavePath(suggestedName: string): Promise<PathPickResult> {
+  return call<PathPickResult>('ChooseBackupSavePath', suggestedName)
+}
+export async function ExportBackup(opts: BackupExportOptions): Promise<ExportBackupResult> {
+  return call<ExportBackupResult>('ExportBackup', opts)
+}
+export async function OpenBackupFile(): Promise<PathPickResult> {
+  return call<PathPickResult>('OpenBackupFile')
+}
+export async function InspectBackup(path: string, password: string): Promise<BackupInspectResult> {
+  return call<BackupInspectResult>('InspectBackup', path, password)
+}
+export async function ImportBackup(path: string, password: string, conflict: 'skip' | 'overwrite'): Promise<ImportBackupResult> {
+  return call<ImportBackupResult>('ImportBackup', path, password, conflict)
 }

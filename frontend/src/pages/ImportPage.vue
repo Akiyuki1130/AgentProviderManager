@@ -56,6 +56,7 @@
         <div style="display:flex; gap:8px; align-items:center">
           <n-input v-model:value="apiKey" :type="showKey ? 'text' : 'password'" placeholder="sk-..." style="flex:1" />
           <label style="display:flex; gap:4px; align-items:center; font-size:11px; cursor:pointer"><input type="checkbox" v-model="showKey" /> 显示</label>
+          <n-button size="small" @click="showKeychainPicker = true">🔑 从钥匙串</n-button>
         </div>
         <label class="form-label">Provider ID</label>
         <n-input v-model:value="providerId" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" />
@@ -64,6 +65,7 @@
       </div>
       <div class="fetch-row">
         <n-button type="primary" :loading="fetching" @click="onFetch">🔄 获取模型列表</n-button>
+        <n-button :loading="probing" @click="onProbe">🔌 测试连接</n-button>
         <n-button @click="onClear">清空</n-button>
         <span class="status-text" :class="statusKind">{{ statusText }}</span>
       </div>
@@ -121,6 +123,8 @@
       </div>
     </div>
 
+    <KeychainPicker v-model:show="showKeychainPicker" @pick="onKeychainPick" />
+
     <n-modal v-model:show="legacyConfirmShow" preset="card" :title="t('legacyImport.confirmTitle', lang)" style="width: 460px" :mask-closable="false">
       <div style="font-size: 13px; line-height: 1.7">
         {{ t('legacyImport.confirmBody', lang).replace('{n}', String(legacySelected.length)) }}
@@ -141,7 +145,8 @@ import { NButton, NInput, NSelect, NCheckbox, NModal } from 'naive-ui'
 import { useSettingStore } from '../stores/setting'
 import { useAppStore } from '../stores/app'
 import ModelCard from '../components/ModelCard.vue'
-import type { ModelCard as Card } from '../types'
+import KeychainPicker from '../components/KeychainPicker.vue'
+import type { ModelCard as Card, KeychainEntry, ProbeResult } from '../types'
 import { t } from '../i18n'
 import * as api from '../api'
 
@@ -159,8 +164,10 @@ const searchQuery = ref('')
 const statusText = ref('就绪。请输入地址和密钥后点击获取。')
 const statusKind = ref('')
 const fetching = ref(false)
+const probing = ref(false)
 const importing = ref(false)
 const mergeChk = ref(true)
+const showKeychainPicker = ref(false)
 const manualRefreshInfo = ref<{ id: string; name: string } | null>(null)
 const variantOpts = computed(() => settingStore.agent === 'deepseek' ? ['off', 'low', 'high', 'max'] : ['off', 'low', 'medium', 'high', 'xhigh', 'max'])
 const batchDefault = ref('')
@@ -217,6 +224,40 @@ async function doFetch() {  fetching.value = true
 function onFetch() {
   if (!baseUrl.value.trim()) { statusText.value = '请先填写 Base URL'; statusKind.value = 'warn'; return }
   void doFetch()
+}
+
+function formatProbe(res: ProbeResult): { kind: string; text: string } {
+  if (!res.models_ok) return { kind: 'err', text: `✕ ${res.error || res.error_code || '模型接口不可用'}` }
+  const models = `✔ 模型 ${res.models_count ?? 0} 个 (${res.models_ms ?? '—'}ms)`
+  if (res.chat_skipped) return { kind: 'ok', text: `${models} · chat 跳过（无可用模型列表）` }
+  if (!res.chat_ok) return { kind: 'warn', text: `⚠ chat 端点失败：${res.error || '未知错误'}` }
+  return { kind: 'ok', text: `${models} · chat ${res.chat_ms ?? '—'}ms` }
+}
+
+async function onProbe() {
+  if (!baseUrl.value.trim()) { statusText.value = '请先填写 Base URL'; statusKind.value = 'warn'; return }
+  probing.value = true
+  statusText.value = '正在探测连接...'
+  statusKind.value = ''
+  try {
+    const res = await api.TestConnectionRaw(baseUrl.value.trim(), apiKey.value.trim(), kind.value)
+    const line = formatProbe(res)
+    statusText.value = line.text
+    statusKind.value = line.kind
+  } catch (e) { statusText.value = '✕ ' + String(e); statusKind.value = 'err' }
+  finally { probing.value = false }
+}
+
+async function onKeychainPick(e: KeychainEntry) {
+  try {
+    const res = await api.GetKeychainEntry(e.id)
+    if (!res.success) { toast('error', '填入失败', (res.error as string) || ''); return }
+    const entry = res.entry as Record<string, unknown>
+    const key = (entry['api_key'] as string) || (entry['apiKey'] as string) || ''
+    if (!key) { toast('error', '填入失败', '无法读取 API Key'); return }
+    apiKey.value = key
+    toast('success', '已填入', `✓ 已把「${e.name}」的 API Key 填入`)
+  } catch (err) { toast('error', '填入失败', String(err)) }
 }
 
 function onClear() { cards.value = []; searchQuery.value = ''; statusText.value = '就绪。请输入地址和密钥后点击获取。'; statusKind.value = '' }

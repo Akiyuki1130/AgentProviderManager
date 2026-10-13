@@ -187,3 +187,90 @@ export interface ZCodeCompatRepairResult {
   restore_point?: RestorePoint | null
   target?: string
 }
+
+/** 连接探测结果（TestConnectionRaw / TestProviderConnection 共用）。 */
+export interface ProbeResult {
+  success: boolean
+  error?: string
+  error_code?: string
+  /** 两项检查都通过的整体结论。 */
+  ok?: boolean
+  models_ok?: boolean
+  models_count?: number
+  models_ms?: number
+  chat_ok?: boolean
+  chat_ms?: number
+  /** 没有可用模型列表时跳过 chat 探测。 */
+  chat_skipped?: boolean
+}
+
+/** 提供商 ↔ 钥匙串条目的关联：`${agent}|${providerID}` -> entryID。 */
+export interface KeychainLinksResult {
+  success: boolean
+  error?: string
+  links?: Record<string, string>
+}
+
+export interface SimpleResult {
+  success: boolean
+  error?: string
+}
+
+export interface PathPickResult {
+  success: boolean
+  error?: string
+  path?: string
+}
+
+/** 备份文件内的单个提供商摘要（不含密钥内容）。 */
+export interface BackupProviderSummary {
+  id: string
+  name: string
+  kind: string
+  model_count: number
+  has_api_key: boolean
+}
+
+export interface BackupExportOptions {
+  path: string
+  provider_ids: string[]
+  include_keys: boolean
+  key_mode: 'plain' | 'sealed' | 'password'
+  password: string
+}
+
+export interface ExportBackupResult {
+  success: boolean
+  error?: string
+  path?: string
+  provider_count?: number
+  key_mode?: string
+}
+
+export interface BackupInspectResult {
+  success: boolean
+  error?: string
+  /** 文件用密码加密且未提供正确密码时为 true。 */
+  needs_password?: boolean
+  agent?: string
+  agent_label?: string
+  created_at?: string
+  app_version?: string
+  include_keys?: boolean
+  key_mode?: string
+  provider_count?: number
+  providers?: BackupProviderSummary[]
+}
+
+export interface BackupImportFailure {
+  id: string
+  error: string
+}
+
+export interface ImportBackupResult {
+  success: boolean
+  error?: string
+  imported?: string[]
+  skipped?: string[]
+  failed?: BackupImportFailure[]
+}

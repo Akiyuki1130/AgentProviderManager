@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Two-stage connection probe (`🔌 测试连接`).** `core.TestConnection` first reuses the hardened model-fetch path (SSRF gates, redirect posture, error codes) against `/v1/models`, then sends a 1-token chat request to the kind's real endpoint (`/chat/completions` / `/messages` with `x-api-key` + `anthropic-version` / `/responses`) using the first discovered model, so authentication is proven against the endpoint that actually serves traffic. Responses report per-stage ok/latency/count with the existing `ModelFetchError` code taxonomy (DNS `CONN`, `TIMEOUT`, `HTTP_401`/`HTTP_404`, `BAD_URL`), and all messages pass through `RedactSensitive`. Exposed as `TestConnectionRaw` (form values) and `TestProviderConnection` (stored provider through the same backend credential resolution as `RefreshProviderModels`, so DSH `apiKeyEnv` secrets resolve transparently); wired into the provider editor and the import page with an inline ok/warn/err result line.
+- **Keychain ↔ provider linkage.** API-key fields gained `🔑 从钥匙串` (searchable picker modal over DPAPI-protected entries that fills the field) and `📥 存入钥匙串` (saves the current key as a named entry). The chosen association is recorded app-side in `settings.json` (`keychain_links`, `agent|providerID` → entry id — ZCode's strict v2 schema forbids indirection inside `provider_config.json`, so harness configs keep the resolved value), surfacing as a sync chip under the field (覆盖 / 更新钥匙串 / 解除) and a `🔗 N 提供商` badge on keychain rows. Bindings: `GetKeychainLinks`, `SetKeychainLink`, `RemoveKeychainLink`.
+- **Portable backup export + import (`apm-backup v1`).** The restore-points page now exports the current agent's providers (all or selected) to a JSON envelope and imports a backup back through the existing `ImportProvider` path, so every imported provider automatically gets its own backup + restore point. Key inclusion and encryption are orthogonal choices: without keys (default, share-safe — `StripBackupKeys` clears `APIKey`, `apiKey` inside `options_json` and the raw row) or with keys; the payload can be sealed as 明文 (plain — exports with keys require an explicit "export anyway" confirmation dialog), 默认加密 (sealed: AES-256-GCM keyed by SHA-256 of an app-embedded seed, decryptable by this app on any device, which keeps the file from being read as plain text but is not protection against someone extracting the seed), or 密码加密 (stdlib `crypto/pbkdf2` SHA-256, 600k iterations + AES-256-GCM; metadata stays locked until unlocked — `InspectBackup` returns `needs_password` and wrong passwords fail on the GCM tag). Overwriting an existing provider with a keyless backup keeps its local API key (matching the `MergeConfig` protection) and non-sensitive `options_json` such as custom headers round-trips through import. Files are written 0600; passwords are never persisted.
+- Provider sidebar filtering and sorting on the manage page: a search box matching name/id plus a sort select (default order / 名称 / 模型数), with the header count switching to `filtered / total`.
+
+### Fixed
+
+- `go test` no longer pollutes the real restore-points directory: `TestZCodeToDeepSeek...`, `TestDeepSeekToZCode...` and the three `ApplyLegacyImport` tests in `internal/core` wrote their migration/import snapshots into `%LOCALAPPDATA%\AgentProviderManager\restorepoints` because they sandboxed only `DSH_HOME`. They now pin `LOCALAPPDATA` (and `USERPROFILE` + a cleared `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` for the reverse migration's target-store listing) into `t.TempDir()`, matching `setupMigrateTest`.
+
 ## 2.0.8 — 2026-10-13
 
 ### Added
