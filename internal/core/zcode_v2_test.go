@@ -146,6 +146,8 @@ func TestApplyLegacyImport(t *testing.T) {
 	dir := t.TempDir()
 	v2Path := filepath.Join(dir, "provider_config.json")
 	t.Setenv("ZCODE_PERSONAL_PROVIDER_CONFIG_FILE", v2Path)
+	// ApplyLegacyImport 会把还原点写到 %LOCALAPPDATA% 下的真实目录，指到临时目录隔离。
+	t.Setenv("LOCALAPPDATA", filepath.Join(dir, "AppData", "Local"))
 
 	v2Before := canonicalZCodeV2(t, "existing")
 	if err := os.WriteFile(v2Path, v2Before, 0644); err != nil {
@@ -265,6 +267,8 @@ func TestApplyLegacyImportWritesGivenTarget(t *testing.T) {
 	dir := t.TempDir()
 	canonicalPath := filepath.Join(dir, "canonical", "provider_config.json")
 	t.Setenv("ZCODE_PERSONAL_PROVIDER_CONFIG_FILE", canonicalPath)
+	// 导入会建立还原点，隔离到临时目录避免污染真实 %LOCALAPPDATA% 还原点目录。
+	t.Setenv("LOCALAPPDATA", filepath.Join(dir, "AppData", "Local"))
 	if err := os.MkdirAll(filepath.Dir(canonicalPath), 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -355,6 +359,8 @@ func TestLegacyImportSkipsManagedProviders(t *testing.T) {
 	if err := os.WriteFile(v2Path, canonicalZCodeV2(t), 0644); err != nil {
 		t.Fatal(err)
 	}
+	// ApplyLegacyImport 命中 "mine" 后会建立还原点，隔离到临时目录。
+	t.Setenv("LOCALAPPDATA", filepath.Join(dir, "AppData", "Local"))
 	v2Doc, err := LoadConfig(v2Path)
 	if err != nil {
 		t.Fatalf("读取新版文件：%v", err)

@@ -255,6 +255,8 @@ func TestZCodeToDeepSeekPreservesReasoningState(t *testing.T) {
 	// 迁移的 overwrite 路径会调用目标 store.List，DSH 的 List 会读凭据文件；
 	// 把 DSH_HOME 指到临时目录，确保测试不读取真实用户凭据。
 	t.Setenv("DSH_HOME", t.TempDir())
+	// 迁移写入前会在 %LOCALAPPDATA% 下的真实还原点目录建快照，指到临时目录隔离。
+	t.Setenv("LOCALAPPDATA", filepath.Join(dir, "AppData", "Local"))
 	sourcePath := filepath.Join(dir, "zcode.json")
 	targetPath := filepath.Join(dir, "dsh.json")
 	source := map[string]interface{}{
@@ -362,6 +364,11 @@ func TestDeepSeekReasoningConvertsToOtherAgents(t *testing.T) {
 
 func TestDeepSeekToZCodePreservesReasoningState(t *testing.T) {
 	dir := t.TempDir()
+	// overwrite 路径会调用目标 ZCode store.List（按 %USERPROFILE% 解析真实配置），
+	// 写入前还会在 %LOCALAPPDATA% 下的真实还原点目录建快照；全部指到临时目录隔离。
+	t.Setenv("LOCALAPPDATA", filepath.Join(dir, "AppData", "Local"))
+	t.Setenv("USERPROFILE", dir)
+	t.Setenv("ZCODE_PERSONAL_PROVIDER_CONFIG_FILE", "")
 	sourcePath := filepath.Join(dir, "dsh.json")
 	targetPath := filepath.Join(dir, "zcode.json")
 	source := map[string]interface{}{
