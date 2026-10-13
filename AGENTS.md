@@ -3,7 +3,7 @@
 ## Project constraints
 
 - This is a Windows-only Wails desktop application.
-- Build with Go 1.25+, Node.js/npm, Wails CLI v2.15.0, and the Microsoft WebView2 runtime/SDK.
+- Build with Go 1.25+, Node.js/npm, Wails CLI v2.16.0, and the Microsoft WebView2 runtime/SDK.
 - Never read, modify, print, or commit real user configuration or credentials, especially `C:\\Users\\<user>\\.dsh`, provider files, backups, API keys, DPAPI keychain files, or GitHub tokens.
 - Use placeholder values in tests. Do not add `node_modules`, generated frontend output, temporary executables, `*.exe~`, or local release directories to Git.
 
