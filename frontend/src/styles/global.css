@@ -1,19 +1,36 @@
 :root {
-  --fluent-radius: 8px;
   --fluent-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
   --fluent-shadow-md: 0 2px 8px rgba(0, 0, 0, 0.1);
   --fluent-shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.12);
+  /* 全局过渡 token，时长由 --dur-* 驱动 */
   --fluent-transition: var(--dur-standard, 0.2s) cubic-bezier(0.33, 0, 0, 1);
   --fluent-bg: #f3f3f3;
   --fluent-card-bg: #ffffff;
   --fluent-border: rgba(0, 0, 0, 0.06);
   --fluent-text: rgba(0, 0, 0, 0.9);
   --fluent-text-soft: rgba(0, 0, 0, 0.6);
-  --accent-text-strong: var(--accent, #0067c0);
+  --accent-text-strong: var(--accent, #0078d4);
+
+  /* 语义色：成功/警告/错误（light 一套、dark 提亮降饱和一套）。
+     soft 变体做徽标底色，与语义色同引用，主题切换自动跟随。 */
+  --ok: #107c10;
+  --warn: #ca5010;
+  --err: #c42b1c;
+  --ok-soft: color-mix(in srgb, var(--ok) 12%, transparent);
+  --warn-soft: color-mix(in srgb, var(--warn) 14%, transparent);
+  --err-soft: color-mix(in srgb, var(--err) 12%, transparent);
+
+  /* 动效时长体系（enter 基准值；leave ≈ enter × ⅔ 用 page-leave/更短档） */
   --motion-duration: 1;
   --dur-standard: 0.2s;
   --dur-standard-lg: 0.25s;
+  --dur-settle: 0.28s;
+  --dur-toast: 0.3s;
+  --dur-page-leave: 0.167s;
+  --dur-reveal: 0.4s;
   --ease-standard: cubic-bezier(0.33, 0, 0, 1);
+  --delay-step: 60ms;
+  /* 允许 height: 0 ↔ auto 原生过渡（interpolate-size，继承属性，WebView2 129+；低版本走 grid-rows 回退） */
   interpolate-size: allow-keywords;
 }
 html[data-theme='light'] {
@@ -29,10 +46,13 @@ html[data-theme='dark'] {
   --fluent-border: rgba(255, 255, 255, 0.12);
   --fluent-text: rgba(255, 255, 255, 0.9);
   --fluent-text-soft: rgba(255, 255, 255, 0.6);
-  --accent-text-strong: color-mix(in srgb, var(--accent, #0067c0) 45%, white);
+  --accent-text-strong: color-mix(in srgb, var(--accent, #0078d4) 45%, white);
   --fluent-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
   --fluent-shadow-md: 0 2px 8px rgba(0, 0, 0, 0.45);
   --fluent-shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.55);
+  --ok: #6ccb5f;
+  --warn: #ffb160;
+  --err: #ff6e6e;
 }
 *, *::before, *::after { box-sizing: border-box; }
 html, body { overscroll-behavior: none; }
@@ -46,6 +66,23 @@ body {
   user-select: none; -webkit-user-select: none;
 }
 input, textarea, [contenteditable='true'] { user-select: text; -webkit-user-select: text; }
+/* 路径 / ID / 日志等需要手动复制的文本，显式豁免全局禁选 */
+.selectable { user-select: text; -webkit-user-select: text; }
+
+::-webkit-scrollbar { width: 0; height: 0; display: none; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: transparent; }
+
+/* 全局键盘可达焦点环；naive-ui 控件自带聚焦态，抑制双环 */
+:focus-visible { outline: 2px solid var(--accent, #0078d4); outline-offset: 2px; }
+.n-button:focus-visible, .n-input:focus-within, .n-input-number:focus-within,
+.n-select:focus-within, .n-base-selection:focus-within, .n-switch:focus-within,
+.n-checkbox:focus-visible, .n-radio:focus-visible, .n-popover:focus-visible { outline: none; }
+
+/* 数字排版工具：计数/大小/时间/延迟统一等宽数字；ID 类文本统一 monospace */
+.tnum { font-variant-numeric: tabular-nums; }
+.mono { font-family: Consolas, 'Cascadia Code', monospace; }
+
 .fluent-card {
   background: var(--fluent-card-bg);
   border-radius: 10px;
@@ -56,3 +93,84 @@ input, textarea, [contenteditable='true'] { user-select: text; -webkit-user-sele
 .fade-slide-enter-active, .fade-slide-leave-active { transition: opacity var(--dur-standard, 0.2s), transform var(--dur-standard, 0.2s); }
 .fade-slide-enter-from { opacity: 0; transform: translateY(8px); }
 .fade-slide-leave-to { opacity: 0; transform: translateY(-8px); }
+
+/* FLIP 列表过渡：leave 元素绝对定位保持原位，其余项 list-move 平滑补位 */
+.list-enter-active, .list-leave-active { transition: all var(--dur-standard-lg, 0.25s) ease; }
+.list-leave-active { position: absolute; width: 100%; }
+.list-enter-from { opacity: 0; transform: translateX(-12px); }
+.list-leave-to { opacity: 0; transform: translateX(12px); }
+.list-move { transition: transform var(--dur-standard-lg, 0.25s) ease; }
+
+/* 网格多列列表的增删（如模型卡片墙）：不脱流，原位淡入淡出 + FLIP 补位 */
+.grid-enter-active, .grid-leave-active { transition: opacity var(--dur-standard-lg, 0.25s) ease, transform var(--dur-standard-lg, 0.25s) var(--ease-standard); }
+.grid-enter-from, .grid-leave-to { opacity: 0; transform: scale(0.97); }
+.grid-move { transition: transform var(--dur-standard-lg, 0.25s) var(--ease-standard); }
+
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+/* 错峰入场：容器对子项设 animation-delay: calc(var(--delay-step) * i) */
+.enter-stagger { animation: fade-in var(--dur-reveal) var(--ease-standard) both; }
+
+/* —— 控件规范层（B10/C3：单一定义源，页面 scoped 的同名重复定义应删除改用这些） —— */
+.field {
+  width: 100%; min-width: 0; box-sizing: border-box; height: 32px;
+  border-radius: 6px; border: 1px solid var(--fluent-border);
+  background: var(--fluent-card-bg); padding: 0 10px;
+  font-size: 13px; color: var(--fluent-text); font-family: inherit;
+  transition: border-color var(--dur-standard) var(--ease-standard), box-shadow var(--dur-standard) var(--ease-standard), background-color var(--dur-standard) var(--ease-standard);
+}
+.field:focus { outline: none; border-color: var(--accent, #0078d4); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent, #0078d4) 20%, transparent); }
+.field:focus-visible { outline: none; }
+/* 自绘开关：轨道色跟主题文本混合（dark 不再隐形，D2） */
+.switch {
+  position: relative; width: 40px; height: 20px; border-radius: 10px;
+  background: color-mix(in srgb, var(--fluent-text) 22%, transparent);
+  border: none; cursor: pointer; flex-shrink: 0; padding: 0;
+  transition: background-color var(--dur-standard) var(--ease-standard), transform 0.15s var(--ease-standard);
+}
+.switch::after {
+  content: ""; position: absolute; top: 4px; left: 4px; width: 12px; height: 12px;
+  border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  transition: transform var(--dur-standard) var(--ease-standard);
+}
+.switch.on { background: var(--accent, #0078d4); }
+.switch.on::after { transform: translateX(20px); }
+.switch:active { transform: scale(0.97); }
+/* 自绘勾选框：边框跟主题（#888 死色清除，D2） */
+.check { display: inline-flex; align-items: center; cursor: pointer; flex-shrink: 0; position: relative; }
+.check input { position: absolute; opacity: 0; }
+.check input:focus-visible + .check-mark { outline: 2px solid var(--accent, #0078d4); outline-offset: 2px; }
+.check-mark {
+  width: 18px; height: 18px; border-radius: 4px;
+  border: 1.5px solid color-mix(in srgb, var(--fluent-text) 45%, transparent);
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: background-color var(--dur-standard) var(--ease-standard), border-color var(--dur-standard) var(--ease-standard);
+}
+.check input:checked + .check-mark { background: var(--accent, #0078d4); border-color: var(--accent, #0078d4); }
+.check input:checked + .check-mark::after { content: ""; width: 5px; height: 9px; border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(45deg) translate(-1px, -1px); }
+/* 徽标三档（语义色 + soft 底） */
+.badge {
+  display: inline-flex; align-items: center; gap: 4px; font-size: 11px; line-height: 1.5;
+  border-radius: 999px; padding: 2px 8px;
+  border: 1px solid var(--fluent-border); background: var(--fluent-bg); color: var(--fluent-text-soft);
+  transition: color var(--dur-standard) var(--ease-standard), border-color var(--dur-standard) var(--ease-standard), background-color var(--dur-standard) var(--ease-standard);
+}
+.badge-ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, transparent); background: var(--ok-soft); }
+.badge-warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, transparent); background: var(--warn-soft); }
+.badge-err { color: var(--err); border-color: color-mix(in srgb, var(--err) 40%, transparent); background: var(--err-soft); }
+/* 档位胶囊（自绘 radio/chip） */
+.pill {
+  display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+  font-size: 11px; border: 1px solid var(--fluent-border); border-radius: 999px; padding: 3px 10px;
+  background: var(--fluent-card-bg); cursor: pointer; color: inherit; font-family: inherit; line-height: 1;
+  appearance: none; -webkit-appearance: none; outline: none;
+  transition: border-color 0.15s, background-color 0.15s, color 0.15s, transform 0.15s;
+}
+.pill:active { transform: scale(0.97); }
+.pill:hover { border-color: var(--accent, #0078d4); }
+.pill:focus-visible { outline: none; box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent, #0078d4) 25%, transparent); }
+.pill.checked { border-color: var(--accent, #0078d4); background: color-mix(in srgb, var(--accent, #0078d4) 12%, transparent); color: var(--accent-text-strong, var(--accent)); }
+/* 搜索命中高亮（配合 useHighlight 分段渲染，禁 v-html） */
+mark { background: color-mix(in srgb, var(--warn) 32%, transparent); color: inherit; border-radius: 2px; padding: 0 1px; }

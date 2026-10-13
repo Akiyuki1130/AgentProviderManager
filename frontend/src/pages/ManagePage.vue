@@ -7,18 +7,22 @@
           <span class="sidebar-count">{{ filteredProviders.length }} / {{ providers.length }}</span>
         </div>
         <div class="sidebar-actions">
-          <n-button size="small" type="primary" block @click="onAddProvider">+ 新增提供商</n-button>
+          <n-button size="small" type="primary" block @click="onAddProvider"><template #icon><n-icon :component="AddOutline" /></template>新增提供商</n-button>
         </div>
         <div class="sidebar-filter">
-          <n-input v-model:value="providerQuery" size="small" clearable placeholder="搜索名称 / ID..." style="flex:1" />
+          <n-input v-model:value="providerQuery" size="small" clearable placeholder="搜索名称 / ID..." aria-label="搜索提供商" style="flex:1" @keyup.esc="providerQuery = ''" />
           <n-select v-model:value="providerSort" size="small" :options="providerSortOptions" style="width: 108px" />
         </div>
         <label class="sidebar-hide-builtin">
           <input type="checkbox" v-model="hideBuiltinNoKey" />
           <span>隐藏未填 API Key 的内置提供商</span>
         </label>
-        <div class="sidebar-list">
-          <div v-if="filteredProviders.length === 0" class="provider-empty">暂无提供商</div>
+        <TransitionGroup name="list" tag="div" class="sidebar-list">
+          <div v-if="filteredProviders.length === 0" key="empty" class="provider-empty">
+            <n-icon :component="AddOutline" :size="22" />
+            <span>暂无提供商</span>
+            <n-button size="small" type="primary" ghost @click="onAddProvider">新增提供商</n-button>
+          </div>
           <div
             v-for="p in filteredProviders"
             :key="p.id"
@@ -27,15 +31,22 @@
             @click="selectProvider(p.id)"
           >
             <div class="pi-top">
-              <span class="pi-id">{{ p.name }}</span>
+              <span class="pi-id">
+                <template v-for="(seg, si) in highlightSegments(p.name || '', providerQuery)" :key="si">
+                  <mark v-if="seg.hit">{{ seg.text }}</mark>
+                  <template v-else>{{ seg.text }}</template>
+                </template>
+              </span>
+              <!-- B6：仅当前打开的提供商挂脏点元素，isDirty 经 opacity 过渡显隐 -->
+              <span v-if="currentId === p.id" class="dirty-dot" :class="{ on: isDirty }" :title="isDirty ? '有未保存的修改' : undefined" aria-hidden="true" />
             </div>
             <div class="pi-sub">{{ p.id }} · {{ p.model_count }} 个模型</div>
             <div class="pi-badges">
-              <span class="badge badge-kind">{{ p.kind }}</span>
-              <span class="badge" :class="p.has_api_key ? 'badge-ok' : 'badge-warn'">{{ p.has_api_key ? 'API Key ✓' : '无 Key' }}</span>
+              <span class="badge">{{ p.kind }}</span>
+              <span class="badge" :class="p.has_api_key ? 'badge-ok' : 'badge-warn'"><n-icon v-if="p.has_api_key" class="badge-icon" :component="CheckmarkOutline" :size="10" />{{ p.has_api_key ? 'API Key' : '无 Key' }}</span>
             </div>
           </div>
-        </div>
+        </TransitionGroup>
       </aside>
 
       <div class="editor-pane">
@@ -61,54 +72,60 @@
                 <div style="display:flex; gap:8px; align-items:center">
                   <n-input v-model:value="editForm.api_key" :type="showKey ? 'text' : 'password'" placeholder="sk-..." style="flex:1" />
                   <label style="display:flex; gap:4px; align-items:center; font-size:12px; cursor:pointer"><input type="checkbox" v-model="showKey" /> 显示</label>
-                  <n-button size="small" @click="showKeychainPicker = true">🔑 从钥匙串</n-button>
-                  <n-button size="small" :disabled="!editForm.api_key" @click="openSaveToKeychain">📥 存入钥匙串</n-button>
+                  <n-button size="small" @click="showKeychainPicker = true"><template #icon><n-icon :component="CloudUploadOutline" /></template>从钥匙串</n-button>
+                  <n-button size="small" :disabled="!editForm.api_key" @click="openSaveToKeychain"><template #icon><n-icon :component="DownloadOutline" /></template>存入钥匙串</n-button>
                 </div>
                 <div v-if="linkedEntry" class="keychain-chip">
-                  <span class="badge" :class="keychainSynced ? 'badge-ok' : 'badge-warn'">🔑 钥匙串·{{ linkedEntry.name }}{{ keychainSynced ? '' : '（不同步）' }}</span>
-                  <n-button size="tiny" :disabled="keychainSynced" @click="onKeychainOverride">覆盖</n-button>
-                  <n-button size="tiny" :disabled="keychainSynced" @click="onKeychainUpdate">更新</n-button>
-                  <n-button size="tiny" type="error" ghost @click="onKeychainUnlink">解除</n-button>
+                  <span class="badge" :class="keychainSynced ? 'badge-ok' : 'badge-warn'"><n-icon class="badge-icon" :component="KeyOutline" :size="10" />钥匙串·{{ linkedEntry.name }}{{ keychainSynced ? '' : '（不同步）' }}</span>
+                  <n-button size="small" :disabled="keychainSynced" @click="onKeychainOverride">覆盖</n-button>
+                  <n-button size="small" :disabled="keychainSynced" @click="onKeychainUpdate">更新</n-button>
+                  <n-button size="small" type="error" ghost @click="onKeychainUnlink">解除</n-button>
                 </div>
               </div>
               <label class="form-label">options 额外参数（JSON）</label>
               <n-input v-model:value="editForm.options_json" type="textarea" :rows="3" placeholder='{"headers": {...}}' />
             </div>
             <div class="editor-actions">
-              <n-button type="primary" :loading="saving" @click="onSaveProvider">💾 保存提供商</n-button>
-              <n-button @click="onManualRefresh">📝 手动重新获取</n-button>
-              <n-button :loading="autoRefreshing" @click="onAutoRefresh">🔄 自动重新获取</n-button>
-              <n-button :loading="probing" @click="onProbe">🔌 测试连接</n-button>
+              <n-button size="small" type="primary" :loading="saving" title="保存提供商 (Ctrl+S)" @click="onSaveProvider"><template #icon><n-icon :component="SaveOutline" /></template>保存提供商</n-button>
+              <n-button size="small" @click="onManualRefresh"><template #icon><n-icon :component="SyncOutline" /></template>手动重新获取</n-button>
+              <n-button size="small" :loading="autoRefreshing" @click="onAutoRefresh"><template #icon><n-icon :component="SyncOutline" /></template>自动重新获取</n-button>
+              <n-button size="small" :loading="probing" @click="onProbe"><template #icon><n-icon :component="FlashOutline" /></template>测试连接</n-button>
               <n-popconfirm @positive-click="confirmDeleteProvider">
-                <template #trigger><n-button type="error" ghost>🗑 删除提供商</n-button></template>
+                <template #trigger><n-button size="small" type="error" ghost><template #icon><n-icon :component="TrashOutline" /></template>删除提供商</n-button></template>
                 确定删除提供商「{{ editForm.name || editForm.id }}」吗？
               </n-popconfirm>
               <label style="display:flex; gap:6px; align-items:center; font-size:12px; margin-left:auto"><input type="checkbox" v-model="editForm.api_key_required" /> 必须提供 API Key</label>
             </div>
-            <div v-if="probe.text" class="probe-result" :class="probe.kind">{{ probe.text }}</div>
+            <div v-if="probe.parts.length" class="probe-result" :class="probe.status" role="status" aria-live="polite">
+              <n-icon class="probe-icon" :component="probeStatusIcon" :size="14" />
+              <span v-for="(part, i) in probe.parts" :key="i" class="probe-part">
+                <span v-if="i > 0" class="probe-sep">·</span>
+                <span :class="{ tnum: part.num }">{{ part.text }}</span>
+              </span>
+            </div>
           </div>
 
           <div class="fluent-card card-pad list-wrap">
             <div class="list-header">
               <h3>模型列表</h3>
               <div style="display:flex; gap:12px; align-items:center">
-                <n-input v-model:value="manageQuery" placeholder="搜索模型 ID / 名称..." clearable style="width: 220px" size="small" />
+                <n-input v-model:value="manageQuery" placeholder="搜索模型 ID / 名称..." aria-label="搜索模型" clearable style="width: 220px" size="small" @keyup.esc="manageQuery = ''" />
                 <span class="count-label">{{ filteredCards.length }} / {{ editForm.cards.length }}</span>
-                <n-button size="small" @click="onAddModel">+ 手动添加模型</n-button>
+                <n-button size="small" @click="onAddModel"><template #icon><n-icon :component="AddOutline" /></template>手动添加模型</n-button>
               </div>
             </div>
             <div class="batch-bar">
               <div class="batch-row">
                 <span class="label">批量编辑：</span>
-                <n-button size="tiny" @click="batchSelectAll(true)">全选</n-button>
-                <n-button size="tiny" @click="batchSelectAll(false)">全不选</n-button>
+                <n-button size="small" @click="batchSelectAll(true)">全选</n-button>
+                <n-button size="small" @click="batchSelectAll(false)">全不选</n-button>
                 <div class="batch-spacer" />
-                <n-button size="tiny" type="error" ghost :disabled="!hasSelected" @click="onDeleteSelected">删除所选</n-button>
+                <n-button size="small" type="error" ghost :disabled="!hasSelected" @click="onDeleteSelected"><template #icon><n-icon :component="TrashOutline" /></template>删除所选</n-button>
               </div>
               <div class="batch-row batch-row--wrap">
-                <label class="batch-item">思考 <button class="switch" :class="{ on: batchReasoningOn }" @click="batchToggleReasoning" /></label>
+                <label class="batch-item">思考 <button class="switch" :class="{ on: batchReasoningOn }" role="switch" :aria-checked="batchReasoningOn" aria-label="批量切换思考" @click="batchToggleReasoning" /></label>
                 <span class="batch-group-label">推理档位</span>
-                <span v-for="v in variantOpts" :key="v" class="batch-pill" @click="batchToggleVariant(v)">{{ v }}</span>
+                <span v-for="v in variantOpts" :key="v" class="batch-pill" role="button" tabindex="0" @click="batchToggleVariant(v)" @keydown.enter.prevent="batchToggleVariant(v)" @keydown.space.prevent="batchToggleVariant(v)">{{ v }}</span>
                 <span class="batch-group-label">默认档位</span>
                 <n-select v-model:value="batchDefault" :options="variantSelectOpts" placeholder="—" style="width: 100px" size="small" clearable @update:value="batchSetDefault" />
               </div>
@@ -117,23 +134,27 @@
                 <n-input v-model:value="batchContext" placeholder="回车应用" size="small" style="width: 100px" @keydown.enter="applyBatchLimit('context')" />
                 <span class="batch-group-label">输出长度</span>
                 <n-input v-model:value="batchOutput" placeholder="回车应用" size="small" style="width: 100px" @keydown.enter="applyBatchLimit('output')" />
-                <n-button size="tiny" type="primary" ghost :loading="autoMatchLoading" :disabled="filteredCards.length === 0" @click="onAutoMatchLimits">自动匹配</n-button>
+                <n-button size="small" type="primary" ghost :loading="autoMatchLoading" :disabled="filteredCards.length === 0" @click="onAutoMatchLimits">自动匹配</n-button>
                 <span class="batch-hint">具体以提供商为准，自动数据仅供参考</span>
               </div>
             </div>
-            <div class="list-scroll">
-              <div v-if="filteredCards.length === 0" class="empty-state">
+            <TransitionGroup name="list" tag="div" class="list-scroll">
+              <div v-if="filteredCards.length === 0" key="empty" class="empty-state">
+                <n-icon :component="CloudDownloadOutline" :size="26" />
                 <div class="empty-title">尚无模型</div>
-                <div class="empty-sub">点击「+ 手动添加模型」，或使用「自动/手动重新获取模型」从 API 拉取。</div>
+                <n-button size="small" type="primary" ghost :loading="autoRefreshing" @click="onAutoRefresh">从 API 获取模型</n-button>
               </div>
-              <ModelCard v-for="card in filteredCards" :key="card.model_id" :card="card" :agent="settingStore.agent" :show-select="true" @delete="removeCard(card)" @update="onCardUpdate" />
-            </div>
+              <ModelCard v-for="card in filteredCards" :key="card.model_id" :card="card" :agent="settingStore.agent" :query="manageQuery" :show-select="true" @delete="removeCard(card)" @update="onCardUpdate" />
+            </TransitionGroup>
           </div>
+
+          <!-- 脏态保存条：作为 .editor-body 最后一个子节点，sticky 相对真正滚动的 .editor-pane 生效 -->
+          <StickySaveBar :visible="isDirty" :saving="saving" @save="onSaveProvider" @reset="discardChanges" />
         </div>
       </div>
     </div>
 
-    <n-modal v-model:show="showAutoConfirm" preset="card" title="确认自动重新获取" style="width: 480px" :mask-closable="false">
+    <n-modal v-model:show="showAutoConfirm" preset="card" title="确认自动重新获取" style="width: 420px" :mask-closable="false">
       <div style="font-size: 13px; line-height: 1.6">
         该操作将会直接覆盖现有模型配置，是否确认继续？
       </div>
@@ -148,9 +169,9 @@
       </template>
     </n-modal>
 
-    <n-modal v-model:show="showHttpConfirm" preset="card" title="⚠️ 安全提示" style="width: 480px" :mask-closable="false">
+    <n-modal v-model:show="showHttpConfirm" preset="card" title="安全提示" style="width: 420px" :mask-closable="false">
       <div style="font-size: 13px; line-height: 1.7">
-        当前地址使用 <b style="color:#ca5010">http://</b> 明文协议连接。API Key 和请求内容将以明文传输，可能被网络窃听，存在安全风险。
+        当前地址使用 <b class="warn-strong">http://</b> 明文协议连接。API Key 和请求内容将以明文传输，可能被网络窃听，存在安全风险。
         <br /><br />
         建议改用 <b>https://</b> 加密连接。若该地址仅用于本地开发或内网测试，可确认继续。
       </div>
@@ -164,7 +185,7 @@
 
     <KeychainPicker v-model:show="showKeychainPicker" @pick="onKeychainPick" />
 
-    <n-modal v-model:show="showKcSave" preset="card" title="📥 存入钥匙串" style="width: 460px" :mask-closable="false">
+    <n-modal v-model:show="showKcSave" preset="card" title="存入钥匙串" style="width: 480px" :mask-closable="false">
       <div style="display:flex; flex-direction:column; gap:12px">
         <div>
           <label class="form-label">名称</label>
@@ -183,7 +204,7 @@
       <template #footer>
         <div style="display:flex; justify-content:flex-end; gap:8px">
           <n-button @click="showKcSave = false">取消</n-button>
-          <n-button type="primary" :loading="kcSaving" @click="onSaveToKeychain">保存</n-button>
+          <n-button type="primary" :loading="kcSaving" @click="onSaveToKeychain"><template #icon><n-icon :component="SaveOutline" /></template>保存</n-button>
         </div>
       </template>
     </n-modal>
@@ -195,9 +216,17 @@ import { ref, computed, reactive, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useSettingStore } from '../stores/setting'
 import { registerManageGuard, requestLeave } from '../stores/leaveGuard'
-import { NButton, NInput, NSelect, NPopconfirm, NModal } from 'naive-ui'
+import { NButton, NInput, NSelect, NPopconfirm, NModal, NIcon } from 'naive-ui'
+import {
+  AddOutline, SaveOutline, TrashOutline, SyncOutline, FlashOutline,
+  KeyOutline, CloudUploadOutline, DownloadOutline, CheckmarkOutline,
+  CheckmarkCircleOutline, CloseCircleOutline, AlertCircleOutline, CloudDownloadOutline,
+} from '@vicons/ionicons5'
+import { uiPrompt, uiConfirm } from '../stores/uiDialog'
+import { highlightSegments } from '../composables/useHighlight'
 import ModelCard from '../components/ModelCard.vue'
 import KeychainPicker from '../components/KeychainPicker.vue'
+import StickySaveBar from '../components/ui/StickySaveBar.vue'
 import type { ProviderSummary, ModelCard as Card, ProviderEdit, KeychainEntry, ProbeResult } from '../types'
 import * as api from '../api'
 
@@ -230,7 +259,11 @@ const providerSortOptions = [
   { label: '模型数', value: 'models' },
 ]
 const probing = ref(false)
-const probe = ref<{ kind: 'ok' | 'warn' | 'err' | ''; text: string }>({ kind: '', text: '' })
+// 测试结果结构化：状态决定图标与色彩，parts 逐段渲染（num=true 段加 .tnum 等宽数字）
+interface ProbePart { text: string; num?: boolean }
+interface ProbeState { status: 'ok' | 'warn' | 'err' | ''; parts: ProbePart[] }
+const probe = ref<ProbeState>({ status: '', parts: [] })
+const probeStatusIcon = computed(() => probe.value.status === 'ok' ? CheckmarkCircleOutline : probe.value.status === 'warn' ? AlertCircleOutline : CloseCircleOutline)
 const showKeychainPicker = ref(false)
 const showKcSave = ref(false)
 const kcSaving = ref(false)
@@ -321,7 +354,7 @@ function selectProvider(id: string) {
 
 async function loadProvider(id: string) {
   currentId.value = id
-  probe.value = { kind: '', text: '' }
+  probe.value = { status: '', parts: [] }
   const res = await api.GetProvider(id) as Record<string, unknown>
   if (res['success']) {
     const raw = res['provider'] as ProviderEdit
@@ -334,9 +367,16 @@ async function loadProvider(id: string) {
   } else toast('error', '加载失败', res['error'] as string)
 }
 
-function onAddProvider() {
-  const name = prompt('请输入 Provider 显示名称（ID 将自动生成，可稍后修改）：', '我的供应商')
-  if (name === null) return
+async function onAddProvider() {
+  // uiPrompt 取消或空输入解析为 null，早退语义与原 `if (!name) return` 一致
+  const name = await uiPrompt({
+    title: '新增提供商',
+    label: 'Provider 显示名称（ID 将自动生成，可稍后修改）',
+    placeholder: '例如：我的供应商',
+    initialValue: '我的供应商',
+    confirmText: '创建',
+  })
+  if (!name) return
   requestLeave(() => { void createProvider(name) })
 }
 
@@ -346,7 +386,7 @@ async function createProvider(name: string) {
   currentProvider.value = { ...editForm.value }
   currentId.value = id
   savedProvider.value = deepClone(editForm.value)
-  probe.value = { kind: '', text: '' }
+  probe.value = { status: '', parts: [] }
   linkedEntry.value = null
 }
 
@@ -402,8 +442,15 @@ async function deleteProvider() {
   if (res['success']) { toast('success', '已删除', `提供商「${id}」已删除`); currentId.value = null; currentProvider.value = null; savedProvider.value = null; await loadProviders() }
   else toast('error', '删除失败', res['error'] as string)
 }
-function onAddModel() {
-  const mid = prompt('请输入模型 ID（即发送给 API 的模型名）：', 'gpt-4o-mini')
+async function onAddModel() {
+  const mid = await uiPrompt({
+    title: '手动添加模型',
+    label: '模型 ID（即发送给 API 的模型名）',
+    placeholder: '例如：gpt-4o-mini',
+    initialValue: 'gpt-4o-mini',
+    confirmText: '添加',
+    validate: (v) => (editForm.value.cards.some((c) => c.model_id === v.trim()) ? '该模型 ID 已存在' : null),
+  })
   if (!mid || !mid.trim()) return
   if (editForm.value.cards.some((c) => c.model_id === mid.trim())) { toast('info', '提示', `模型「${mid.trim()}」已在列表中。`); return }
   editForm.value.cards.push({ model_id: mid.trim(), name: mid.trim(), reasoning: false, variants: [], default_variant: '', context: '', output: '', select: false })
@@ -453,7 +500,7 @@ async function onAutoMatchLimits() {
   const list = filteredCards.value
   if (list.length === 0) return
   const hasFilled = list.some((c) => isLimitFilled(c.context) || isLimitFilled(c.output))
-  if (hasFilled && !confirm('部分模型已填写上下文/输出长度，自动匹配会用预设值覆盖这些已填写的值，是否确认继续？')) {
+  if (hasFilled && !(await uiConfirm({ content: '部分模型已填写上下文/输出长度，自动匹配会用预设值覆盖这些已填写的值，是否确认继续？', positiveText: '确认覆盖', danger: true }))) {
     return
   }
   autoMatchLoading.value = true
@@ -479,10 +526,10 @@ function isLimitFilled(v: string | number | undefined): boolean {
   if (typeof v === 'string') return v.trim() !== ''
   return v > 0
 }
-function onDeleteSelected() {
+async function onDeleteSelected() {
   const selected = filteredCards.value.filter((c) => c.select)
   if (selected.length === 0) return
-  if (!confirm(`确定删除选中的 ${selected.length} 个模型吗？`)) return
+  if (!(await uiConfirm({ content: `确定删除选中的 ${selected.length} 个模型吗？`, positiveText: '删除', danger: true }))) return
   for (const c of selected) {
     const idx = editForm.value.cards.indexOf(c)
     if (idx >= 0) editForm.value.cards.splice(idx, 1)
@@ -543,17 +590,17 @@ async function doAutoRefresh() {
 }
 
 // ---- 测试连接 ----
-function formatProbe(res: ProbeResult): { kind: 'ok' | 'warn' | 'err'; text: string } {
+function formatProbe(res: ProbeResult): ProbeState {
   // 后端把「models 通、chat 挂」也记为 success:false，分支按段判定而非整体 success
-  if (!res.models_ok) return { kind: 'err', text: `✕ ${res.error || res.error_code || '模型接口不可用'}` }
-  const models = `✔ 模型 ${res.models_count ?? 0} 个 (${res.models_ms ?? '—'}ms)`
-  if (res.chat_skipped) return { kind: 'ok', text: `${models} · chat 跳过（无可用模型列表）` }
-  if (!res.chat_ok) return { kind: 'warn', text: `⚠ chat 端点失败：${res.error || '未知错误'}` }
-  return { kind: 'ok', text: `${models} · chat ${res.chat_ms ?? '—'}ms` }
+  if (!res.models_ok) return { status: 'err', parts: [{ text: res.error || res.error_code || '模型接口不可用' }] }
+  const models: ProbePart = { text: `模型 ${res.models_count ?? 0} 个 (${res.models_ms ?? '—'}ms)`, num: true }
+  if (res.chat_skipped) return { status: 'ok', parts: [models, { text: 'chat 跳过（无可用模型列表）' }] }
+  if (!res.chat_ok) return { status: 'warn', parts: [{ text: `chat 端点失败：${res.error || '未知错误'}` }] }
+  return { status: 'ok', parts: [models, { text: `chat ${res.chat_ms ?? '—'}ms`, num: true }] }
 }
 
 async function onProbe() {
-  if (!editForm.value.base_url.trim()) { probe.value = { kind: 'warn', text: '请先填写 Base URL' }; return }
+  if (!editForm.value.base_url.trim()) { probe.value = { status: 'warn', parts: [{ text: '请先填写 Base URL' }] }; return }
   probing.value = true
   try {
     // 已存在的提供商走 TestProviderConnection（表单值作为覆盖项）；新建未保存的退回 TestConnectionRaw
@@ -563,7 +610,7 @@ async function onProbe() {
       : await api.TestConnectionRaw(editForm.value.base_url, editForm.value.api_key, editForm.value.kind)
     probe.value = formatProbe(res)
   } catch (e) {
-    probe.value = { kind: 'err', text: `✕ ${String(e)}` }
+    probe.value = { status: 'err', parts: [{ text: String(e) }] }
   } finally { probing.value = false }
 }
 
@@ -684,20 +731,28 @@ function onAgentChanged() {
   currentProvider.value = null
   editForm.value = { id: '', name: '', kind: 'openai-compatible', base_url: '', api_key: '', api_key_required: false, options_json: '', cards: [] }
   savedProvider.value = null
-  probe.value = { kind: '', text: '' }
+  probe.value = { status: '', parts: [] }
   linkedEntry.value = null
   void loadProviders()
   void loadKeychainLinks()
+}
+// B7：Ctrl+S（或 Cmd+S）拦截浏览器保存对话框；仅在脏态复用 onSaveProvider 保存入口（保留 http 明文确认门）
+function onGlobalKeydown(e: KeyboardEvent) {
+  if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 's') return
+  e.preventDefault()
+  if (!e.repeat && isDirty.value && !saving.value) onSaveProvider()
 }
 onMounted(() => {
   registerManageGuard(() => isDirty.value, saveProvider, discardChanges)
   void loadProviders()
   void loadKeychainLinks()
   window.addEventListener('agent-changed', onAgentChanged)
+  window.addEventListener('keydown', onGlobalKeydown)
 })
 onUnmounted(() => {
   registerManageGuard(null, null, null)
   window.removeEventListener('agent-changed', onAgentChanged)
+  window.removeEventListener('keydown', onGlobalKeydown)
 })
 </script>
 
@@ -711,22 +766,24 @@ onUnmounted(() => {
 .sidebar-actions { margin-bottom: 8px; }
 .sidebar-filter { display: flex; gap: 8px; margin-bottom: 8px; }
 .sidebar-hide-builtin { display: flex; gap: 6px; align-items: center; font-size: 11px; color: var(--fluent-text-soft); margin-bottom: 8px; cursor: pointer; }
-.provider-empty { padding: 16px; text-align: center; font-size: 12px; color: var(--fluent-text-soft); }
-.sidebar-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; min-height: 0; }
+.provider-empty { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 16px; text-align: center; font-size: 12px; color: var(--fluent-text-soft); }
+/* position:relative 给 .list-leave-active 的绝对定位提供锚点，删除补位时离场项不脱离列表 */
+.sidebar-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; min-height: 0; position: relative; }
 .provider-item { background: var(--fluent-bg); border: 1px solid var(--fluent-border); border-radius: 8px; padding: 10px; cursor: pointer; }
 .provider-item.selected { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
 .pi-top { display: flex; align-items: center; gap: 8px; }
 .pi-id { font-size: 13px; font-weight: 600; flex: 1; word-break: break-all; }
+/* B6 脏点：仅在当前打开的条目上存在，isDirty 驱动 opacity 显隐（0.2s） */
+.dirty-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--warn); flex-shrink: 0; align-self: center; opacity: 0; transition: opacity var(--dur-standard, 0.2s) var(--ease-standard, cubic-bezier(0.33, 0, 0, 1)); }
+.dirty-dot.on { opacity: 1; }
 .pi-sub { font-size: 11px; color: var(--fluent-text-soft); margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pi-badges { display: flex; gap: 4px; margin-top: 6px; flex-wrap: nowrap; min-width: 0; }
-.badge { font-size: 10px; border: 1px solid var(--fluent-border); border-radius: 999px; padding: 0 6px; line-height: 16px; white-space: nowrap; }
-.badge-kind { background: var(--fluent-bg); }
-.badge-ok { color: #107c10; border-color: #107c10; background: rgba(16,124,16,0.08); }
-.badge-warn { color: #ca5010; border-color: #ca5010; background: rgba(202,80,16,0.08); }
+/* 侧栏紧凑徽标变体（10px/16px 行高/nowrap，与全局 .badge 确有差异故保留 scoped）；色档 badge-ok/warn 用全局定义 */
+.badge { display: inline-flex; align-items: center; gap: 3px; font-size: 10px; border: 1px solid var(--fluent-border); border-radius: 999px; padding: 0 6px; line-height: 16px; white-space: nowrap; }
+.badge-icon { flex-shrink: 0; }
 .editor-pane { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; height: 100%; gap: 12px; overflow-y: auto; overscroll-behavior: contain; padding-right: 2px; }
 .editor-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; flex: 1; gap: 8px; text-align: center; color: var(--fluent-text-soft); background: var(--fluent-card-bg); border: 1px dashed var(--fluent-border); border-radius: 10px; padding: 32px; }
-.empty-title { font-size: 16px; font-weight: 600; color: var(--fluent-text); }
-.empty-sub { font-size: 12px; }
+/* .empty-title/.empty-sub 单一定义见下方（原此处 16px 重复定义被后文覆盖，实际渲染一直是 14px，行为不变） */
 .editor-body { display: flex; flex-direction: column; gap: 12px; }
 .fluent-card { background: var(--fluent-card-bg); border-radius: 10px; box-shadow: none; border: 1px solid var(--fluent-border); }
 .card-pad { padding: 16px; }
@@ -739,11 +796,16 @@ onUnmounted(() => {
 .editor-actions > * { flex-shrink: 0; }
 .kc-cell { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .keychain-chip { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.modal-error { color: #d13438; font-size: 12px; }
-.probe-result { font-size: 12px; color: var(--fluent-text-soft); margin-top: 8px; word-break: break-all; }
-.probe-result.ok { color: #107c10; }
-.probe-result.err { color: #d13438; }
-.probe-result.warn { color: #ca5010; }
+.modal-error { color: var(--err); font-size: 12px; }
+.warn-strong { color: var(--warn); }
+/* 测试结果：图标 + 语义色 + 分段文本（数字段挂全局 .tnum 等宽） */
+.probe-result { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; font-size: 12px; color: var(--fluent-text-soft); margin-top: 8px; word-break: break-all; }
+.probe-result .probe-icon { align-self: center; flex-shrink: 0; }
+.probe-part { display: inline-flex; align-items: baseline; gap: 6px; }
+.probe-sep { opacity: 0.55; }
+.probe-result.ok { color: var(--ok); }
+.probe-result.err { color: var(--err); }
+.probe-result.warn { color: var(--warn); }
 
 .list-wrap { display: flex; flex-direction: column; gap: 8px; }
 .list-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
@@ -759,13 +821,10 @@ onUnmounted(() => {
 .batch-hint { font-size: 10px; color: var(--fluent-text-soft); opacity: 0.75; }
 .batch-pill { font-size: 11px; border: 1px solid var(--fluent-border); border-radius: 999px; padding: 2px 8px; cursor: pointer; }
 .batch-pill:hover { border-color: var(--accent); }
-.list-scroll { display: flex; flex-direction: column; min-height: 0; }
+.list-scroll { display: flex; flex-direction: column; min-height: 0; position: relative; }
 @media (max-width: 1099px) { .manage-layout { grid-template-columns: 1fr; } .provider-sidebar { height: auto; max-height: 32vh; } }
 .empty-state { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 24px; color: var(--fluent-text-soft); text-align: center; }
 .empty-title { font-size: 14px; font-weight: 600; color: var(--fluent-text); }
 .empty-sub { font-size: 12px; }
-.switch { position: relative; width: 40px; height: 20px; border-radius: 10px; background: rgba(0,0,0,0.18); border: none; cursor: pointer; }
-.switch::after { content: ""; position: absolute; top: 4px; left: 4px; width: 12px; height: 12px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.3); transition: transform 0.2s; }
-.switch.on { background: var(--accent); }
-.switch.on::after { transform: translateX(20px); }
+/* 原 scoped .switch 重复定义已删除，统一走 global.css 控件规范层（顺带修复 dark 轨道 rgba(0,0,0,.18) 隐形问题，D2/B10） */
 </style>

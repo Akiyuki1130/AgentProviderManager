@@ -26,7 +26,8 @@
       </div>
       <ToastContainer ref="toastRef" />
       <EditContextMenu />
-      <n-modal v-model:show="leaveShow" preset="card" title="未保存的更改" style="width: 440px" :mask-closable="false">
+      <UiDialogHost />
+      <n-modal v-model:show="leaveShow" preset="card" title="未保存的更改" style="width: 420px" :mask-closable="false">
         <div style="font-size: 13px; line-height: 1.7">
           当前提供商有未保存的更改，是否保存？
         </div>
@@ -38,7 +39,7 @@
           </div>
         </template>
       </n-modal>
-      <n-modal v-model:show="updatePromptShow" preset="card" :title="updatePromptTitle" style="width: 460px" :mask-closable="false">
+      <n-modal v-model:show="updatePromptShow" preset="card" :title="updatePromptTitle" style="width: 480px" :mask-closable="false">
         <div style="font-size: 13px; line-height: 1.7">
           {{ updatePromptMessage }}
         </div>
@@ -49,7 +50,7 @@
           </div>
         </template>
       </n-modal>
-      <n-modal v-model:show="showRestoreModal" preset="card" title="恢复备份" style="width: 520px" :mask-closable="false">
+      <n-modal v-model:show="showRestoreModal" preset="card" title="恢复备份" style="width: 480px" :mask-closable="false">
         <div style="font-size: 13px; line-height: 1.6">
           为当前 Agent（{{ agentLabel(settingStore.agent) }}）选择要恢复的备份，恢复将覆盖当前配置文件。
         </div>
@@ -87,6 +88,7 @@ import AppSidebar from './layout/AppSidebar.vue'
 import AppTopbar from './layout/AppTopbar.vue'
 import ToastContainer from './components/ToastContainer.vue'
 import EditContextMenu from './components/EditContextMenu.vue'
+import UiDialogHost from './components/ui/UiDialogHost.vue'
 import * as api from './api'
 
 const settingStore = useSettingStore()
@@ -150,7 +152,7 @@ async function doChangeAgent(agent: string) {
     targetPath.value = (res['path'] as string) || targetPath.value
     await refreshBackup()
     window.dispatchEvent(new CustomEvent('agent-changed', { detail: agentID }))
-    toast('success', '已切换 Agent', `${agentLabel(agentID)} → ${targetPath.value}`)
+    toast('success', '已切换 Agent', `${agentLabel(agentID)} · ${targetPath.value}`)
   } else {
     toast('error', '切换失败', res['error'] as string)
   }

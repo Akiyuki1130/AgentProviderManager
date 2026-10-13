@@ -1,17 +1,19 @@
 <template>
   <Teleport to="body">
-    <div
-      v-if="visible"
-      ref="menuRef"
-      class="edit-context-menu"
-      :style="menuStyle"
-      role="menu"
-      @mousedown.prevent.stop
-    >
-      <button type="button" role="menuitem" :disabled="!canCut" @click="runAction('cut')">剪切</button>
-      <button type="button" role="menuitem" :disabled="!canCopy" @click="runAction('copy')">复制</button>
-      <button type="button" role="menuitem" :disabled="!canPaste" @click="runAction('paste')">粘贴</button>
-    </div>
+    <Transition name="ctx-menu">
+      <div
+        v-if="visible"
+        ref="menuRef"
+        class="edit-context-menu"
+        :style="menuStyle"
+        role="menu"
+        @mousedown.prevent.stop
+      >
+        <button type="button" role="menuitem" :disabled="!canCut" @click="runAction('cut')">剪切</button>
+        <button type="button" role="menuitem" :disabled="!canCopy" @click="runAction('copy')">复制</button>
+        <button type="button" role="menuitem" :disabled="!canPaste" @click="runAction('paste')">粘贴</button>
+      </div>
+    </Transition>
   </Teleport>
 </template>
 
@@ -83,6 +85,7 @@ async function showMenu(event: MouseEvent) {
   menuY.value = event.clientY
   visible.value = true
 
+  // 钳位仍先渲染再测量写回；Transition enter 首帧透明+缩小，位移跳帧不可见（ctx-menu 样式）
   await nextTick()
   const menu = menuRef.value
   if (!menu) return
@@ -179,7 +182,14 @@ onBeforeUnmount(() => {
   border-radius: 8px;
   background: var(--fluent-card-bg);
   box-shadow: var(--fluent-shadow-lg);
+  transform-origin: top left;
 }
+/* D7：enter 首帧为透明/缩小态，nextTick 测量后的钳位位移在视觉上不可见，修右缘/下缘跳帧 */
+.ctx-menu-enter-active { transition: opacity 0.15s ease, transform 0.15s var(--ease-standard, cubic-bezier(0.33, 0, 0, 1)); }
+.ctx-menu-enter-from { opacity: 0; transform: scale(0.96); }
+.ctx-menu-enter-to { opacity: 1; transform: scale(1); }
+/* leave 直接隐藏：滚动/外点关闭若走淡出会在旧位置留残影，立即移除更稳 */
+.ctx-menu-leave-active { display: none; }
 .edit-context-menu button {
   display: block;
   width: 100%;

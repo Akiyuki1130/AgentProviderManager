@@ -84,35 +84,67 @@ export const useSettingStore = defineStore('setting', () => {
     systemDark.value = mq.matches
     mq.addEventListener('change', (e) => { systemDark.value = e.matches })
   }
+  // D10：以下 setter 带后端调用，不再 fire-and-forget 吞错——
+  // 保留乐观更新与 localStorage 写入，返回 Promise；后端失败时先回滚本地值与持久化副本再 reject，
+  // 由调用方（OptionsPage）决定提示文案与受控件回滚。
+  // 注意：Go 侧 Set* 不抛错，业务失败走 resolve 的 {success:false, error} 载荷，
+  // 因此这里要同时把「binding reject」与「success=false」都归一化成 rejection。
+  // App.vue 启动同步不 await 这些 setter，因此预先挂一个只吞错不处理的 catch，
+  // 让 rejection 仍能传播给 await 的调用方，但不会冒泡成全局 unhandledrejection。
+  function persist(key: string, v: string) {
+    try { localStorage.setItem(key, v) } catch { /* ignore */ }
+  }
+  function setterError(res: unknown, fallback: string): Error {
+    const r = res as Record<string, unknown> | null
+    const msg = (r && typeof r['error'] === 'string' && r['error']) || fallback
+    return new Error(msg)
+  }
+  function trackSetter(run: () => Promise<unknown>, rollback: () => void, fallback: string): Promise<void> {
+    const out = run().then(
+      (res) => {
+        const r = res as Record<string, unknown> | null
+        if (r && r['success'] === false) { rollback(); throw setterError(res, fallback) }
+      },
+      (err) => { rollback(); throw err },
+    )
+    out.catch(() => { /* 由 await 方处理，这里仅保证未被 await 时不触发全局错误 */ })
+    return out
+  }
   function setTheme(t: AppTheme) {
+    const prev = theme.value
     theme.value = t
-    try { localStorage.setItem(THEME_KEY, t) } catch { /* ignore */ }
-    void api.SetTheme(t).catch(() => { /* ignore */ })
+    persist(THEME_KEY, t)
+    return trackSetter(() => api.SetTheme(t), () => { theme.value = prev; persist(THEME_KEY, prev) }, '主题设置保存失败')
   }
   function setLang(l: Lang) {
+    const prev = lang.value
     lang.value = l
-    try { localStorage.setItem(LANG_KEY, l) } catch { /* ignore */ }
-    void api.SetLanguage(l).catch(() => { /* ignore */ })
+    persist(LANG_KEY, l)
+    return trackSetter(() => api.SetLanguage(l), () => { lang.value = prev; persist(LANG_KEY, prev) }, '语言设置保存失败')
   }
   function setAccentColor(c: string) {
+    const prev = accentColor.value
     accentColor.value = c
-    try { localStorage.setItem(ACCENT_KEY, c) } catch { /* ignore */ }
-    void api.SetAccent(c).catch(() => { /* ignore */ })
+    persist(ACCENT_KEY, c)
+    return trackSetter(() => api.SetAccent(c), () => { accentColor.value = prev; persist(ACCENT_KEY, prev) }, '主题色保存失败')
   }
   function setHttpEnabled(v: boolean) {
+    const prev = httpEnabled.value
     httpEnabled.value = v
-    try { localStorage.setItem(HTTP_KEY, String(v)) } catch { /* ignore */ }
-    void api.SetHttpEnabled(v).catch(() => { /* ignore */ })
+    persist(HTTP_KEY, String(v))
+    return trackSetter(() => api.SetHttpEnabled(v), () => { httpEnabled.value = prev; persist(HTTP_KEY, String(prev)) }, 'HTTP 选项保存失败')
   }
   function setPrivateHostsAllowed(v: boolean) {
+    const prev = privateHostsAllowed.value
     privateHostsAllowed.value = v
-    try { localStorage.setItem(PRIVATE_HOSTS_KEY, String(v)) } catch { /* ignore */ }
-    void api.SetPrivateHostsAllowed(v).catch(() => { /* ignore */ })
+    persist(PRIVATE_HOSTS_KEY, String(v))
+    return trackSetter(() => api.SetPrivateHostsAllowed(v), () => { privateHostsAllowed.value = prev; persist(PRIVATE_HOSTS_KEY, String(prev)) }, '私网选项保存失败')
   }
   function setAutoFillLimits(v: boolean) {
+    const prev = autoFillLimits.value
     autoFillLimits.value = v
-    try { localStorage.setItem(AUTOFILL_KEY, String(v)) } catch { /* ignore */ }
-    void api.SetAutoFillLimits(v).catch(() => { /* ignore */ })
+    persist(AUTOFILL_KEY, String(v))
+    return trackSetter(() => api.SetAutoFillLimits(v), () => { autoFillLimits.value = prev; persist(AUTOFILL_KEY, String(prev)) }, '自动填充选项保存失败')
   }
   function setReasoningAllIntensities(v: boolean) {
     reasoningAllIntensities.value = v

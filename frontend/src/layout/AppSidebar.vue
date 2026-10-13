@@ -1,6 +1,6 @@
 <template>
   <aside class="app-sidebar" :class="{ collapsed }">
-    <button class="sidebar-toggle" @click="collapsed = !collapsed">
+    <button class="sidebar-toggle" type="button" :title="collapsed ? '展开侧栏' : '收起侧栏'" :aria-label="collapsed ? '展开侧栏' : '收起侧栏'" :aria-expanded="!collapsed" @click="collapsed = !collapsed">
       <n-icon :component="collapsed ? ChevronForwardOutline : ChevronBackOutline" :size="18" />
     </button>
     <div class="app-brand">
@@ -12,17 +12,20 @@
       <span class="brand-text">Agent Provider Manager</span>
     </div>
     <nav class="app-nav" ref="navEl">
-      <div
+      <!-- D9：自绘导航项改为原生 button（获得键盘可达 + 全局 :focus-visible 焦点环），高亮态补 aria-current="page" -->
+      <button
         v-for="item in navItems"
         :key="item.key"
+        type="button"
         class="nav-item"
         :class="{ active: activeKey === item.key }"
+        :aria-current="activeKey === item.key ? 'page' : undefined"
         :title="item.label"
         @click="router.push(item.key)"
       >
         <n-icon :component="item.icon" :size="18" class="nav-icon" />
         <span class="nav-label">{{ item.label }}</span>
-      </div>
+      </button>
       <div v-show="indicatorReady" class="nav-indicator" :style="indicatorStyle" />
     </nav>
     <Transition name="fade">
@@ -98,7 +101,7 @@ onBeforeUnmount(() => { window.removeEventListener('resize', updateIndicator) })
   background: var(--fluent-card-bg);
   border-right: 1px solid var(--fluent-border);
   display: flex; flex-direction: column;
-  transition: width 0.22s cubic-bezier(0.33, 0, 0, 1), background-color 0.2s, border-color 0.2s;
+  transition: width var(--dur-standard-lg) var(--ease-standard), background-color var(--dur-standard) var(--ease-standard), border-color var(--dur-standard) var(--ease-standard);
   position: relative;
 }
 .app-sidebar.collapsed { width: 64px; }
@@ -117,23 +120,26 @@ onBeforeUnmount(() => { window.removeEventListener('resize', updateIndicator) })
   min-height: 56px; overflow: hidden; user-select: none;
 }
 .brand-icon { color: var(--accent, #0078d4); flex-shrink: 0; display: block; }
-.brand-text { font-size: 13px; font-weight: 700; white-space: nowrap; overflow: hidden; transition: opacity 0.2s, max-width 0.25s; max-width: 180px; }
+.brand-text { font-size: 13px; font-weight: 700; white-space: nowrap; overflow: hidden; transition: opacity var(--dur-standard) var(--ease-standard), max-width var(--dur-standard-lg) var(--ease-standard); max-width: 180px; }
 .app-sidebar.collapsed .brand-text { opacity: 0; max-width: 0; }
 .app-nav { flex: 1; padding: 8px 10px; display: flex; flex-direction: column; gap: 4px; overflow-y: auto; position: relative; }
 .nav-item {
   display: flex; align-items: center; gap: 12px;
   padding: 10px 14px; border-radius: 8px; cursor: pointer;
-  transition: background 0.2s, color 0.2s; color: inherit; user-select: none;
+  /* 原生 button 外观重置：外观完全沿用原自绘 div 的视觉 */
+  border: 0; margin: 0; font: inherit; text-align: left; background: transparent;
+  transition: background var(--dur-standard) var(--ease-standard), color var(--dur-standard) var(--ease-standard); color: inherit; user-select: none;
 }
 .nav-item:hover { background: color-mix(in srgb, var(--accent, #0078d4) 8%, transparent); }
 .nav-item.active { background: color-mix(in srgb, var(--accent, #0078d4) 12%, transparent); color: var(--accent-text-strong); }
 .nav-indicator {
   position: absolute; left: 10px; top: 0; width: 3px; border-radius: 2px;
   background: var(--accent, #0078d4); pointer-events: none;
-  transition: transform 0.22s, height 0.22s, background-color 0.2s;
+  /* 指示条回弹 easing（参考项目同款），高度变化用标准曲线 */
+  transition: transform var(--dur-settle) cubic-bezier(0.2, 0.9, 0.25, 1), height var(--dur-standard-lg) var(--ease-standard), background-color var(--dur-standard) var(--ease-standard);
 }
 .nav-icon { flex-shrink: 0; }
-.nav-label { font-size: 13px; white-space: nowrap; overflow: hidden; max-width: 200px; transition: opacity 0.2s, max-width 0.25s; }
+.nav-label { font-size: 13px; white-space: nowrap; overflow: hidden; max-width: 200px; transition: opacity var(--dur-standard) var(--ease-standard), max-width var(--dur-standard-lg) var(--ease-standard); }
 .app-sidebar.collapsed .nav-label { opacity: 0; max-width: 0; }
 .app-sidebar-footer { padding: 10px 14px; border-top: 1px solid var(--fluent-border); overflow: hidden; }
 .fade-enter-active, .fade-leave-active { transition: opacity 0.15s; }

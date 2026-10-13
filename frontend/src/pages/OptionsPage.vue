@@ -1,7 +1,11 @@
 <template>
   <div class="options-page">
-    <div class="fluent-card card-pad">
-      <div class="card-title">{{ t('options.title', lang) }}</div>
+    <!-- C5：页头标题自卡片迁入，不在卡内重复渲染；本页无页面级主操作，actions 留空 -->
+    <PageHeader class="enter-stagger" :style="{ animationDelay: staggerMs(0) + 'ms' }" :title="t('options.title', lang)">
+      <template #icon><n-icon :component="OptionsOutline" :size="18" /></template>
+    </PageHeader>
+
+    <div class="fluent-card card-pad enter-stagger" :style="{ animationDelay: staggerMs(1) + 'ms' }">
       <div class="opt-list">
         <div class="opt-row">
           <div class="opt-info">
@@ -151,7 +155,10 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import { NRadioGroup, NRadioButton, NColorPicker, NSwitch, NButton } from 'naive-ui'
+import { NRadioGroup, NRadioButton, NColorPicker, NSwitch, NButton, NIcon } from 'naive-ui'
+import { OptionsOutline } from '@vicons/ionicons5'
+import PageHeader from '../components/ui/PageHeader.vue'
+import { staggerMs } from '../composables/useStagger'
 import { BrowserOpenURL } from '../../wailsjs/runtime/runtime'
 import { useSettingStore } from '../stores/setting'
 import { useUpdateStore } from '../stores/update'
@@ -176,27 +183,72 @@ function toast(type: string, title: string, msg?: string) {
   const fn = (window as unknown as Record<string, unknown>)['__toast'] as ((t: string, title: string, msg?: string) => void) | undefined
   if (fn) fn(type, title, msg)
 }
-function onLangChange(v: Lang) {
-  settingStore.setLang(v)
-  toast('success', t('options.lang', v === 'system' ? settingStore.resolvedLang : v), t('common.ok', v === 'system' ? settingStore.resolvedLang : v))
+// D10：带后端调用的选项先 await setter 的 Promise，成功才弹成功 toast；
+// 失败弹错误 toast，并把受控开关/选项值回滚到操作前的旧值（store 侧已同步回滚 localStorage）。
+function errDetail(e: unknown): string {
+  if (e instanceof Error) return e.message
+  if (typeof e === 'string') return e
+  try { return JSON.stringify(e) } catch { return String(e) }
 }
-function onThemeChange(v: 'light' | 'dark' | 'system') {
-  settingStore.setTheme(v)
+async function onLangChange(v: Lang) {
+  const prev = settingStore.lang
+  const shown = v === 'system' ? settingStore.resolvedLang : v
+  try {
+    await settingStore.setLang(v)
+    toast('success', t('options.lang', shown), t('common.ok', shown))
+  } catch (e) {
+    settingStore.lang = prev
+    toast('error', t('options.lang', prev === 'system' ? settingStore.resolvedLang : prev), errDetail(e))
+  }
 }
-function onAccentChange(v: string) {
-  if (v && v.trim()) settingStore.setAccentColor(v.trim())
+async function onThemeChange(v: 'light' | 'dark' | 'system') {
+  const prev = settingStore.theme
+  try {
+    await settingStore.setTheme(v)
+  } catch (e) {
+    settingStore.theme = prev
+    toast('error', t('options.theme', lang.value), errDetail(e))
+  }
 }
-function onHttpChange(v: boolean) {
-  settingStore.setHttpEnabled(v)
-  toast('success', t('options.http', lang.value), t('common.ok', lang.value))
+async function onAccentChange(v: string) {
+  if (!v || !v.trim()) return
+  const prev = settingStore.accentColor
+  try {
+    await settingStore.setAccentColor(v.trim())
+  } catch (e) {
+    settingStore.accentColor = prev
+    toast('error', t('options.accent', lang.value), errDetail(e))
+  }
 }
-function onPrivateHostsChange(v: boolean) {
-  settingStore.setPrivateHostsAllowed(v)
-  toast('success', t('options.privateHosts', lang.value), t('common.ok', lang.value))
+async function onHttpChange(v: boolean) {
+  const prev = settingStore.httpEnabled
+  try {
+    await settingStore.setHttpEnabled(v)
+    toast('success', t('options.http', lang.value), t('common.ok', lang.value))
+  } catch (e) {
+    settingStore.httpEnabled = prev
+    toast('error', t('options.http', lang.value), errDetail(e))
+  }
 }
-function onAutoFillChange(v: boolean) {
-  settingStore.setAutoFillLimits(v)
-  toast('success', t('options.autofill', lang.value), t('common.ok', lang.value))
+async function onPrivateHostsChange(v: boolean) {
+  const prev = settingStore.privateHostsAllowed
+  try {
+    await settingStore.setPrivateHostsAllowed(v)
+    toast('success', t('options.privateHosts', lang.value), t('common.ok', lang.value))
+  } catch (e) {
+    settingStore.privateHostsAllowed = prev
+    toast('error', t('options.privateHosts', lang.value), errDetail(e))
+  }
+}
+async function onAutoFillChange(v: boolean) {
+  const prev = settingStore.autoFillLimits
+  try {
+    await settingStore.setAutoFillLimits(v)
+    toast('success', t('options.autofill', lang.value), t('common.ok', lang.value))
+  } catch (e) {
+    settingStore.autoFillLimits = prev
+    toast('error', t('options.autofill', lang.value), errDetail(e))
+  }
 }
 function onIntensityChange(v: boolean) {
   settingStore.setReasoningAllIntensities(v)
@@ -224,10 +276,9 @@ function installUpdate() {
 </script>
 
 <style scoped>
+/* B10：.fluent-card 用 global.css 规范层定义，此处不再重复 */
 .options-page { display: flex; flex-direction: column; gap: 12px; }
-.fluent-card { background: var(--fluent-card-bg); border-radius: 10px; box-shadow: var(--fluent-shadow-md); border: 1px solid var(--fluent-border); }
 .card-pad { padding: 16px; }
-.card-title { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
 .opt-list { display: flex; flex-direction: column; }
 .opt-row {
   display: flex; align-items: center; justify-content: space-between; gap: 16px;
@@ -241,11 +292,12 @@ function installUpdate() {
   color: var(--accent, #0078d4);
   background: color-mix(in srgb, var(--accent, #0078d4) 10%, transparent);
   border: 1px solid color-mix(in srgb, var(--accent, #0078d4) 30%, transparent);
-  border-radius: 4px; padding: 1px 6px;
+  /* D5：圆角归位到控件 6px 档（accent tint 属数据强调，保留为合法变体） */
+  border-radius: 6px; padding: 1px 6px;
 }
 .opt-desc { font-size: 11px; color: var(--fluent-text-soft); margin-top: 3px; }
 .opt-ctrl { flex-shrink: 0; display: flex; align-items: center; }
 .opt-links, .opt-update-controls { gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .update-ready { margin-top: 4px; font-size: 11px; color: var(--accent, #0078d4); }
-.update-error { margin-top: 4px; font-size: 11px; color: #c42b1c; }
+.update-error { margin-top: 4px; font-size: 11px; color: var(--err); }
 </style>

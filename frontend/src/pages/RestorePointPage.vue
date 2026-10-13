@@ -1,12 +1,27 @@
 <template>
   <div class="restore-page">
+    <!-- C5：页头标题/描述自卡片迁入（不重复渲染）；导出/导入为页面级主操作，收进 actions 并用默认（medium）尺寸，工具条保持 small 分级 -->
+    <PageHeader class="enter-stagger" :style="{ animationDelay: staggerMs(0) + 'ms' }" :title="t('restorePoints.title', lang)" :subtitle="t('restorePoints.desc', lang)">
+      <template #icon><n-icon :component="TimeOutline" :size="18" /></template>
+      <template #actions>
+        <n-button @click="openExport">
+          <template #icon><n-icon :component="CloudUploadOutline" /></template>
+          {{ t('restorePoints.exportBtn', lang) }}
+        </n-button>
+        <n-button :loading="openingBackup" @click="openImport">
+          <template #icon><n-icon :component="CloudDownloadOutline" /></template>
+          {{ t('restorePoints.importBtn', lang) }}
+        </n-button>
+      </template>
+    </PageHeader>
+
     <!-- ZCode 兼容性问题：issues 为空时不显示该卡片 -->
-    <div v-if="compatIssues.length > 0" class="fluent-card card-pad compat-card">
+    <div v-if="compatIssues.length > 0" class="fluent-card card-pad compat-card enter-stagger" :style="{ animationDelay: staggerMs(1) + 'ms' }">
       <div class="compat-head">
-        <span class="compat-icon">⚠</span>
+        <n-icon :component="WarningOutline" :size="16" class="compat-icon" />
         <div class="card-title compat-title">{{ t('restorePoints.compatTitle', lang) }}</div>
         <div style="flex:1" />
-        <n-button size="small" type="primary" color="#ca5010" :loading="fixing" @click="onRepairCompat">
+        <n-button size="small" type="warning" :loading="fixing" @click="onRepairCompat">
           {{ t('restorePoints.compatFix', lang) }}
         </n-button>
       </div>
@@ -22,25 +37,24 @@
       </div>
     </div>
 
-    <div class="fluent-card card-pad">
-      <div class="card-title">{{ t('restorePoints.title', lang) }}</div>
-      <div class="rp-desc">{{ t('restorePoints.desc', lang) }}</div>
+    <div class="fluent-card card-pad enter-stagger" :style="{ animationDelay: staggerMs(2) + 'ms' }">
       <div class="rp-toolbar">
         <span class="rp-dir-label">{{ t('restorePoints.dirLabel', lang) }}</span>
-        <span class="rp-dir" :title="dir">{{ dir || t('restorePoints.noDir', lang) }}</span>
+        <span class="rp-dir selectable" :title="dir">{{ dir || t('restorePoints.noDir', lang) }}</span>
         <div style="flex:1" />
-        <span class="rp-count">{{ t('restorePoints.count', lang).replace('{n}', String(points.length)) }}</span>
-        <n-button size="small" @click="onOpenDir">{{ t('restorePoints.openDir', lang) }}</n-button>
+        <span class="rp-count tnum">{{ t('restorePoints.count', lang).replace('{n}', String(points.length)) }}</span>
+        <n-button size="small" @click="onOpenDir">
+          <template #icon><n-icon :component="FolderOpenOutline" /></template>
+          {{ t('restorePoints.openDir', lang) }}
+        </n-button>
         <n-button size="small" :loading="pruning" @click="onPrune">{{ t('restorePoints.prune', lang) }}</n-button>
-        <n-button size="small" @click="openExport">{{ t('restorePoints.exportBtn', lang) }}</n-button>
-        <n-button size="small" :loading="openingBackup" @click="openImport">{{ t('restorePoints.importBtn', lang) }}</n-button>
       </div>
     </div>
 
-    <div class="fluent-card card-pad list-wrap">
+    <div class="fluent-card card-pad list-wrap enter-stagger" :style="{ animationDelay: staggerMs(3) + 'ms' }">
       <div class="list-header">
         <h3>{{ t('restorePoints.listTitle', lang) }}</h3>
-        <span class="count-label">{{ points.length }}</span>
+        <span class="count-label tnum">{{ points.length }}</span>
       </div>
       <div v-if="loading && points.length === 0" class="empty-state">
         <div class="empty-sub">{{ t('restorePoints.loading', lang) }}</div>
@@ -51,21 +65,22 @@
       </div>
       <div v-else class="rp-table-wrap">
         <table class="rp-table">
+          <!-- D9：表头 th 补 scope="col" -->
           <thead>
             <tr>
-              <th>{{ t('restorePoints.colTime', lang) }}</th>
-              <th>{{ t('restorePoints.colAgent', lang) }}</th>
-              <th>{{ t('restorePoints.colFormat', lang) }}</th>
-              <th>{{ t('restorePoints.colOperation', lang) }}</th>
-              <th>{{ t('restorePoints.colObject', lang) }}</th>
-              <th>{{ t('restorePoints.colSize', lang) }}</th>
-              <th>{{ t('restorePoints.colStatus', lang) }}</th>
-              <th class="rp-th-action">{{ t('restorePoints.colAction', lang) }}</th>
+              <th scope="col">{{ t('restorePoints.colTime', lang) }}</th>
+              <th scope="col">{{ t('restorePoints.colAgent', lang) }}</th>
+              <th scope="col">{{ t('restorePoints.colFormat', lang) }}</th>
+              <th scope="col">{{ t('restorePoints.colOperation', lang) }}</th>
+              <th scope="col">{{ t('restorePoints.colObject', lang) }}</th>
+              <th scope="col">{{ t('restorePoints.colSize', lang) }}</th>
+              <th scope="col">{{ t('restorePoints.colStatus', lang) }}</th>
+              <th scope="col" class="rp-th-action">{{ t('restorePoints.colAction', lang) }}</th>
             </tr>
           </thead>
           <tbody>
             <tr v-for="p in points" :key="p.id" :title="p.target_path">
-              <td class="rp-time">
+              <td class="rp-time tnum">
                 {{ formatTime(p.created_at) }}
                 <div v-if="p.note" class="rp-note">{{ p.note }}</div>
               </td>
@@ -75,7 +90,7 @@
               </td>
               <td>{{ opLabel(p.operation) }}</td>
               <td class="rp-object">{{ objectLabel(p) }}</td>
-              <td class="rp-size">{{ formatSize(p.size_bytes) }}</td>
+              <td class="rp-size tnum">{{ formatSize(p.size_bytes) }}</td>
               <td>
                 <span v-if="!p.existed" class="rp-missing">{{ t('restorePoints.missing', lang) }}</span>
                 <span v-else class="rp-exists">{{ t('restorePoints.stateExists', lang) }}</span>
@@ -97,7 +112,7 @@
       </div>
     </div>
 
-    <n-modal v-model:show="confirmShow" preset="card" :title="t('restorePoints.confirmTitle', lang)" style="width: 480px" :mask-closable="false">
+    <n-modal v-model:show="confirmShow" preset="card" :title="t('restorePoints.confirmTitle', lang)" style="width: 420px" :mask-closable="false">
       <div v-if="pending" class="rp-confirm">
         <div class="rp-confirm-line rp-confirm-path">
           {{ t('restorePoints.confirmPath', lang).replace('{path}', pending.target_path) }}
@@ -121,7 +136,7 @@
       </template>
     </n-modal>
 
-    <n-modal v-model:show="showExport" preset="card" :title="t('restorePoints.exportTitle', lang)" style="width: 520px" :mask-closable="false">
+    <n-modal v-model:show="showExport" preset="card" :title="t('restorePoints.exportTitle', lang)" style="width: 480px" :mask-closable="false">
       <div class="bk-form">
         <label class="bk-label">{{ t('restorePoints.bkScope', lang) }}</label>
         <div class="bk-radios">
@@ -169,12 +184,15 @@
       <template #footer>
         <div style="display: flex; justify-content: flex-end; gap: 8px">
           <n-button :disabled="exporting" @click="showExport = false">{{ t('common.cancel', lang) }}</n-button>
-          <n-button type="primary" :loading="exporting" :disabled="exportScope === 'some' && exportSelected.length === 0" @click="onExport">📤 {{ t('restorePoints.exportDo', lang) }}</n-button>
+          <n-button type="primary" :loading="exporting" :disabled="exportScope === 'some' && exportSelected.length === 0" @click="onExport">
+            <template #icon><n-icon :component="CloudUploadOutline" /></template>
+            {{ t('restorePoints.exportDo', lang) }}
+          </n-button>
         </div>
       </template>
     </n-modal>
 
-    <n-modal v-model:show="showKeysWarn" preset="card" :title="'⚠️ ' + t('restorePoints.bkKeysWarnTitle', lang)" style="width: 420px" :mask-closable="false">
+    <n-modal v-model:show="showKeysWarn" preset="card" :title="t('restorePoints.bkKeysWarnTitle', lang)" style="width: 420px" :mask-closable="false">
       <div class="bk-warn-body">{{ t('restorePoints.bkKeysWarnBody', lang) }}</div>
       <template #footer>
         <div style="display: flex; justify-content: flex-end; gap: 8px">
@@ -184,7 +202,7 @@
       </template>
     </n-modal>
 
-    <n-modal v-model:show="showImport" preset="card" :title="t('restorePoints.importTitle', lang)" style="width: 520px" :mask-closable="false">
+    <n-modal v-model:show="showImport" preset="card" :title="t('restorePoints.importTitle', lang)" style="width: 480px" :mask-closable="false">
       <div class="bk-form">
         <div class="bk-path" :title="importPath">{{ importPath }}</div>
         <div v-if="inspecting" class="bk-hint">{{ t('restorePoints.inspecting', lang) }}</div>
@@ -230,7 +248,10 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { NButton, NPopconfirm, NModal, NInput, NRadioGroup, NRadio, NCheckbox, NAlert } from 'naive-ui'
+import { NButton, NIcon, NPopconfirm, NModal, NInput, NRadioGroup, NRadio, NCheckbox, NAlert } from 'naive-ui'
+import { WarningOutline, FolderOpenOutline, CloudUploadOutline, CloudDownloadOutline, TimeOutline } from '@vicons/ionicons5'
+import PageHeader from '../components/ui/PageHeader.vue'
+import { staggerMs } from '../composables/useStagger'
 import { useSettingStore } from '../stores/setting'
 import type { CompatIssue, RestorePoint, ProviderSummary, BackupInspectResult } from '../types'
 import { t } from '../i18n'
@@ -643,12 +664,11 @@ onMounted(async () => {
 </script>
 
 <style scoped>
+/* B10：.fluent-card / .badge 系列用 global.css 规范层定义，此处不再重复 */
 .restore-page { display: flex; flex-direction: column; gap: 12px; }
-.fluent-card { background: var(--fluent-card-bg); border-radius: 10px; box-shadow: var(--fluent-shadow-md); border: 1px solid var(--fluent-border); }
 .card-pad { padding: 16px; }
 .card-title { font-size: 14px; font-weight: 600; margin-bottom: 12px; }
-.rp-desc { font-size: 11px; color: var(--fluent-text-soft); }
-.rp-toolbar { display: flex; align-items: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.rp-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .rp-dir-label { font-size: 11px; color: var(--fluent-text-soft); white-space: nowrap; }
 .rp-dir { font-size: 11px; color: var(--fluent-text); word-break: break-all; min-width: 0; }
 .rp-count { font-size: 12px; color: var(--fluent-text-soft); }
@@ -673,23 +693,23 @@ onMounted(async () => {
 .rp-note { font-size: 10px; color: var(--fluent-text-soft); margin-top: 2px; max-width: 220px; }
 .rp-object { word-break: break-all; max-width: 200px; }
 .rp-size { white-space: nowrap; }
-.rp-missing { color: #ca5010; font-size: 11px; white-space: nowrap; }
+.rp-missing { color: var(--warn); font-size: 11px; white-space: nowrap; }
 .rp-exists { color: var(--fluent-text-soft); font-size: 11px; white-space: nowrap; }
 .rp-actions { display: flex; gap: 6px; justify-content: flex-end; }
-.format-badge { font-size: 11px; font-weight: 600; border-radius: 4px; padding: 2px 8px; border: 1px solid var(--fluent-border); background: var(--fluent-bg); white-space: nowrap; }
-.format-badge--v2 { color: #107c10; border-color: color-mix(in srgb, #107c10 40%, transparent); background: color-mix(in srgb, #107c10 10%, transparent); }
-.format-badge--legacy { color: #ca5010; border-color: color-mix(in srgb, #ca5010 40%, transparent); background: color-mix(in srgb, #ca5010 10%, transparent); }
-.format-badge--opencode { color: #0078d4; border-color: color-mix(in srgb, #0078d4 40%, transparent); background: color-mix(in srgb, #0078d4 10%, transparent); }
+.format-badge { font-size: 11px; font-weight: 600; border-radius: 6px; padding: 2px 8px; border: 1px solid var(--fluent-border); background: var(--fluent-bg); white-space: nowrap; }
+.format-badge--v2 { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, transparent); background: var(--ok-soft); }
+.format-badge--legacy { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, transparent); background: var(--warn-soft); }
+.format-badge--opencode { color: var(--accent, #0078d4); border-color: color-mix(in srgb, var(--accent, #0078d4) 40%, transparent); background: color-mix(in srgb, var(--accent, #0078d4) 10%, transparent); }
 .format-badge--deepseek { color: #8a5cf6; border-color: color-mix(in srgb, #8a5cf6 40%, transparent); background: color-mix(in srgb, #8a5cf6 10%, transparent); }
 .format-badge--unknown { color: var(--fluent-text-soft); }
 .compat-card {
   display: flex; flex-direction: column; gap: 6px;
-  border-color: color-mix(in srgb, #ca5010 40%, transparent);
-  background: color-mix(in srgb, #ca5010 6%, var(--fluent-card-bg));
+  border-color: color-mix(in srgb, var(--warn) 40%, transparent);
+  background: color-mix(in srgb, var(--warn) 6%, var(--fluent-card-bg));
 }
 .compat-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .compat-title { margin-bottom: 0; }
-.compat-icon { color: #ca5010; font-size: 15px; }
+.compat-icon { color: var(--warn); }
 .compat-desc { font-size: 11px; color: var(--fluent-text-soft); }
 .compat-path { font-size: 11px; color: var(--fluent-text); word-break: break-all; }
 .compat-list { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
@@ -698,11 +718,8 @@ onMounted(async () => {
 .compat-issue-path { font-size: 11px; color: var(--fluent-text-soft); word-break: break-all; margin-top: 2px; }
 .rp-confirm { display: flex; flex-direction: column; gap: 8px; font-size: 13px; line-height: 1.7; }
 .rp-confirm-path { word-break: break-all; }
-.rp-confirm-warn { font-size: 12px; color: #ca5010; }
+.rp-confirm-warn { font-size: 12px; color: var(--warn); }
 .rp-confirm-meta { font-size: 11px; color: var(--fluent-text-soft); }
-.badge { font-size: 10px; border: 1px solid var(--fluent-border); border-radius: 999px; padding: 0 6px; line-height: 16px; white-space: nowrap; }
-.badge-ok { color: #107c10; border-color: #107c10; background: rgba(16,124,16,0.08); }
-.badge-warn { color: #ca5010; border-color: #ca5010; background: rgba(202,80,16,0.08); }
 .bk-form { display: flex; flex-direction: column; gap: 10px; font-size: 12px; }
 .bk-label { font-size: 12px; color: var(--fluent-text-soft); }
 .bk-hint { font-size: 12px; color: var(--fluent-text-soft); }
@@ -718,5 +735,5 @@ onMounted(async () => {
 .bk-info-row > span:first-child { font-size: 11px; color: var(--fluent-text-soft); white-space: nowrap; }
 .bk-pw { display: flex; flex-direction: column; gap: 8px; }
 .bk-warn-body { font-size: 13px; line-height: 1.6; color: var(--fluent-text); }
-.bk-error { color: #d13438; font-size: 12px; white-space: pre-line; }
+.bk-error { color: var(--err); font-size: 12px; white-space: pre-line; }
 </style>

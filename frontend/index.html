@@ -1,6 +1,19 @@
 <!DOCTYPE html>
 <html lang="zh">
 <head>
+  <script>
+    // 冷启动防白闪：在 CSS 包加载前按持久化主题把 <html> 底色涂对
+    // （键名与 stores/setting.ts 一致；非法值回退 prefers-color-scheme；
+    //  颜色与 global.css、theme.ts 三处保持同步）
+    try {
+      var t = localStorage.getItem('apm:theme') || localStorage.getItem('zcode-pm:theme')
+      if (t !== 'light' && t !== 'dark') {
+        t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+      }
+      document.documentElement.dataset.theme = t
+      document.documentElement.style.background = t === 'dark' ? '#202020' : '#f3f3f3'
+    } catch (e) {}
+  </script>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Agent Provider Manager</title>
