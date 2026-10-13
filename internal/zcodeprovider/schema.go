@@ -57,7 +57,7 @@ const (
 )
 
 // AccountModes 是 access.type = zhipu-account 分支的 mode 枚举值。
-var AccountModes = []string{"start-plan", "individual-coding-plan", "team-coding-plan", "off-peak"}
+var AccountModes = []string{"start-plan", "individual-coding-plan", "team-coding-plan", "off-peak", "highspeed"}
 
 // ValidVisibility 判断 visibility 是否合法。
 func ValidVisibility(v string) bool {

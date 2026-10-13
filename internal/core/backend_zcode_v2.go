@@ -171,6 +171,9 @@ func (zcodeV2Store) Get(doc Doc, providerID string) (*ProviderEdit, error) {
 // builtinModelIds/modelOrder、api.headers、access.apiKeyManagementUrl、
 // modelConfigRule.config.enabled 与 optionSpecs.*.map）都会保留，避免一次保存把它们抹掉。
 // 模型集合整体替换为本次提交的内容，与 legacy MergeProviderIntoConfig(mergeModels=false) 一致。
+//
+// 带 templateId 的模板派生行会被拒绝编辑：ZCode 的 zod schema 对这类行 omit 了
+// personalModelIds/modelOrder，向其写入个人字段会让 ZCode 拒收整份个人配置。
 func (zcodeV2Store) Upsert(doc Doc, providerID string, p ProviderPayload, _ SaveOptions) (Doc, error) {
 	newID, providerCfg, err := BuildProviderCfgEditor(p)
 	if err != nil {
@@ -184,6 +187,11 @@ func (zcodeV2Store) Upsert(doc Doc, providerID string, p ProviderPayload, _ Save
 		}
 	}
 	cfg := zcodeprovider.NewConfigFromDoc(doc)
+	for _, id := range []string{providerID, newID} {
+		if tid, ok := zcodeprovider.RuleTemplateID(cfg.ProviderRule(id)); ok && tid != "" {
+			return nil, fmt.Errorf("提供商「%s」由 ZCode 模板派生（templateId=%s），不能编辑：向模板行写入个人字段会让 ZCode 拒绝整份个人配置", id, tid)
+		}
+	}
 	converted, _, err := zcodeprovider.FromLegacy(map[string]interface{}{
 		"provider": map[string]interface{}{newID: providerCfg},
 	})

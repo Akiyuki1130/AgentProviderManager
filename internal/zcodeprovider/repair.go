@@ -49,15 +49,21 @@ func Repair(doc map[string]interface{}) (RepairResult, error) {
 			continue
 		}
 		if raw, ok := pcfg["builtinModelIds"]; ok {
-			builtin, _ := stringSliceStrict(raw)
-			personal := ProviderPersonalModelIDs(pcfg)
-			merged := dedupeStrings(append(personal, builtin...))
 			delete(pcfg, "builtinModelIds")
-			if len(merged) > 0 {
-				pcfg["personalModelIds"] = toInterfaceSlice(merged)
-			}
 			result.Changed = true
-			result.Fixes = append(result.Fixes, fmt.Sprintf("%s：builtinModelIds 已合并到 personalModelIds（%d 项）", pid, len(builtin)))
+			if tid, has := RuleTemplateID(rule); has && tid != "" {
+				// 模板派生行的 zod 形态 omit 了 personalModelIds，合并键会触发 ZCode
+				// 对整份配置的 strict 校验失败；这些 ID 本就由模板重新派生，删除不丢数据。
+				result.Fixes = append(result.Fixes, fmt.Sprintf("%s：模板派生行的 builtinModelIds 已删除（由模板重新派生）", pid))
+			} else {
+				builtin, _ := stringSliceStrict(raw)
+				personal := ProviderPersonalModelIDs(pcfg)
+				merged := dedupeStrings(append(personal, builtin...))
+				if len(merged) > 0 {
+					pcfg["personalModelIds"] = toInterfaceSlice(merged)
+				}
+				result.Fixes = append(result.Fixes, fmt.Sprintf("%s：builtinModelIds 已合并到 personalModelIds（%d 项）", pid, len(builtin)))
+			}
 		}
 		if group, ok := pcfg["group"]; ok && group != nil {
 			if s, isStr := group.(string); isStr && s != GroupStandardPersonal {

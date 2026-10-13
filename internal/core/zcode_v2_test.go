@@ -508,7 +508,7 @@ func TestZCodeV2StoreRoundTrip(t *testing.T) {
 	if rule == nil {
 		t.Fatal("Upsert 后应仍有 providerRule x")
 	}
-	if rule["templateId"] != "tpl-1" || rule["enabled"] != true {
+	if rule["enabled"] != true {
 		t.Errorf("providerRule 级未建模字段应保留：%+v", rule)
 	}
 	if name := zcodeprovider.RuleProviderName(rule); name != "X Renamed" {
@@ -567,7 +567,7 @@ func TestZCodeV2StoreRoundTrip(t *testing.T) {
 	if renamedDoc.ProviderModelRule("y", "m1") == nil {
 		t.Error("模型规则应随 providerId 一起改名")
 	}
-	if renamedDoc.ProviderRule("y")["templateId"] != "tpl-1" {
+	if renamedDoc.ProviderRule("y")["enabled"] != true {
 		t.Error("重命名应保留本包未建模的字段")
 	}
 	if _, err := store.Upsert(renamed, "y", ProviderPayload{
@@ -630,6 +630,45 @@ func TestZCodeV2StoreRoundTrip(t *testing.T) {
 	}
 }
 
+// ZCode 3.15.1 的 zod schema 对带 templateId 的派生行 omit 了 personalModelIds/modelOrder：
+// 把个人字段写进模板行会让 ZCode 拒收整份个人配置，Upsert 必须拒绝编辑模板行。
+func TestZCodeV2UpsertRejectsTemplateRule(t *testing.T) {
+	cfg := zcodeprovider.NewConfig()
+	tpl := zcodeprovider.NewProviderRule("tplp", "TPL", zcodeprovider.GroupStandardPersonal)
+	tpl["templateId"] = "tpl-1"
+	cfg.UpsertProviderRule(tpl)
+	plain := zcodeprovider.NewProviderRule("plain", "Plain", zcodeprovider.GroupStandardPersonal)
+	cfg.UpsertProviderRule(plain)
+	doc := cfg.Doc()
+	store := zcodeV2Store{}
+	payload := func(id string) ProviderPayload {
+		return ProviderPayload{
+			"id": id, "name": id, "kind": "openai-compatible",
+			"base_url": "https://p.example.invalid/v1", "api_key": "sk-placeholder",
+		}
+	}
+	if _, err := store.Upsert(doc, "tplp", payload("tplp"), SaveOptions{}); err == nil {
+		t.Error("编辑模板派生行应被拒绝")
+	}
+	if _, err := store.Upsert(doc, "plain", payload("tplp"), SaveOptions{}); err == nil {
+		t.Error("把普通提供商重命名到模板行的 ID 应被拒绝")
+	}
+	updated, err := store.Upsert(doc, "plain", payload("plain"), SaveOptions{})
+	if err != nil {
+		t.Fatalf("非模板行应可正常编辑：%v", err)
+	}
+	after := zcodeprovider.NewConfigFromDoc(updated)
+	if r := after.ProviderRule("tplp"); r == nil || r["templateId"] != "tpl-1" {
+		t.Error("模板行应原样保留")
+	}
+	if pc := zcodeprovider.RuleConfig(after.ProviderRule("tplp")); pc["personalModelIds"] != nil {
+		t.Errorf("模板行不应被写入 personalModelIds：%v", pc)
+	}
+	if _, err := zcodeprovider.Encode(after); err != nil {
+		t.Errorf("结果应能 canonical 编码：%v", err)
+	}
+}
+
 // canonicalV2DocForTest 返回只含给定 providerRule 的新版文档。
 func canonicalV2DocForTest(t *testing.T, providerIDs ...string) Doc {
 	t.Helper()
@@ -654,7 +693,6 @@ func zcodeV2DocForStore(t *testing.T) Doc {
 	t.Helper()
 	cfg := zcodeprovider.NewConfig()
 	rule := zcodeprovider.NewProviderRule("x", "X", zcodeprovider.GroupStandardPersonal)
-	rule["templateId"] = "tpl-1"
 	rule["enabled"] = true
 	providerCfg := zcodeprovider.RuleConfig(rule)
 	providerCfg["logo"] = map[string]interface{}{"type": zcodeprovider.LogoTypeBuiltin, "key": "acme"}

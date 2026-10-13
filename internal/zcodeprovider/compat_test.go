@@ -108,9 +108,11 @@ func TestCompatIssuesAreCollectedAndRepairable(t *testing.T) {
 	}
 }
 
-// builtinModelIds 修复时必须合并进 personalModelIds，而不是丢掉。
+// 非模板行的 builtinModelIds 修复必须合并进 personalModelIds，而不是丢掉。
 func TestRepairMergesBuiltinModelIDs(t *testing.T) {
 	data := mutateSample(t, func(doc map[string]interface{}) {
+		rule := doc["config"].(map[string]interface{})["providerConfigRules"].(map[string]interface{})["providerRules"].([]interface{})[0].(map[string]interface{})
+		delete(rule, "templateId") // 模板行走 TestRepairTemplateRuleOnlyDropsBuiltinModelIDs 的删除路径
 		pcfg := firstProviderRuleConfig(doc)
 		pcfg["builtinModelIds"] = []interface{}{"acme-builtin", "acme-large"}
 	})
@@ -132,6 +134,59 @@ func TestRepairMergesBuiltinModelIDs(t *testing.T) {
 	want := []string{"acme-large", "acme-small", "acme-builtin"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("personalModelIds = %v, want %v", got, want)
+	}
+}
+
+// 模板派生行（templateId 非空）的 zod 形态 omit 了 personalModelIds/modelOrder：
+// 修复 builtinModelIds 时对这类行只能删除该键，绝不能合并出 personalModelIds。
+func TestRepairTemplateRuleOnlyDropsBuiltinModelIDs(t *testing.T) {
+	data := mutateSample(t, func(doc map[string]interface{}) {
+		rule := doc["config"].(map[string]interface{})["providerConfigRules"].(map[string]interface{})["providerRules"].([]interface{})[0].(map[string]interface{})
+		rule["templateId"] = "tpl-1"
+		pcfg := firstProviderRuleConfig(doc)
+		pcfg["builtinModelIds"] = []interface{}{"acme-builtin"}
+		delete(pcfg, "personalModelIds")
+	})
+	cfg, issues, err := DecodeInspect(data)
+	if err != nil {
+		t.Fatalf("DecodeInspect 失败：%v", err)
+	}
+	if !hasIssue(issues, IssueBuiltinModelIDs) {
+		t.Fatalf("未收集到 %s", IssueBuiltinModelIDs)
+	}
+	if _, err := RepairConfig(cfg); err != nil {
+		t.Fatalf("RepairConfig 失败：%v", err)
+	}
+	pcfg := RuleConfig(cfg.ProviderRule("acme"))
+	if _, ok := pcfg["builtinModelIds"]; ok {
+		t.Error("builtinModelIds 应被删除")
+	}
+	if _, ok := pcfg["personalModelIds"]; ok {
+		t.Error("模板行不得写入 personalModelIds（ZCode 会拒收整份配置）")
+	}
+	if _, err := Encode(cfg); err != nil {
+		t.Fatalf("修复后应可编码：%v", err)
+	}
+}
+
+// ZCode 3.15.1 的 access.mode 枚举新增 highspeed，必须视为合法值而非兼容问题。
+func TestDecodeAcceptsHighspeedAccountMode(t *testing.T) {
+	data := mutateSample(t, func(doc map[string]interface{}) {
+		firstProviderRuleConfig(doc)["access"] = map[string]interface{}{
+			"type":        AccessTypeZhipuAccount,
+			"accountType": AccountTypeZAI,
+			"mode":        "highspeed",
+		}
+	})
+	if _, err := Decode(data); err != nil {
+		t.Fatalf("highspeed 应严格通过 Decode：%v", err)
+	}
+	_, issues, err := DecodeInspect(data)
+	if err != nil {
+		t.Fatalf("DecodeInspect 失败：%v", err)
+	}
+	if hasIssue(issues, IssueUnsupportedAccess) {
+		t.Fatalf("highspeed 被误报为不兼容：%+v", issues)
 	}
 }
 
