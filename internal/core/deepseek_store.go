@@ -1,6 +1,8 @@
 package core
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"sort"
@@ -23,6 +25,9 @@ const (
 	docDshHomeOverrideKey = "_dsh_home_override"
 	// docDshHomeProvidersKey 承载 home 级 patch 的 provider 视图（被覆盖时生效）。
 	docDshHomeProvidersKey = "_dsh_home_providers"
+	// docDshHomePatchErrKey 承载读取/解析 home 级 patch 失败的原因（值类型 error）。
+	// 无法判定 home 是否覆盖时按“已覆盖”处理：宁可拒绝写入，也不要写出 DSH 会静默忽略的配置。
+	docDshHomePatchErrKey = "_dsh_home_patch_err"
 )
 
 // apiForDeepSeekKind 把 UI 的类型映射成 pi-ai 的协议名（0.2 起 api 是必填的路由协议）。
@@ -194,7 +199,8 @@ func deepSeekRouteExtras(opts map[string]interface{}) map[string]interface{} {
 
 // deepSeekBuildEntry 生成 pi-ai 路由条目（0.1 的 llm-pi-ai 段与 0.2 的 profile patch 共用）。
 // 返回的 envName/apiKey 由调用方交给 stageDeepSeekCredential。
-func deepSeekBuildEntry(providerID string, providerCfg map[string]interface{}, existing map[string]interface{}, mergeModels bool) (entry map[string]interface{}, envName, apiKey string) {
+// takenEnvNames 是文档里已被其它 provider 占用的引用名（envName -> ID），用于派生时消歧。
+func deepSeekBuildEntry(providerID string, providerCfg map[string]interface{}, existing map[string]interface{}, mergeModels bool, takenEnvNames map[string]string) (entry map[string]interface{}, envName, apiKey string) {
 	entry = map[string]interface{}{}
 	if existing != nil {
 		entry = deepCopyMap(existing)
@@ -260,7 +266,12 @@ func deepSeekBuildEntry(providerID string, providerCfg map[string]interface{}, e
 	envName = strings.TrimSpace(envName)
 	if strings.TrimSpace(apiKey) != "" {
 		if envName == "" {
-			envName = deepSeekEnvNameFor(providerID)
+			// 只在“派生”时消歧：已有条目的显式 apiKeyEnv 是用户的选择，绝不改名。
+			derived := deepSeekEnvNameFor(providerID)
+			if owner, clash := takenEnvNames[derived]; clash && owner != providerID {
+				derived = dshEnvNameForID(providerID, true)
+			}
+			envName = derived
 		}
 		entry["apiKeyEnv"] = envName
 		delete(entry, "apiKey")
@@ -357,12 +368,76 @@ func dshPayloadCards(payload ProviderPayload) []ModelCard {
 }
 
 // deepSeekEnvNameFor 由 provider ID 推导默认的凭据引用名。
+//
+// 派生结果对每个 provider ID 唯一：ID 里出现非 [A-Za-z0-9_] 字符，或以非 ASCII 字母开头
+// （ProviderIDValid 允许数字开头）时，追加 ID 的哈希后缀，避免 a-b / a:b / a_b 归一化成
+// 同名而互相覆盖。结果始终是合法的环境变量名（^[A-Za-z_][A-Za-z0-9_]*$），因此
+// dshprovider.SetCredentialRef 一定接受它。
 func deepSeekEnvNameFor(providerID string) string {
-	name := strings.ToUpper(strings.ReplaceAll(strings.ReplaceAll(strings.TrimSpace(providerID), "-", "_"), ":", "_"))
-	if name == "" {
+	return dshEnvNameForID(providerID, false)
+}
+
+// dshEnvNameForID 推导凭据引用名；forceHash 为 true（或 ID 本身有损）时追加哈希后缀。
+//
+// Windows 环境变量名大小写不敏感，因此大小写不同的两个 ID（deepseek / DeepSeek）会
+// 派生出同一个名字，必须靠 forceHash 在整份文档的范围内消歧。哈希基于原始 ID，
+// forceHash 对本来就有损的 ID 不会产生双重哈希。
+func dshEnvNameForID(providerID string, forceHash bool) string {
+	trimmed := strings.TrimSpace(providerID)
+	if trimmed == "" {
 		return "DSH_PROVIDER_API_KEY"
 	}
-	return name + "_API_KEY"
+	upper := strings.ToUpper(trimmed)
+	base := strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_':
+			return r
+		default:
+			return '_'
+		}
+	}, upper)
+	// 归一化丢掉了信息，或首字符不是 ASCII 字母（会被 DSH 拒绝）时，用哈希后缀保证唯一。
+	if forceHash || base != upper || !isASCIILetter(trimmed[0]) {
+		sum := sha256.Sum256([]byte(trimmed))
+		base += "_" + hex.EncodeToString(sum[:])[:8]
+	}
+	if !isASCIILetter(base[0]) {
+		base = "_" + base
+	}
+	return base + "_API_KEY"
+}
+
+// deepSeekTakenEnvNames 汇总整份文档里已被占用的 apiKeyEnv，返回 envName -> 占用的 provider ID。
+//
+// 用于在派生新引用名时避开大小写不同但归一化同名的 ID（Windows 环境变量名大小写不敏感）。
+// excludeProviderID 是被编辑的 provider 自身，其占用不参与冲突判定。
+func deepSeekTakenEnvNames(providers map[string]interface{}, excludeProviderID string) map[string]string {
+	taken := map[string]string{}
+	for pid, value := range providers {
+		if pid == excludeProviderID {
+			continue
+		}
+		m, ok := value.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		envName, _ := m["apiKeyEnv"].(string)
+		if envName == "" {
+			if opts, ok := m["options"].(map[string]interface{}); ok {
+				envName, _ = opts["apiKeyEnv"].(string)
+			}
+		}
+		envName = strings.TrimSpace(envName)
+		if envName == "" {
+			continue
+		}
+		taken[envName] = pid
+	}
+	return taken
+}
+
+func isASCIILetter(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
 }
 
 // deepSeekEnsureDefaultInProviders 在默认模型条目的 provider/model 失效时，

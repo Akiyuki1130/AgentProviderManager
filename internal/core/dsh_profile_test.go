@@ -1,8 +1,10 @@
 package core
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -765,5 +767,204 @@ func TestDeepSeekImportPreviewReadsProfilePatch(t *testing.T) {
 	}
 	if preview.Providers[0].Kind != "openai-compatible" {
 		t.Fatalf("kind = %q", preview.Providers[0].Kind)
+	}
+}
+
+// 派生出的凭据引用名必须对每个 provider ID 唯一，且始终是合法环境变量名：
+// a-b / a:b / a_b 不能归一化成同一个名字，数字开头（ProviderIDValid 允许）的 ID
+// 也必须派生出让 SetCredentialRef 接受的名字。
+func TestDeepSeekEnvNameForProviderID(t *testing.T) {
+	nameRe := regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	cases := []string{"deepseek", "a-b", "a:b", "a_b", "9router", ""}
+	seen := map[string]string{}
+	for _, id := range cases {
+		got := deepSeekEnvNameFor(id)
+		if !nameRe.MatchString(got) {
+			t.Fatalf("deepSeekEnvNameFor(%q) = %q，不是合法环境变量名", id, got)
+		}
+		if prev, dup := seen[got]; dup {
+			t.Fatalf("deepSeekEnvNameFor(%q) 与 %q 派生出同一个名字 %q", id, prev, got)
+		}
+		seen[got] = id
+	}
+
+	// 纯字母数字 ID 保持原有命名（无哈希后缀）。
+	if got := deepSeekEnvNameFor("deepseek"); got != "DEEPSEEK_API_KEY" {
+		t.Fatalf("deepSeekEnvNameFor(deepseek) = %q, want DEEPSEEK_API_KEY", got)
+	}
+	if got := deepSeekEnvNameFor("a_b"); got != "A_B_API_KEY" {
+		t.Fatalf("deepSeekEnvNameFor(a_b) = %q, want A_B_API_KEY", got)
+	}
+	if got := deepSeekEnvNameFor(""); got != "DSH_PROVIDER_API_KEY" {
+		t.Fatalf("deepSeekEnvNameFor(\"\") = %q, want DSH_PROVIDER_API_KEY", got)
+	}
+
+	// 数字开头的 ID 是允许的，其派生名必须能被凭据写入接受。
+	if !ProviderIDValid("9router") {
+		t.Fatal(`ProviderIDValid("9router") 应为 true`)
+	}
+	credsPath := filepath.Join(t.TempDir(), ".credentials.yaml")
+	if err := dshprovider.SetCredentialRef(credsPath, deepSeekEnvNameFor("9router"), "sk-placeholder"); err != nil {
+		t.Fatalf("SetCredentialRef 拒绝了 9router 派生的凭据名：%v", err)
+	}
+}
+
+// home 级 patch 存在但无法解析时不能静默当成“没有覆盖”：
+// Read 必须把错误抛给调用方，写入也必须按覆盖处理被拒绝。
+func TestDeepSeekProfileMalformedHomePatchSurfacesError(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("DSH_HOME", home)
+	path := DeepSeekDesktopProfilePatch()
+	writeDSHProfile(t, path, testDshDesktopPatch)
+	// 未闭合的流式序列，必然解析失败。
+	writeDSHProfile(t, DeepSeekHomePatch(), "- id: llm-pi-ai\n  config: [unclosed\n")
+
+	backend, err := GetBackend(string(AgentDeepSeek), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := backend.Read(path); !errors.Is(err, errDeepSeekHomeOverride) {
+		t.Fatalf("malformed home patch 时 Read 应返回覆盖错误，得到 %v", err)
+	}
+
+	patch, err := dshprovider.LoadPatch([]byte(testDshDesktopPatch))
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := newDeepSeekProfileDoc(path, patch)
+	if _, err := (deepseekProfileStore{}).Upsert(doc, "", dshTestPayload("beta"), SaveOptions{}); !errors.Is(err, errDeepSeekHomeOverride) {
+		t.Fatalf("malformed home patch 时必须拒绝写入，得到 %v", err)
+	}
+	if _, err := dshEffectiveProviders(doc); !errors.Is(err, errDeepSeekHomeOverride) {
+		t.Fatalf("dshEffectiveProviders 应透传覆盖错误，得到 %v", err)
+	}
+}
+
+// DeepSeekProfileShadowedByHome 是 app 层在建备份/还原点之前的预检：
+// home 级 patch 读不出或解析失败时必须返回错误（而不是放任预检通过、留下无用产物），
+// 缺失 home patch 时视为未覆盖，定义了 llm-pi-ai providers 时视为已覆盖。
+func TestDeepSeekProfileShadowedByHomePrecheck(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("DSH_HOME", home)
+	path := DeepSeekDesktopProfilePatch()
+	writeDSHProfile(t, path, testDshDesktopPatch)
+
+	// home patch 缺失：未覆盖，且无错误。
+	if shadowed, err := DeepSeekProfileShadowedByHome(path); err != nil || shadowed {
+		t.Fatalf("缺失 home patch 应为 (false, nil)，得到 (%v, %v)", shadowed, err)
+	}
+
+	// home patch 定义 llm-pi-ai 的 config.providers：已覆盖，且无错误。
+	writeDSHProfile(t, DeepSeekHomePatch(), `- id: llm-pi-ai
+  name: '@deepseek-ai/dsh-llm-pi-ai'
+  config:
+    providers:
+      home-route:
+        baseURL: https://home.example
+        api: openai-completions
+        models:
+          - id: home-1
+`)
+	if shadowed, err := DeepSeekProfileShadowedByHome(path); err != nil || !shadowed {
+		t.Fatalf("home 定义 providers 时应为 (true, nil)，得到 (%v, %v)", shadowed, err)
+	}
+
+	// home patch 无法解析：必须返回包装了 errDeepSeekHomeOverride 的错误，预检要拒绝。
+	writeDSHProfile(t, DeepSeekHomePatch(), "- id: llm-pi-ai\n  config: [unclosed\n")
+	shadowed, err := DeepSeekProfileShadowedByHome(path)
+	if err == nil {
+		t.Fatalf("malformed home patch 必须返回错误，得到 (%v, nil)", shadowed)
+	}
+	if !errors.Is(err, errDeepSeekHomeOverride) {
+		t.Fatalf("错误应包装 errDeepSeekHomeOverride：%v", err)
+	}
+}
+
+// 大小写不同的两个 provider ID（Windows 环境变量名大小写不敏感）不能共用同一个凭据
+// 引用名，否则后写入的凭据会静默覆盖先前的；同时非冲突的命名必须保持不变。
+func TestDeepSeekEnvNameCaseCollisionAvoided(t *testing.T) {
+	nameRe := regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	home := t.TempDir()
+	t.Setenv("DSH_HOME", home)
+	path := DeepSeekDesktopProfilePatch()
+	writeDSHProfile(t, path, "[]")
+
+	backend, err := GetBackend(string(AgentDeepSeek), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, fingerprint, err := backend.ReadWithFingerprint(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := backend.Store(doc)
+	doc, err = store.Upsert(doc, "", dshTestPayload("deepseek"), SaveOptions{})
+	if err != nil {
+		t.Fatalf("Upsert(deepseek): %v", err)
+	}
+	doc, err = store.Upsert(doc, "", dshTestPayload("DeepSeek"), SaveOptions{})
+	if err != nil {
+		t.Fatalf("Upsert(DeepSeek): %v", err)
+	}
+	if err := backend.Write(path, doc, fingerprint); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	patch, err := dshprovider.LoadPatch([]byte(mustReadFile(t, path)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	providers, err := patch.Providers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	envOf := func(id string) string {
+		m, _ := providers[id].(map[string]interface{})
+		v, _ := m["apiKeyEnv"].(string)
+		return v
+	}
+	lower, upper := envOf("deepseek"), envOf("DeepSeek")
+	if lower == "" || upper == "" {
+		t.Fatalf("两个 provider 都应写入 apiKeyEnv：%#v", providers)
+	}
+	if lower == upper {
+		t.Fatalf("大小写不同的 provider 共用了同一个凭据引用名：%q", lower)
+	}
+	if !nameRe.MatchString(lower) || !nameRe.MatchString(upper) {
+		t.Fatalf("派生的引用名必须是合法环境变量名：%q, %q", lower, upper)
+	}
+	if lower != "DEEPSEEK_API_KEY" {
+		t.Fatalf("非冲突的 deepseek 应保持 DEEPSEEK_API_KEY，得到 %q", lower)
+	}
+
+	// 单一 provider newco 不应受影响，仍得到 NEWCO_API_KEY。
+	path2 := DeepSeekWebProfilePatch()
+	writeDSHProfile(t, path2, "[]")
+	backend2, err := GetBackend(string(AgentDeepSeek), path2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc2, fingerprint2, err := backend2.ReadWithFingerprint(path2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc2, err = backend2.Store(doc2).Upsert(doc2, "", dshTestPayload("newco"), SaveOptions{})
+	if err != nil {
+		t.Fatalf("Upsert(newco): %v", err)
+	}
+	if err := backend2.Write(path2, doc2, fingerprint2); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	patch2, err := dshprovider.LoadPatch([]byte(mustReadFile(t, path2)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	providers2, err := patch2.Providers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	newco, _ := providers2["newco"].(map[string]interface{})
+	if newco["apiKeyEnv"] != "NEWCO_API_KEY" {
+		t.Fatalf("newco 的 apiKeyEnv = %#v，want NEWCO_API_KEY", newco["apiKeyEnv"])
 	}
 }

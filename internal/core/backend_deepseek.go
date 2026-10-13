@@ -173,7 +173,7 @@ func deepSeekUpsertEntry(doc map[string]interface{}, providerID, newID string, p
 		if newID != providerID {
 			delete(providers, providerID)
 		}
-		entry, envName, apiKey := deepSeekBuildEntry(newID, providerCfg, existing, mergeModels)
+		entry, envName, apiKey := deepSeekBuildEntry(newID, providerCfg, existing, mergeModels, deepSeekTakenEnvNames(providers, providerID))
 		providers[newID] = entry
 		stageDeepSeekCredential(doc, envName, apiKey)
 	} else {

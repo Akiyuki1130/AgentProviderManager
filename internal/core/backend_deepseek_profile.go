@@ -63,7 +63,11 @@ func (b deepseekProfileBackend) Read(path string) (Doc, error) {
 	if perr != nil {
 		return nil, &ConfigParseError{Msg: perr.Error()}
 	}
-	return newDeepSeekProfileDoc(path, patch), nil
+	doc := newDeepSeekProfileDoc(path, patch)
+	if err := dshHomePatchError(doc); err != nil {
+		return nil, err
+	}
+	return doc, nil
 }
 
 func (b deepseekProfileBackend) ReadWithFingerprint(path string) (Doc, string, error) {
@@ -100,6 +104,11 @@ func (b deepseekProfileBackend) Store(_ Doc) ProviderStore { return deepseekProf
 
 // newDeepSeekProfileDoc 组装文档，并顺带记录 home 级 patch 是否覆盖 llm-pi-ai，
 // 使 ProviderStore 的全部方法保持“无文件 IO”。
+//
+// home 级 patch 存在但读取或解析失败时，无法判定它是否覆盖：把错误记进文档
+// （docDshHomePatchErrKey），由 dshHomePatchError 在 Read / dshEffectiveProviders
+// 处向上抛出，并按“已被覆盖”拒绝写入。静默当成“没有覆盖”会让一次 DSH 必然忽略的
+// 写入看起来成功。
 func newDeepSeekProfileDoc(path string, patch *dshprovider.Patch) Doc {
 	doc := Doc{docDshPatchKey: patch, docDshPathKey: path}
 	homePath := DeepSeekHomePatch()
@@ -108,23 +117,39 @@ func newDeepSeekProfileDoc(path string, patch *dshprovider.Patch) Doc {
 	}
 	data, err := os.ReadFile(homePath)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return doc
+		}
+		doc[docDshHomePatchErrKey] = fmt.Errorf("%w：读取 home 级 patch %s 失败：%v", errDeepSeekHomeOverride, homePath, err)
 		return doc
 	}
 	patchHome, perr := dshprovider.LoadPatch(data)
 	if perr != nil {
+		doc[docDshHomePatchErrKey] = fmt.Errorf("%w：解析 home 级 patch %s 失败：%v", errDeepSeekHomeOverride, homePath, perr)
 		return doc
 	}
 	overrides, oerr := dshprovider.DefinesLLMPiAIProviders(data)
-	if oerr != nil || !overrides {
+	if oerr != nil {
+		doc[docDshHomePatchErrKey] = fmt.Errorf("%w：解析 home 级 patch %s 失败：%v", errDeepSeekHomeOverride, homePath, oerr)
+		return doc
+	}
+	if !overrides {
 		return doc
 	}
 	homeProviders, herr := patchHome.Providers()
 	if herr != nil {
+		doc[docDshHomePatchErrKey] = fmt.Errorf("%w：解析 home 级 patch %s 的 providers 失败：%v", errDeepSeekHomeOverride, homePath, herr)
 		return doc
 	}
 	doc[docDshHomeOverrideKey] = true
 	doc[docDshHomeProvidersKey] = homeProviders
 	return doc
+}
+
+// dshHomePatchError 取出因 home 级 patch 读取/解析失败而记录的错误；无错误时返回 nil。
+func dshHomePatchError(doc Doc) error {
+	err, _ := doc[docDshHomePatchErrKey].(error)
+	return err
 }
 
 func dshPatchOf(doc Doc) (*dshprovider.Patch, error) {
@@ -136,42 +161,62 @@ func dshPatchOf(doc Doc) (*dshprovider.Patch, error) {
 }
 
 func dshDocOverridden(doc Doc) bool {
-	v, _ := doc[docDshHomeOverrideKey].(bool)
-	return v
+	if v, _ := doc[docDshHomeOverrideKey].(bool); v {
+		return true
+	}
+	// home 级 patch 读不出或解析失败时按“已被覆盖”处理：宁可拒绝写入，也不要写出
+	// DSH 会静默忽略的配置。
+	return dshHomePatchError(doc) != nil
 }
 
 // DeepSeekProfileShadowedByHome 报告该 profile patch 的 llm-pi-ai 是否被 home 级 patch 覆盖。
 //
 // 被覆盖时对 profile 层的写入注定无效。调用方（app 层）应在建立同级备份与还原点之前
 // 就据此拒绝，否则一次注定失败的写入会留下无用的 .bak_ 与还原点。
-func DeepSeekProfileShadowedByHome(path string) bool {
+//
+// home 级 patch 存在但读取或解析失败时无法判定是否覆盖：此时返回包装了
+// errDeepSeekHomeOverride 的错误，调用方应据此拒绝写入，而不是当成“没有覆盖”放行。
+// 目标本身不是 profile patch、或就是 home 级文件本身时返回 (false, nil)。
+func DeepSeekProfileShadowedByHome(path string) (bool, error) {
 	if strings.TrimSpace(path) == "" || !IsDeepSeekProfilePath(path) {
-		return false
+		return false, nil
 	}
 	homePath := DeepSeekHomePatch()
 	if strings.EqualFold(filepath.Clean(path), filepath.Clean(homePath)) {
 		// 目标就是 home 级文件本身，不存在“被自己覆盖”。
-		return false
+		return false, nil
 	}
 	data, err := os.ReadFile(homePath)
 	if err != nil {
-		return false
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("%w：读取 home 级 patch %s 失败：%v", errDeepSeekHomeOverride, homePath, err)
 	}
 	overrides, oerr := dshprovider.DefinesLLMPiAIProviders(data)
-	if oerr != nil || !overrides {
-		return false
+	if oerr != nil {
+		return false, fmt.Errorf("%w：解析 home 级 patch %s 失败：%v", errDeepSeekHomeOverride, homePath, oerr)
+	}
+	if !overrides {
+		return false, nil
 	}
 	patchHome, perr := dshprovider.LoadPatch(data)
 	if perr != nil {
-		return false
+		return false, fmt.Errorf("%w：解析 home 级 patch %s 失败：%v", errDeepSeekHomeOverride, homePath, perr)
 	}
 	_, herr := patchHome.Providers()
-	return herr == nil
+	if herr != nil {
+		return false, fmt.Errorf("%w：解析 home 级 patch %s 的 providers 失败：%v", errDeepSeekHomeOverride, homePath, herr)
+	}
+	return true, nil
 }
 
 // dshEffectiveProviders 返回生效的 provider 视图：
 // home 级 patch 定义 llm-pi-ai 时以它为准（profile 层被覆盖）。
 func dshEffectiveProviders(doc Doc) (map[string]interface{}, error) {
+	if err := dshHomePatchError(doc); err != nil {
+		return nil, err
+	}
 	if dshDocOverridden(doc) {
 		providers, _ := doc[docDshHomeProvidersKey].(map[string]interface{})
 		if providers == nil {
@@ -261,7 +306,7 @@ func (deepseekProfileStore) Upsert(doc Doc, providerID string, p ProviderPayload
 	if newID != providerID {
 		delete(providers, providerID)
 	}
-	entry, envName, apiKey := deepSeekBuildEntry(newID, providerCfg, existing, opt.MergeModels)
+	entry, envName, apiKey := deepSeekBuildEntry(newID, providerCfg, existing, opt.MergeModels, deepSeekTakenEnvNames(providers, providerID))
 	providers[newID] = entry
 	if err := patch.SetProviders(providers); err != nil {
 		return nil, err

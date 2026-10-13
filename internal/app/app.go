@@ -860,8 +860,11 @@ func writeConfigForAgent(path string, cfg map[string]interface{}, fingerprint, a
 // 任何新增的写配置路径都必须调用它，否则会破坏“每次变更都有还原点”的保证。
 func (a *App) prepareChange(target, agent, operation, providerID, modelID, note string) (core.ChangeSnapshot, map[string]interface{}) {
 	// 被 home 级 patch 覆盖的 profile 层写入注定失败：先拒绝，避免留下无用的
-	// 同级备份与还原点（store 层稍后也会以同样的理由拒绝）。
-	if core.DeepSeekProfileShadowedByHome(target) {
+	// 同级备份与还原点（store 层稍后也会以同样的理由拒绝）；home 级 patch 读取或
+	// 解析失败时同样在这里拒绝，而不是让它看起来成功后才发现写不进去。
+	if shadowed, shadowErr := core.DeepSeekProfileShadowedByHome(target); shadowErr != nil {
+		return core.ChangeSnapshot{}, map[string]interface{}{"success": false, "error": core.ShortText(shadowErr.Error(), 300)}
+	} else if shadowed {
 		return core.ChangeSnapshot{}, map[string]interface{}{"success": false, "error": "llm-pi-ai 配置被 $DSH_HOME/cordis.patch.yml 覆盖，请直接编辑该 home 级文件"}
 	}
 	snapshot, err := core.PrepareChange(core.ChangeContext{

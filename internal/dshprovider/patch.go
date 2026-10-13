@@ -244,8 +244,10 @@ func (p *Patch) findRow(id string) int {
 	return found
 }
 
-// DefinesLLMPiAIProviders 判断一份 patch 是否定义了 llm-pi-ai 的 config。
+// DefinesLLMPiAIProviders 判断一份 patch 是否“定义了 llm-pi-ai 的 providers”。
 // 用于检测 home patch 覆盖：被覆盖时 profile patch 的写入不会生效。
+// 只有 llm-pi-ai 条目的 config 是映射且带 providers 键时才为 true（providers: {}
+// 也算定义）；仅存在 config（如 config: {}）或 config 里没有 providers 时不算覆盖。
 func DefinesLLMPiAIProviders(data []byte) (bool, error) {
 	p, err := LoadPatch(data)
 	if err != nil {
@@ -255,7 +257,11 @@ func DefinesLLMPiAIProviders(data []byte) (bool, error) {
 	if idx < 0 {
 		return false, nil
 	}
-	return mapValue(p.seq.Content[idx], "config") != nil, nil
+	cfg := mapValue(p.seq.Content[idx], "config")
+	if cfg == nil || cfg.Kind != yaml.MappingNode {
+		return false, nil
+	}
+	return mapValue(cfg, "providers") != nil, nil
 }
 
 // isPatchShapedOrEmpty 判断内容是否是一份 patch：顶层数组，或空/只有注释的

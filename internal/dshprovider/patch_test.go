@@ -160,6 +160,37 @@ func TestDefinesLLMPiAIProviders(t *testing.T) {
 	}
 }
 
+// 只有 config 是映射且带 providers 键的 llm-pi-ai 条目才算“定义 providers”。
+// config: {} 或 config 里没有 providers 时必须为 false（否则用户的 profile 写入
+// 会被误判成被 home patch 覆盖而永久拒绝）；providers: 与 providers: {} 都必须为 true。
+func TestDefinesLLMPiAIProvidersRequiresProvidersKey(t *testing.T) {
+	cases := []struct {
+		name string
+		data string
+		want bool
+	}{
+		{"config 空映射", "- id: llm-pi-ai\n  config: {}\n", false},
+		{"config 无 providers", "- id: llm-pi-ai\n  config:\n    other: 1\n", false},
+		{"config 是标量", "- id: llm-pi-ai\n  config: nope\n", false},
+		{"config 为 null", "- id: llm-pi-ai\n  config:\n", false},
+		{"无 llm-pi-ai 条目", "- id: hmr\n  config: {}\n", false},
+		{"providers 有内容", "- id: llm-pi-ai\n  config:\n    providers:\n      acme:\n        baseURL: https://acme.example/v1\n", true},
+		{"providers 空映射", "- id: llm-pi-ai\n  config:\n    providers: {}\n", true},
+		{"providers 空值", "- id: llm-pi-ai\n  config:\n    providers:\n", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := DefinesLLMPiAIProviders([]byte(tc.data))
+			if err != nil {
+				t.Fatalf("DefinesLLMPiAIProviders: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("DefinesLLMPiAIProviders = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestDetectFormat(t *testing.T) {
 	home := filepath.Join("C:", "Users", "placeholder", ".dsh")
 	cases := []struct {
