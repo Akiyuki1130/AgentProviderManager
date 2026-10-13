@@ -46,15 +46,45 @@
             <div class="opt-name">{{ t('options.accent', lang) }}</div>
             <div class="opt-desc">{{ t('options.accentDesc', lang) }}</div>
           </div>
-          <div class="opt-ctrl">
-            <n-color-picker
-              :value="settingStore.accentColor"
-              :show-alpha="false"
-              :modes="['hex']"
-              :swatches="accentSwatches"
-              style="width: 150px"
-              @update:value="onAccentChange"
-            />
+          <div class="opt-ctrl accent-ctrl">
+            <div class="accent-picker">
+              <div class="accent-presets">
+                <button
+                  v-for="c in accentSwatches"
+                  :key="c"
+                  type="button"
+                  class="accent-swatch"
+                  :class="{ 'is-selected': isPresetSelected(c) }"
+                  :style="{ '--swatch-color': c, '--swatch-tick': accentTextOnAccent(c) }"
+                  :title="c"
+                  @click="onAccentChange(c)"
+                >
+                  <n-icon v-if="isPresetSelected(c)" :size="14"><Checkmark /></n-icon>
+                </button>
+              </div>
+              <div class="accent-custom">
+                <span class="accent-custom-label">{{ t('options.accentCustom', lang) }}</span>
+                <button
+                  type="button"
+                  class="accent-swatch"
+                  :class="{ 'is-selected': isCustomAccent }"
+                  :style="{ '--swatch-color': settingStore.accentColor, '--swatch-tick': accentTextOnAccent(settingStore.accentColor) }"
+                  :title="settingStore.accentColor"
+                  @click="triggerColorInput"
+                >
+                  <n-icon v-if="isCustomAccent" :size="14"><Checkmark /></n-icon>
+                </button>
+                <!-- 原生取色器：只绑 @change，避免拖动取色时逐帧触发 IPC 保存 -->
+                <input
+                  ref="colorInputEl"
+                  :value="nativeColorValue"
+                  type="color"
+                  class="accent-color-input-hidden"
+                  @change="onNativeColorChange"
+                />
+                <span class="accent-value">{{ settingStore.accentColor }}</span>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -154,9 +184,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
-import { NRadioGroup, NRadioButton, NColorPicker, NSwitch, NButton, NIcon } from 'naive-ui'
-import { OptionsOutline } from '@vicons/ionicons5'
+import { computed, ref } from 'vue'
+import { NRadioGroup, NRadioButton, NSwitch, NButton, NIcon } from 'naive-ui'
+import { OptionsOutline, Checkmark } from '@vicons/ionicons5'
+import { accentTextOnAccent } from '../styles/theme'
 import PageHeader from '../components/ui/PageHeader.vue'
 import { staggerMs } from '../composables/useStagger'
 import { BrowserOpenURL } from '../../wailsjs/runtime/runtime'
@@ -170,10 +201,22 @@ const updateStore = useUpdateStore()
 const lang = computed(() => settingStore.resolvedLang)
 
 const currentLangLabel = computed(() => t(`options.${settingStore.resolvedLang}`, settingStore.resolvedLang))
-const accentSwatches = [
-  '#0078D4', '#0067C0', '#28a9d6', '#4aa8ff', '#107c10',
-  '#ca5010', '#d13438', '#8a5cf6', '#e3008c', '#6b6b6b',
-]
+// Win11 经典强调色预设（参考 VrcFrameLimit AppearanceSection）
+const accentSwatches = ['#0067C0', '#8764B8', '#038387', '#107C10', '#CA5010', '#D13438', '#515C6B', '#744DA9']
+const colorInputEl = ref<HTMLInputElement | null>(null)
+// 原生 color input 要求小写 #rrggbb，否则会被浏览器清空为 #000000
+const nativeColorValue = computed(() => settingStore.accentColor.toLowerCase())
+function isPresetSelected(c: string) {
+  return c.toLowerCase() === settingStore.accentColor.toLowerCase()
+}
+// 当前值不属于任何预设时，"自定义"色板呈选中态
+const isCustomAccent = computed(() => !accentSwatches.some((c) => c.toLowerCase() === settingStore.accentColor.toLowerCase()))
+function triggerColorInput() {
+  colorInputEl.value?.click()
+}
+function onNativeColorChange(e: Event) {
+  void onAccentChange((e.target as HTMLInputElement).value)
+}
 
 function openExternal(url: string) {
   BrowserOpenURL(url)
@@ -292,12 +335,42 @@ function installUpdate() {
   color: var(--accent, #0078d4);
   background: color-mix(in srgb, var(--accent, #0078d4) 10%, transparent);
   border: 1px solid color-mix(in srgb, var(--accent, #0078d4) 30%, transparent);
-  /* D5：圆角归位到控件 6px 档（accent tint 属数据强调，保留为合法变体） */
-  border-radius: 6px; padding: 1px 6px;
+  /* 圆角按控件档位表归位 8px（≈28 档小控件；accent tint 属数据强调变体，保留） */
+  border-radius: 8px; padding: 1px 6px;
 }
 .opt-desc { font-size: 11px; color: var(--fluent-text-soft); margin-top: 3px; }
 .opt-ctrl { flex-shrink: 0; display: flex; align-items: center; }
 .opt-links, .opt-update-controls { gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .update-ready { margin-top: 4px; font-size: 11px; color: var(--accent, #0078d4); }
 .update-error { margin-top: 4px; font-size: 11px; color: var(--err); }
+
+/* === 主题色色板（参考 VrcFrameLimit AppearanceSection，圆形 50% 为合法例外） === */
+.accent-ctrl { flex-wrap: wrap; justify-content: flex-end; }
+.accent-picker { display: flex; flex-direction: column; gap: 10px; }
+.accent-presets { display: flex; flex-wrap: wrap; gap: 10px; justify-content: flex-end; }
+.accent-swatch {
+  width: 28px; height: 28px; padding: 0;
+  border: 2px solid transparent; border-radius: 50%;
+  background-color: var(--swatch-color);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12);
+  cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: var(--swatch-tick, #fff);
+  transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
+}
+.accent-swatch:hover { transform: scale(1.1); }
+.accent-swatch.is-selected {
+  border-color: var(--fluent-text, #000);
+  box-shadow: 0 0 0 2px var(--fluent-card-bg, #fff), 0 0 0 4px var(--swatch-color);
+}
+.accent-custom { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+.accent-custom-label { font-size: 12px; color: var(--fluent-text-soft, rgba(128, 128, 128, 0.85)); }
+.accent-color-input-hidden {
+  position: absolute; width: 0; height: 0; padding: 0; border: none;
+  opacity: 0; pointer-events: none;
+}
+.accent-value {
+  font-size: 12px; font-family: 'Cascadia Code', 'Consolas', monospace;
+  color: var(--fluent-text-soft, rgba(128, 128, 128, 0.85));
+}
 </style>

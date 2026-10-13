@@ -2,7 +2,7 @@
   <div class="import-page">
     <!-- C5 统一页头：标题用既有 tab.import 文案；右侧无顶部主按钮组（获取/导入 CTA 均在所属卡片内），故不带 actions -->
     <PageHeader class="enter-stagger" :style="{ animationDelay: staggerMs(0) + 'ms' }" :title="t('tab.import', lang)" :subtitle="t('import.subtitle', lang)">
-      <template #icon><n-icon :component="CloudDownloadOutline" :size="20" /></template>
+      <template #icon><n-icon :component="CloudDownloadOutline" :size="18" /></template>
     </PageHeader>
 
     <div v-if="manualRefreshInfo" class="refresh-banner enter-stagger" :style="{ animationDelay: staggerMs(1) + 'ms' }">
@@ -10,7 +10,7 @@
       <n-button size="small" @click="clearManualRefresh">{{ t('import.backToNormal', lang) }}</n-button>
     </div>
 
-    <div class="fluent-card card-pad enter-stagger" :style="{ animationDelay: staggerMs(2) + 'ms' }">
+    <div v-if="showZcodeFormat" class="fluent-card card-pad enter-stagger" :style="{ animationDelay: staggerMs(2) + 'ms' }">
       <div class="card-title">{{ t('zcodeFormat.title', lang) }}</div>
       <div class="format-line">
         <span class="badge" :class="formatBadgeClass">{{ formatLabel }}</span>
@@ -52,7 +52,7 @@
       </template>
     </div>
 
-    <div class="fluent-card card-pad enter-stagger" :style="{ animationDelay: staggerMs(4) + 'ms' }">
+    <div class="fluent-card card-pad enter-stagger" :style="{ animationDelay: secDelay(4) }">
       <div class="card-title">{{ t('import.connTitle', lang) }}</div>
       <div class="conn-grid">
         <label class="form-label">Base URL</label>
@@ -63,7 +63,7 @@
         <div style="display:flex; gap:8px; align-items:center">
           <n-input v-model:value="apiKey" :type="showKey ? 'text' : 'password'" placeholder="sk-..." style="flex:1" />
           <label style="display:flex; gap:4px; align-items:center; font-size:11px; cursor:pointer"><input type="checkbox" v-model="showKey" /> {{ t('import.showKey', lang) }}</label>
-          <n-button size="small" @click="showKeychainPicker = true"><template #icon><n-icon :component="KeyOutline" /></template>{{ t('import.fromKeychain', lang) }}</n-button>
+          <n-button @click="showKeychainPicker = true"><template #icon><n-icon :component="KeyOutline" /></template>{{ t('import.fromKeychain', lang) }}</n-button>
         </div>
         <label class="form-label">Provider ID</label>
         <n-input v-model:value="providerId" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" />
@@ -72,19 +72,19 @@
       </div>
       <div class="fetch-row">
         <n-button type="primary" :loading="fetching" @click="onFetch"><template #icon><n-icon :component="SyncOutline" /></template>{{ t('btn.fetch', lang) }}</n-button>
-        <n-button size="small" :loading="probing" @click="onProbe"><template #icon><n-icon :component="FlashOutline" /></template>{{ t('import.testConnection', lang) }}</n-button>
-        <n-button size="small" @click="onClear">{{ t('btn.clear', lang) }}</n-button>
+        <n-button :loading="probing" @click="onProbe"><template #icon><n-icon :component="FlashOutline" /></template>{{ t('import.testConnection', lang) }}</n-button>
+        <n-button @click="onClear">{{ t('btn.clear', lang) }}</n-button>
         <span class="status-text tnum" :class="statusKind"><n-icon v-if="statusIcon" :component="statusIcon" />{{ statusText }}</span>
       </div>
     </div>
 
-    <div class="footer-bar fluent-card enter-stagger" :style="{ animationDelay: staggerMs(5) + 'ms' }">
+    <div class="footer-bar fluent-card enter-stagger" :style="{ animationDelay: secDelay(5) }">
       <label style="display:flex; gap:6px; align-items:center; font-size:12px; cursor:pointer"><input type="checkbox" v-model="mergeChk" /> {{ t('import.mergeHint', lang) }}</label>
       <div style="flex:1" />
       <n-button type="primary" :disabled="cards.length === 0" :loading="importing" @click="onImport"><template #icon><n-icon :component="CloudDownloadOutline" /></template>{{ t('btn.import', lang) }}</n-button>
     </div>
 
-    <div class="fluent-card card-pad list-wrap enter-stagger" :style="{ animationDelay: staggerMs(6) + 'ms' }">
+    <div class="fluent-card card-pad list-wrap enter-stagger" :style="{ animationDelay: secDelay(6) }">
       <div class="list-header">
         <h3>{{ t('import.modelListTitle', lang) }}</h3>
         <div style="display:flex; gap:12px; align-items:center">
@@ -161,7 +161,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, type Component } from 'vue'
+import { ref, computed, onMounted, watch, type Component } from 'vue'
 import { NButton, NInput, NSelect, NCheckbox, NModal, NIcon, NSpin } from 'naive-ui'
 import {
   DocumentTextOutline, KeyOutline, SyncOutline, FlashOutline, CloudDownloadOutline,
@@ -394,11 +394,18 @@ function isLimitFilled(v: string | number | undefined): boolean {
 }
 
 // ---- ZCode 配置格式展示 & 旧供应商导入到新版 ----
+// Agent 隔离：格式卡/旧版导入卡是 ZCode 配置体系专属概念，DeepSeek Harness 下不展示也不探测；
+// 隐藏两节后，后续区块的 enter-stagger 序号前移 2，避免 DeepSeek 页面入场动画出现空档延迟
+const showZcodeFormat = computed(() => settingStore.agent === 'zcode')
+function secDelay(n: number): string {
+  return staggerMs(showZcodeFormat.value || n < 4 ? n : n - 2) + 'ms'
+}
+
 const legacySelected = ref<string[]>([])
 const legacyConfirmShow = ref(false)
 const applyingLegacy = ref(false)
 
-const showLegacyImport = computed(() => appStore.zcodeFormat === 'v2' && appStore.supportsLegacyImport)
+const showLegacyImport = computed(() => showZcodeFormat.value && appStore.zcodeFormat === 'v2' && appStore.supportsLegacyImport)
 const formatLabel = computed(() => {
   if (appStore.zcodeFormat === 'v2') return t('zcodeFormat.v2', lang.value)
   if (appStore.zcodeFormat === 'legacy') return t('zcodeFormat.legacy', lang.value)
@@ -487,12 +494,21 @@ onMounted(async () => {
     } catch { /* ignore parse error */ }
   }
 
+  if (showZcodeFormat.value) await loadZcodeFormatSections()
+})
+
+// 顶栏切回 ZCode Agent 时补探测（DeepSeek→ZCode 页面不重挂载，避免格式卡停在 unknown/旧数据）
+watch(showZcodeFormat, (visible) => {
+  if (visible) void loadZcodeFormatSections()
+})
+
+async function loadZcodeFormatSections() {
   await appStore.fetchZCodeFormat()
   if (appStore.zcodeFormat === 'v2' && appStore.supportsLegacyImport) {
     await appStore.fetchLegacyPreview()
     legacySelected.value = appStore.legacyProviders.map((p) => p.id)
   }
-})
+}
 </script>
 
 <style scoped>
@@ -522,7 +538,7 @@ onMounted(async () => {
 .legacy-select-all { display: inline-flex; gap: 6px; align-items: center; font-size: 12px; cursor: pointer; }
 /* relative：TransitionGroup list-* 过渡的 leave 绝对定位保位需要 */
 .legacy-list { display: flex; flex-direction: column; gap: 6px; position: relative; }
-.legacy-item { display: flex; gap: 8px; align-items: flex-start; border: 1px solid var(--fluent-border); border-radius: 8px; padding: 8px 12px; }
+.legacy-item { display: flex; gap: 8px; align-items: center; border: 1px solid var(--fluent-border); border-radius: 8px; padding: 8px 12px; }
 .legacy-meta { min-width: 0; flex: 1; }
 .legacy-name { font-size: 13px; font-weight: 600; }
 .legacy-sub { font-size: 11px; color: var(--fluent-text-soft); margin-top: 2px; word-break: break-all; }

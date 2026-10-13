@@ -79,16 +79,21 @@ export function buildThemeOverrides(accent: string, dark?: boolean): GlobalTheme
       fontSize: '14px',
       ...(dark ? { bodyColor: '#202020', cardColor: '#2b2b2b', modalColor: '#2b2b2b' } : {}),
     },
+    // 圆角随控件尺寸缩放（≈height×0.28）：tiny 6 / small 8 / medium 10 / large 12 / 容器 12
     Button: {
-      borderRadiusMedium: '6px',
+      borderRadiusTiny: '6px',
+      borderRadiusSmall: '8px',
+      borderRadiusMedium: '10px',
+      borderRadiusLarge: '12px',
       // 主按钮三态文字锁定 accent 对比色，避免浅色 accent 下白字看不清
       textColorPrimary: palette.textOnAccent,
       textColorHoverPrimary: palette.textOnAccent,
       textColorPressedPrimary: palette.textOnAccent,
     },
-    Card: { borderRadius: '10px' },
-    Dialog: { borderRadius: '10px' },
-    Input: { borderRadius: '6px' },
+    Card: { borderRadius: '12px' },
+    Dialog: { borderRadius: '12px' },
+    // naive Input 只有单一半径变量，按 medium 档；small 档由 global.css 的 .n-input--small 回补 8px
+    Input: { borderRadius: '10px' },
     Tag: { borderRadius: '5px' },
     Menu: {
       itemHeight: '40px',

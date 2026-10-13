@@ -52,14 +52,15 @@ const emit = defineEmits<{
   margin-top: 12px;
   background: var(--fluent-card-bg);
   border: 1px solid var(--fluent-border);
-  border-radius: 10px;
+  /* 容器档位 12px，与全局 .fluent-card 一致 */
+  border-radius: 12px;
   box-shadow: var(--fluent-shadow-md);
   transition: background-color var(--dur-standard) var(--ease-standard),
     border-color var(--dur-standard) var(--ease-standard),
     box-shadow var(--dur-standard) var(--ease-standard);
 }
 .sticky-save-bar-hint { flex: 1; opacity: 0.7; font-size: 13px; }
-.sticky-save-bar-actions { display: flex; gap: 8px; }
+.sticky-save-bar-actions { display: flex; align-items: center; gap: 8px; }
 
 .bar-slide-enter-active,
 .bar-slide-leave-active {

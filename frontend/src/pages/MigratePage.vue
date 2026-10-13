@@ -3,7 +3,7 @@
     <!-- C5 统一页头：原卡内标题/副标题移入 PageHeader，不再重复渲染。
          刷新预览/交换紧贴 Agent 选择器、开始迁移随底部摘要成组，均非可独立上移的页级主操作，故 header 不带 actions -->
     <PageHeader class="enter-stagger" :style="{ animationDelay: staggerMs(0) + 'ms' }" :title="t('migrate.title', lang)" :subtitle="t('migrate.subtitle', lang)">
-      <template #icon><n-icon :component="ArrowForwardOutline" :size="20" /></template>
+      <template #icon><n-icon :component="ArrowForwardOutline" :size="18" /></template>
     </PageHeader>
 
     <div class="fluent-card card-pad enter-stagger" :style="{ animationDelay: staggerMs(1) + 'ms' }">
@@ -17,8 +17,8 @@
           <label class="form-label">{{ t('migrate.targetAgent', lang) }}</label>
           <n-select v-model:value="targetAgent" :options="targetOptions" style="width: 200px" />
         </div>
-        <n-button size="small" type="primary" :loading="previewing" @click="doPreview">{{ t('migrate.refreshPreview', lang) }}</n-button>
-        <n-button size="small" @click="swapAgents">{{ t('migrate.swap', lang) }}</n-button>
+        <n-button type="primary" :loading="previewing" @click="doPreview">{{ t('migrate.refreshPreview', lang) }}</n-button>
+        <n-button @click="swapAgents">{{ t('migrate.swap', lang) }}</n-button>
       </div>
       <div class="migrate-mode">
         <label class="mode-item">
@@ -102,7 +102,7 @@
       <div class="footer-hint">{{ footerHint }}</div>
       <div class="footer-actions">
         <n-button type="primary" :disabled="selectedIds.length === 0 || sourceAgent === targetAgent" :loading="migrating" @click="doMigrate">{{ t('migrate.start', lang) }}</n-button>
-        <n-button size="small" @click="doPreview">{{ t('migrate.refresh', lang) }}</n-button>
+        <n-button @click="doPreview">{{ t('migrate.refresh', lang) }}</n-button>
       </div>
     </div>
   </div>
@@ -267,7 +267,8 @@ onMounted(() => { void doPreview() })
 .card-pad { padding: 16px; }
 .migrate-controls { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; margin-top: 12px; }
 .ctrl-group { display: flex; flex-direction: column; gap: 6px; }
-.ctrl-arrow { font-size: 18px; padding-bottom: 6px; color: var(--fluent-text-soft); }
+/* 与同行 medium 选择器（34px）等高并垂直居中，替代原先的 padding-bottom 估位 */
+.ctrl-arrow { display: flex; align-items: center; height: 34px; font-size: 18px; color: var(--fluent-text-soft); }
 .form-label { font-size: 12px; color: var(--fluent-text-soft); }
 .migrate-mode { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 12px; }
 .mode-item { display: flex; gap: 6px; align-items: center; font-size: 12px; cursor: pointer; }

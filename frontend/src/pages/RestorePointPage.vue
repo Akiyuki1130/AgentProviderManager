@@ -97,10 +97,10 @@
               </td>
               <td>
                 <div class="rp-actions">
-                  <n-button size="tiny" @click="openRestore(p)">{{ t('restorePoints.restore', lang) }}</n-button>
+                  <n-button size="small" @click="openRestore(p)">{{ t('restorePoints.restore', lang) }}</n-button>
                   <n-popconfirm @positive-click="onDelete(p)">
                     <template #trigger>
-                      <n-button size="tiny" type="error" ghost>{{ t('restorePoints.delete', lang) }}</n-button>
+                      <n-button size="small" type="error" ghost>{{ t('restorePoints.delete', lang) }}</n-button>
                     </template>
                     {{ t('restorePoints.deleteConfirm', lang) }}
                   </n-popconfirm>
@@ -229,7 +229,7 @@
         </template>
         <template v-else-if="inspect">
           <div class="bk-hint">{{ t('restorePoints.bkNeedsPassword', lang) }}</div>
-          <div style="display: flex; gap: 8px">
+          <div style="display: flex; gap: 8px; align-items: center">
             <n-input v-model:value="importPassword" type="password" show-password-on="click" :placeholder="t('restorePoints.bkPassword', lang)" style="flex:1" />
             <n-button :loading="inspecting" @click="runInspect(importPassword)">{{ t('restorePoints.unlock', lang) }}</n-button>
           </div>

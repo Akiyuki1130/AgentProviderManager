@@ -139,7 +139,8 @@ function onOutputInput(e: Event) { props.card.output = (e.target as HTMLInputEle
 .mc-title { display: flex; flex-direction: column; min-width: 0; flex: 1; cursor: pointer; }
 .mc-name { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mc-id { font-size: 11px; color: var(--fluent-text-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.mc-quick { display: flex; align-items: flex-end; gap: 10px; flex-shrink: 0; }
+/* 列高度不一（输入 26px vs 开关 20px）：flex-end 会让开关比输入框低 3px，center 使两列控件中线严格对齐 */
+.mc-quick { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
 /* 收起态快捷行仅透明度渐隐（无 transform，不给滚动容器引入溢出）；时长取 leave 档，与卡片高度动画错开 */
 .mc-quick-enter-active, .mc-quick-leave-active { transition: opacity var(--dur-page-leave, 0.167s) ease; }
 .mc-quick-enter-from, .mc-quick-leave-to { opacity: 0; }
@@ -175,9 +176,9 @@ function onOutputInput(e: Event) { props.card.output = (e.target as HTMLInputEle
    全局 .switch 轨道为 color-mix(text 22%)，dark 下不再隐形（原 rgba(0,0,0,.18) 硬伤随之消失）；
    全局 .check-mark 边框跟主题（原 #888 死色删除）；.effort-opt 与全局 .pill 视觉完全一致，故本地定义全删。
    D9 :active 微反馈已提升入全局规范层（.switch/.pill transform 并列），此处不再本地补齐。 */
-/* 本地尺寸变体：快捷行 / 下拉用紧凑规格（全局 .field 为 32px 标准高） */
-.field-sm { height: 26px; font-size: 12px; padding: 0 8px; }
-.select-sm { min-width: 100px; height: 26px; font-size: 12px; }
+/* 本地尺寸变体：快捷行 / 下拉用紧凑规格（全局 .field 为 32px 标准高）；圆角按小控件档位 8px（≈28 档） */
+.field-sm { height: 26px; font-size: 12px; padding: 0 8px; border-radius: 8px; }
+.select-sm { min-width: 100px; height: 26px; font-size: 12px; border-radius: 8px; }
 @media (max-width: 900px) { .mc-quick { display: none; } }
 @media (max-width: 700px) { .mc-params { grid-template-columns: repeat(2, 1fr); } .mc-field.span-2 { grid-column: span 2; } }
 </style>

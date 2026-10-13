@@ -125,7 +125,8 @@ onBeforeUnmount(() => { window.removeEventListener('resize', updateIndicator) })
 .app-nav { flex: 1; padding: 8px 10px; display: flex; flex-direction: column; gap: 4px; overflow-y: auto; position: relative; }
 .nav-item {
   display: flex; align-items: center; gap: 12px;
-  padding: 10px 14px; border-radius: 8px; cursor: pointer;
+  /* 导航项高≈40，圆角按档位表提一档至 10px（不过圆） */
+  padding: 10px 14px; border-radius: 10px; cursor: pointer;
   /* 原生 button 外观重置：外观完全沿用原自绘 div 的视觉 */
   border: 0; margin: 0; font: inherit; text-align: left; background: transparent;
   transition: background var(--dur-standard) var(--ease-standard), color var(--dur-standard) var(--ease-standard); color: inherit; user-select: none;
@@ -139,7 +140,8 @@ onBeforeUnmount(() => { window.removeEventListener('resize', updateIndicator) })
   transition: transform var(--dur-settle) cubic-bezier(0.2, 0.9, 0.25, 1), height var(--dur-standard-lg) var(--ease-standard), background-color var(--dur-standard) var(--ease-standard);
 }
 .nav-icon { flex-shrink: 0; }
-.nav-label { font-size: 13px; white-space: nowrap; overflow: hidden; max-width: 200px; transition: opacity var(--dur-standard) var(--ease-standard), max-width var(--dur-standard-lg) var(--ease-standard); }
+.nav-label { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; max-width: 200px; transition: opacity var(--dur-standard) var(--ease-standard), max-width var(--dur-standard-lg) var(--ease-standard); }
+.nav-item.active .nav-label { font-weight: 600; }
 .app-sidebar.collapsed .nav-label { opacity: 0; max-width: 0; }
 .app-sidebar-footer { padding: 10px 14px; border-top: 1px solid var(--fluent-border); overflow: hidden; }
 .fade-enter-active, .fade-leave-active { transition: opacity 0.15s; }

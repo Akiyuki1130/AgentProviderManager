@@ -78,7 +78,6 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column-reverse;
   align-items: flex-start;
-  gap: 10px;
   pointer-events: none;
 }
 .toast {
@@ -87,6 +86,8 @@ onBeforeUnmount(() => {
   gap: 10px;
   min-width: 220px;
   max-width: 380px;
+  /* 间距用 margin-top 而非容器 gap：离场高度折叠时可连同 margin 一起收掉，多 Toast 逐个淡出不留空隙抽动 */
+  margin-top: 10px;
   padding: 10px 12px;
   border-radius: 8px;
   background: var(--fluent-card-bg);
@@ -113,10 +114,34 @@ onBeforeUnmount(() => {
 }
 .toast-close:hover { background: var(--fluent-border); color: var(--fluent-text); }
 
-/* 从左滑入（--dur-toast），原位淡出（脱离文档流不抽动），其余 FLIP 补位 */
+/* 从左滑入（--dur-toast）。离场：淡出 + 微左移 + 高度/margin/padding 折叠（height auto→0 依赖
+   :root 的 interpolate-size: allow-keywords，WebView2 129+），留在文档流里收缩，
+   其余 Toast 跟随布局连续上移——多个 Toast 逐个到期淡出时互不重叠、不抽动 */
 .toast-enter-active { transition: opacity var(--dur-toast, 0.3s) var(--ease-standard), transform var(--dur-toast, 0.3s) var(--ease-standard); }
 .toast-enter-from { opacity: 0; transform: translateX(-120%); }
-.toast-leave-active { transition: opacity var(--dur-toast, 0.3s) var(--ease-standard); position: absolute; }
-.toast-leave-to { opacity: 0; }
+.toast-leave-active {
+  transition: opacity var(--dur-settle, 0.28s) var(--ease-standard),
+    transform var(--dur-settle, 0.28s) var(--ease-standard),
+    height var(--dur-settle, 0.28s) var(--ease-standard),
+    margin-top var(--dur-settle, 0.28s) var(--ease-standard),
+    padding var(--dur-settle, 0.28s) var(--ease-standard),
+    border-width var(--dur-settle, 0.28s) var(--ease-standard);
+  overflow: hidden;
+}
+.toast-leave-to {
+  opacity: 0;
+  transform: translateX(-12px);
+  height: 0;
+  margin-top: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  border-width: 0;
+}
 .toast-move { transition: transform var(--dur-toast, 0.3s) var(--ease-standard); }
+
+/* 低版本 WebView2 不支持 interpolate-size：回退旧方案——脱离文档流原地淡出，其余 FLIP 补位 */
+@supports not (interpolate-size: allow-keywords) {
+  .toast-leave-active { position: absolute; transition: opacity var(--dur-toast, 0.3s) var(--ease-standard); }
+  .toast-leave-to { opacity: 0; height: auto; margin-top: 10px; padding: 10px 12px; border-width: 1px; transform: none; }
+}
 </style>

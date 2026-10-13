@@ -23,7 +23,8 @@ defineProps<{
 <style scoped>
 .page-header {
   display: flex;
-  align-items: flex-end;
+  /* 标题（+副标题）与 actions 按钮混排：center 严格垂直居中，flex-end 在带副标题时按钮偏低 */
+  align-items: center;
   justify-content: space-between;
   gap: 12px;
   padding: 2px 2px 10px;

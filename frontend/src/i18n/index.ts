@@ -47,6 +47,7 @@ const dict: Record<string, Record<UiLang, string>> = {
     en: 'Accent color for buttons and highlights',
     ja: 'ボタンや強調表示のアクセントカラー',
   },
+  'options.accentCustom': { zh: '自定义', en: 'Custom', ja: 'カスタム' },
   'options.http': { zh: 'HTTP 支持', en: 'HTTP support', ja: 'HTTP サポート' },
   'options.httpDesc': {
     zh: '默认关闭。开启后允许使用 http:// 协议；https:// 始终受支持',

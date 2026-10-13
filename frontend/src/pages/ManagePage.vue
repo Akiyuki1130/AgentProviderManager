@@ -72,8 +72,8 @@
                 <div style="display:flex; gap:8px; align-items:center">
                   <n-input v-model:value="editForm.api_key" :type="showKey ? 'text' : 'password'" placeholder="sk-..." style="flex:1" />
                   <label style="display:flex; gap:4px; align-items:center; font-size:12px; cursor:pointer"><input type="checkbox" v-model="showKey" /> 显示</label>
-                  <n-button size="small" @click="showKeychainPicker = true"><template #icon><n-icon :component="CloudUploadOutline" /></template>从钥匙串</n-button>
-                  <n-button size="small" :disabled="!editForm.api_key" @click="openSaveToKeychain"><template #icon><n-icon :component="DownloadOutline" /></template>存入钥匙串</n-button>
+                  <n-button @click="showKeychainPicker = true"><template #icon><n-icon :component="CloudUploadOutline" /></template>从钥匙串</n-button>
+                  <n-button :disabled="!editForm.api_key" @click="openSaveToKeychain"><template #icon><n-icon :component="DownloadOutline" /></template>存入钥匙串</n-button>
                 </div>
                 <div v-if="linkedEntry" class="keychain-chip">
                   <span class="badge" :class="keychainSynced ? 'badge-ok' : 'badge-warn'"><n-icon class="badge-icon" :component="KeyOutline" :size="10" />钥匙串·{{ linkedEntry.name }}{{ keychainSynced ? '' : '（不同步）' }}</span>
@@ -764,7 +764,7 @@ onUnmounted(() => {
 .sidebar-head h3 { font-size: 14px; font-weight: 600; margin: 0; }
 .sidebar-count { font-size: 12px; color: var(--fluent-text-soft); background: var(--fluent-border); border-radius: 999px; padding: 1px 8px; }
 .sidebar-actions { margin-bottom: 8px; }
-.sidebar-filter { display: flex; gap: 8px; margin-bottom: 8px; }
+.sidebar-filter { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
 .sidebar-hide-builtin { display: flex; gap: 6px; align-items: center; font-size: 11px; color: var(--fluent-text-soft); margin-bottom: 8px; cursor: pointer; }
 .provider-empty { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 16px; text-align: center; font-size: 12px; color: var(--fluent-text-soft); }
 /* position:relative 给 .list-leave-active 的绝对定位提供锚点，删除补位时离场项不脱离列表 */
@@ -782,10 +782,11 @@ onUnmounted(() => {
 .badge { display: inline-flex; align-items: center; gap: 3px; font-size: 10px; border: 1px solid var(--fluent-border); border-radius: 999px; padding: 0 6px; line-height: 16px; white-space: nowrap; }
 .badge-icon { flex-shrink: 0; }
 .editor-pane { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; height: 100%; gap: 12px; overflow-y: auto; overscroll-behavior: contain; padding-right: 2px; }
-.editor-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; flex: 1; gap: 8px; text-align: center; color: var(--fluent-text-soft); background: var(--fluent-card-bg); border: 1px dashed var(--fluent-border); border-radius: 10px; padding: 32px; }
+.editor-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; flex: 1; gap: 8px; text-align: center; color: var(--fluent-text-soft); background: var(--fluent-card-bg); border: 1px dashed var(--fluent-border); border-radius: 12px; padding: 32px; }
 /* .empty-title/.empty-sub 单一定义见下方（原此处 16px 重复定义被后文覆盖，实际渲染一直是 14px，行为不变） */
 .editor-body { display: flex; flex-direction: column; gap: 12px; }
-.fluent-card { background: var(--fluent-card-bg); border-radius: 10px; box-shadow: none; border: 1px solid var(--fluent-border); }
+/* 容器圆角 12px 对齐全局 .fluent-card 档位；仅保留本页去阴影/描边的扁平化差异 */
+.fluent-card { background: var(--fluent-card-bg); border-radius: 12px; box-shadow: none; border: 1px solid var(--fluent-border); }
 .card-pad { padding: 16px; }
 .card-title { font-size: 14px; font-weight: 600; margin-bottom: 12px; }
 .editor-grid { display: grid; grid-template-columns: minmax(0, auto) minmax(0, 1fr); gap: 8px 12px; align-items: center; }

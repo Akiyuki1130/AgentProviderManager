@@ -366,7 +366,7 @@ onMounted(() => { void loadKeychain(); void loadLinks() })
 .kc-key { font-family: Consolas, monospace; font-size: 12px; color: var(--fluent-text-soft); word-break: break-all; }
 .kc-note { font-size: 11px; color: var(--fluent-text-soft); word-break: break-all; }
 .kc-time { font-size: 10px; color: var(--fluent-text-soft); white-space: nowrap; }
-.kc-actions { display: flex; gap: 4px; flex-wrap: wrap; }
+.kc-actions { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; }
 .kc-act { font-size: 11px; border: 1px solid var(--fluent-border); border-radius: 999px; padding: 2px 10px; background: transparent; cursor: pointer; }
 .kc-act:hover { border-color: var(--accent); }
 .kc-act-del { color: var(--err); border-color: color-mix(in srgb, var(--err) 40%, transparent); }

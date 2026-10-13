@@ -79,13 +79,17 @@ input, textarea, [contenteditable='true'] { user-select: text; -webkit-user-sele
 .n-select:focus-within, .n-base-selection:focus-within, .n-switch:focus-within,
 .n-checkbox:focus-visible, .n-radio:focus-visible, .n-popover:focus-visible { outline: none; }
 
+/* small 档控件圆角回补 8px（档位表见下方控件规范层；Select 内部复用 .n-input 类，一并生效。
+   naive 把 --n-* 写在组件根元素 inline style 上，必须 !important 才能盖过） */
+.n-input--small { --n-border-radius: 8px !important; }
+
 /* 数字排版工具：计数/大小/时间/延迟统一等宽数字；ID 类文本统一 monospace */
 .tnum { font-variant-numeric: tabular-nums; }
 .mono { font-family: Consolas, 'Cascadia Code', monospace; }
 
 .fluent-card {
   background: var(--fluent-card-bg);
-  border-radius: 10px;
+  border-radius: 12px;
   box-shadow: var(--fluent-shadow-md);
   border: 1px solid var(--fluent-border);
   transition: box-shadow var(--fluent-transition), border var(--fluent-transition), background-color var(--fluent-transition);
@@ -113,10 +117,12 @@ input, textarea, [contenteditable='true'] { user-select: text; -webkit-user-sele
 /* 错峰入场：容器对子项设 animation-delay: calc(var(--delay-step) * i) */
 .enter-stagger { animation: fade-in var(--dur-reveal) var(--ease-standard) both; }
 
-/* —— 控件规范层（B10/C3：单一定义源，页面 scoped 的同名重复定义应删除改用这些） —— */
+/* —— 控件规范层（B10/C3：单一定义源，页面 scoped 的同名重复定义应删除改用这些） ——
+   圆角随控件尺寸缩放（≈height×0.28），小 8 / 中 10 / 大 12 / 容器 12；
+   .switch/.badge/.pill/.topbar-status 等 999px 胶囊形控件不在此体系内，保持不变。 */
 .field {
   width: 100%; min-width: 0; box-sizing: border-box; height: 32px;
-  border-radius: 6px; border: 1px solid var(--fluent-border);
+  border-radius: 10px; border: 1px solid var(--fluent-border);
   background: var(--fluent-card-bg); padding: 0 10px;
   font-size: 13px; color: var(--fluent-text); font-family: inherit;
   transition: border-color var(--dur-standard) var(--ease-standard), box-shadow var(--dur-standard) var(--ease-standard), background-color var(--dur-standard) var(--ease-standard);
