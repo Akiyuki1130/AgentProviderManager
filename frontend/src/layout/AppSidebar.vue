@@ -29,7 +29,7 @@
       <div v-show="indicatorReady" class="nav-indicator" :style="indicatorStyle" />
     </nav>
     <Transition name="fade">
-      <div v-if="!collapsed" class="app-sidebar-footer">
+      <div v-if="!collapsed && version" class="app-sidebar-footer">
         <span class="version-text">v{{ version }}</span>
       </div>
     </Transition>
@@ -53,12 +53,15 @@ import {
 } from '@vicons/ionicons5'
 import { useSettingStore } from '../stores/setting'
 import { t } from '../i18n'
+import * as api from '../api'
 
 const route = useRoute()
 const router = useRouter()
 const settingStore = useSettingStore()
 const collapsed = ref(false)
-const version = ref('2.0.8')
+// 版本号以后端为唯一来源（VERSION → internal/core/version_gen.go → GetAppInfo），
+// 前端不再硬编码；绑定未就绪时留空，不回退到可能过期的字面量。
+const version = ref('')
 const navEl = ref<HTMLElement | null>(null)
 const indicatorTop = ref(0)
 const indicatorHeight = ref(0)
@@ -90,9 +93,19 @@ function updateIndicator() {
   indicatorHeight.value = itemRect.height * 0.8
   indicatorReady.value = true
 }
-onMounted(() => { window.addEventListener('resize', updateIndicator); nextTick(updateIndicator) })
+onMounted(() => { window.addEventListener('resize', updateIndicator); nextTick(updateIndicator); void loadVersion() })
 watch([activeKey, collapsed, () => settingStore.resolvedLang], () => { nextTick(updateIndicator) })
 onBeforeUnmount(() => { window.removeEventListener('resize', updateIndicator) })
+
+async function loadVersion() {
+  try {
+    const info = await api.GetAppInfo()
+    const v = info && typeof info['version'] === 'string' ? (info['version'] as string) : ''
+    if (v) version.value = v
+  } catch {
+    // 绑定未就绪（例如浏览器环境）时保持空，不显示可能过期的硬编码版本。
+  }
+}
 </script>
 
 <style scoped>

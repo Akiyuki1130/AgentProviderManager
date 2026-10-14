@@ -9,16 +9,22 @@
 
 ## Version changes
 
-When publishing a release, synchronize the version in:
+The single source of truth is the repository-root `VERSION` file. To publish a release, edit only that file and run the propagation script:
 
-- `main.go`
-- `internal/core/constants.go`
-- `wails.json`
-- `frontend/package.json`
+```text
+node scripts/sync-version.mjs          # 把 VERSION 分发到所有消费点
+node scripts/sync-version.mjs --check  # 仅校验（CI / 提交前）
+```
+
+The script maintains every derived location:
+
+- `internal/core/version_gen.go` (generated `core.AppVersion`, consumed by `main.go` and `GetAppInfo`)
+- `wails.json` (`info.productVersion` → Windows PE version info)
+- `frontend/package.json` and its byte-exact `frontend/package.json.md5`
 - `frontend/package-lock.json` (root package and lockfile metadata)
-- `frontend/package.json.md5`
-- `frontend/src/layout/AppSidebar.vue`
-- `README.md` and `CHANGELOG.md`
+- `README.md` (title and the `AgentProviderManager-<version>-windows-amd64` asset name)
+
+The frontend no longer hardcodes the version: `AppSidebar.vue` reads it at runtime from `GetAppInfo`. `go test ./...` includes `TestVersionSourcesInSync`, which fails if any derived file drifts from `VERSION`, and `CHANGELOG.md` is still updated by hand at release time.
 
 Verify the executable with `AgentProviderManager.exe --version` after building.
 

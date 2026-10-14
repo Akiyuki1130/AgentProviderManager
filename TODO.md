@@ -65,6 +65,11 @@
   修法（前后端各一层，互为兜底）：① 前端引入 `isPersisted`，脏判定改为「未落盘 ∨ 与基线不一致」，离开弹窗对未落盘的新提供商改用更重的丢弃警告；② 新增 `useAutoSave`（debounce 1.2s + 最小间隔 5s 合并连续改动 + 单飞 + 静默失败），选项页可关闭，自动写入标记 `_operation=auto_save`，还原点清理优先淘汰这类低价值点；③ 需要「提供商已存在」的操作（自动/手动重新获取、钥匙串关联）先经 `ensurePersisted()` 落盘；④ 后端 `RefreshProviderModels` 在带 Base URL 覆盖时容忍「尚未保存」，无覆盖时维持原报错。
   残留：自动保存仍会让还原点增长（已靠合并与最小间隔压住）；关窗恰逢 debounce 窗口内可能丢最后一次改动。
 
+- [x] **16. 版本号统一为单一真源**（2026-10-14 完成）
+  症状：版本号散在 9 个文件（`main.go`/`constants.go`/`wails.json`/`package.json`/`package-lock.json`×2/`package.json.md5`/`AppSidebar.vue`/`README.md`×3），发版要手工逐处改，易漏。
+  修法：新增根目录 `VERSION` 作为唯一真源 + `scripts/sync-version.mjs` 一次分发（含 `--check`）；Go 侧改为生成文件 `internal/core/version_gen.go`（`main.go` 引用 `core.AppVersion`，不再写字面量）；前端侧栏改为运行时读 `GetAppInfo`，不再硬编码；`go test ./...` 加 `TestVersionSourcesInSync` 兜底，任何派生文件漂移即失败并打印修法。
+  说明：`frontend/package.json.md5` 由 Wails 用来判断是否重装依赖，必须与 `package.json` 字节一致，脚本同步生成。改版本现在只需改 `VERSION` + 跑一次脚本（+ 手工更新 CHANGELOG）。
+
 ## P3 — 长期方向
 
 - [ ] **12. OpenCode 决断**

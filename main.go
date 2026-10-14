@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"agentprovidermanager/internal/app"
+	"agentprovidermanager/internal/core"
 	appupdate "agentprovidermanager/internal/update"
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -15,7 +16,9 @@ import (
 )
 
 var (
-	version   = "2.0.8"
+	// 版本号唯一真源为仓库根目录的 VERSION 文件，经 scripts/sync-version.mjs
+	// 生成到 internal/core/version_gen.go，这里只做引用，避免多处硬编码漂移。
+	version   = core.AppVersion
 	buildTime = "unknown"
 )
 

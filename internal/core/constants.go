@@ -1,8 +1,7 @@
 package core
 
 const (
-	AppName    = "Agent Provider Manager"
-	AppVersion = "2.0.8"
+	AppName = "Agent Provider Manager"
 
 	MaxModels          = 2000
 	MaxModelIDLength   = 512
