@@ -96,6 +96,17 @@
               </n-popconfirm>
               <label style="display:flex; gap:6px; align-items:center; font-size:12px; margin-left:auto"><input type="checkbox" v-model="editForm.api_key_required" /> 必须提供 API Key</label>
             </div>
+            <!-- 自动保存状态行：安静地播报保存/暂停/失败，不弹 toast 打扰输入 -->
+            <div v-if="autoSaveLabel" class="autosave-status" :class="autoSaveKind" role="status" aria-live="polite">
+              <n-spin v-if="autoSave.status.value === 'saving'" :size="12" />
+              <n-icon v-else class="autosave-icon" :component="statusIconFor(autoSaveKind)" :size="13" />
+              <span>{{ autoSaveLabel }}</span>
+            </div>
+            <!-- 新建提供商尚未落盘：明确告知，避免用户以为已经保存 -->
+            <div v-else-if="isUnsavedNew" class="autosave-status warn" role="status">
+              <n-icon class="autosave-icon" :component="AlertCircleOutline" :size="13" />
+              <span>{{ t('manage.unsavedNew', lang) }}</span>
+            </div>
             <div v-if="probe.parts.length" class="probe-result" :class="probe.status" role="status" aria-live="polite">
               <n-icon class="probe-icon" :component="probeStatusIcon" :size="14" />
               <span v-for="(part, i) in probe.parts" :key="i" class="probe-part">
@@ -177,8 +188,8 @@
       </div>
       <template #footer>
         <div style="display:flex; justify-content:flex-end; gap:8px">
-          <n-button @click="showHttpConfirm = false">取消</n-button>
-          <n-button type="warning" @click="confirmHttpAction">仍要使用</n-button>
+          <n-button @click="settleHttpConfirm(false)">{{ t('common.cancel', lang) }}</n-button>
+          <n-button type="warning" @click="settleHttpConfirm(true)">仍要使用</n-button>
         </div>
       </template>
     </n-modal>
@@ -216,7 +227,7 @@ import { ref, computed, reactive, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useSettingStore } from '../stores/setting'
 import { registerManageGuard, requestLeave } from '../stores/leaveGuard'
-import { NButton, NInput, NSelect, NPopconfirm, NModal, NIcon } from 'naive-ui'
+import { NButton, NInput, NSelect, NPopconfirm, NModal, NIcon, NSpin } from 'naive-ui'
 import {
   AddOutline, SaveOutline, TrashOutline, SyncOutline, FlashOutline,
   KeyOutline, CloudUploadOutline, DownloadOutline, CheckmarkOutline,
@@ -224,14 +235,17 @@ import {
 } from '@vicons/ionicons5'
 import { uiPrompt, uiConfirm } from '../stores/uiDialog'
 import { highlightSegments } from '../composables/useHighlight'
+import { useAutoSave } from '../composables/useAutoSave'
 import ModelCard from '../components/ModelCard.vue'
 import KeychainPicker from '../components/KeychainPicker.vue'
 import StickySaveBar from '../components/ui/StickySaveBar.vue'
 import type { ProviderSummary, ModelCard as Card, ProviderEdit, KeychainEntry, ProbeResult } from '../types'
+import { t } from '../i18n'
 import * as api from '../api'
 
 const router = useRouter()
 const settingStore = useSettingStore()
+const lang = computed(() => settingStore.resolvedLang)
 const providers = ref<ProviderSummary[]>([])
 const currentId = ref<string | null>(null)
 const currentProvider = ref<ProviderEdit | null>(null)
@@ -240,6 +254,11 @@ const savedProvider = ref<ProviderEdit | null>(null)
 const showKey = ref(false)
 const manageQuery = ref('')
 const saving = ref(false)
+// 是否已写入配置文件。新建的提供商在首次保存前为 false——「重新获取」等
+// 需要它真实存在的操作据此先落盘，离开时也据此给出更重的丢弃警告。
+const isPersisted = ref(false)
+// 最近一次保存失败的后端原文，供自动保存状态行显示
+const lastSaveError = ref('')
 const hideBuiltinNoKey = ref(localStorage.getItem('zcpm.hideBuiltinNoKey') !== '0')
 const variantOpts = computed(() => settingStore.agent === 'deepseek' ? ['off', 'low', 'high', 'max'] : ['off', 'low', 'medium', 'high', 'xhigh', 'max'])
 const batchDefault = ref('')
@@ -250,7 +269,11 @@ const showAutoConfirm = ref(false)
 const dontAskAgain = ref(false)
 const autoRefreshing = ref(false)
 const showHttpConfirm = ref(false)
-const pendingHttpAction = ref<'save' | 'refresh' | null>(null)
+// 已就 http:// 明文确认过的 URL（trim+小写）。换 URL 会重新要求确认；
+// 自动保存据此判断能否静默写入，绝不绕过明文确认门。
+const httpAckUrl = ref('')
+// 挂起中的 http 确认：resolve(true) 表示用户点了「仍要使用」
+let httpConfirmResolve: ((ok: boolean) => void) | null = null
 const providerQuery = ref('')
 const providerSort = ref('default')
 const providerSortOptions = [
@@ -332,7 +355,15 @@ function normalizedProvider(p: ProviderEdit): unknown {
     }),
   }
 }
-const isDirty = computed(() => savedProvider.value !== null && !deepEqual(normalizedProvider(editForm.value), normalizedProvider(savedProvider.value)))
+// 未保存更改 = 还没落盘（新建）或与已保存基线不一致。二者必须分开表达：
+// 新建的提供商磁盘上还不存在，任何守卫都不能把它当成“已保存”。
+const isDirty = computed(() => {
+  if (!currentProvider.value) return false
+  if (!isPersisted.value) return true
+  const base = savedProvider.value
+  if (!base) return true
+  return !deepEqual(normalizedProvider(editForm.value), normalizedProvider(base))
+})
 
 function discardChanges() {
   if (savedProvider.value) editForm.value = deepClone(savedProvider.value)
@@ -349,10 +380,13 @@ async function loadProviders() {
 }
 function selectProvider(id: string) {
   if (id === currentId.value) return
-  requestLeave(() => { void loadProvider(id) })
+  void requestLeave(() => { void loadProvider(id) })
 }
 
 async function loadProvider(id: string) {
+  // 明文确认是「针对某个 URL」的一次性放行：换成另一个提供商即失效，
+  // 避免把 A 的放行顺延给 B 的 http 地址。（同 id 重新载入不清，见下）
+  if (id !== currentId.value) httpAckUrl.value = ''
   currentId.value = id
   probe.value = { status: '', parts: [] }
   const res = await api.GetProvider(id) as Record<string, unknown>
@@ -363,6 +397,9 @@ async function loadProvider(id: string) {
     currentProvider.value = p
     editForm.value = { ...p, cards: p.cards.map((c) => ({ ...c })) }
     savedProvider.value = deepClone(p)
+    // 从磁盘读到的提供商必然已落盘
+    isPersisted.value = true
+    lastSaveError.value = ''
     await refreshLinkedEntry()
   } else toast('error', '加载失败', res['error'] as string)
 }
@@ -377,7 +414,7 @@ async function onAddProvider() {
     confirmText: '创建',
   })
   if (!name) return
-  requestLeave(() => { void createProvider(name) })
+  void requestLeave(() => { void createProvider(name) })
 }
 
 async function createProvider(name: string) {
@@ -386,6 +423,10 @@ async function createProvider(name: string) {
   currentProvider.value = { ...editForm.value }
   currentId.value = id
   savedProvider.value = deepClone(editForm.value)
+  // 尚未写入配置文件：savedProvider 只是「当前基线」，不代表磁盘上已有该提供商。
+  // isPersisted=false 让脏判定、离开守卫与「重新获取」前的落盘都按未保存处理。
+  isPersisted.value = false
+  lastSaveError.value = ''
   probe.value = { status: '', parts: [] }
   linkedEntry.value = null
 }
@@ -394,12 +435,41 @@ function isHttpUrl(url: string): boolean {
   return url.trim().toLowerCase().startsWith('http://')
 }
 
+// http:// 明文确认门：返回用户是否确认继续。同一 URL 确认过一次后本会话不再重复询问。
+function confirmHttp(): Promise<boolean> {
+  const url = editForm.value.base_url.trim().toLowerCase()
+  if (httpAckUrl.value === url) return Promise.resolve(true)
+  return new Promise<boolean>((resolve) => {
+    httpConfirmResolve = resolve
+    showHttpConfirm.value = true
+  })
+}
+
+function settleHttpConfirm(ok: boolean) {
+  const r = httpConfirmResolve
+  httpConfirmResolve = null
+  showHttpConfirm.value = false
+  if (ok) httpAckUrl.value = editForm.value.base_url.trim().toLowerCase()
+  r?.(ok)
+}
+
 function onSaveProvider() {
-  if (isHttpUrl(editForm.value.base_url)) { pendingHttpAction.value = 'save'; showHttpConfirm.value = true; return }
   void saveProvider()
 }
 
-async function saveProvider(): Promise<boolean> {
+// 保存当前表单。auto=true 表示这是后台自动保存（写盘时标记 op=auto_save，
+// 让还原点清理把这条低价值记录优先淘汰）。
+async function saveProvider(auto = false): Promise<boolean> {
+  if (isHttpUrl(editForm.value.base_url)) {
+    // 自动保存绝不绕过明文确认门：未确认时直接放弃本次自动写入，交给显式保存路径去问。
+    if (auto) {
+      if (httpAckUrl.value !== editForm.value.base_url.trim().toLowerCase()) return false
+    } else if (!(await confirmHttp())) {
+      return false
+    }
+  }
+  // 本次要写入的内容快照：保存期间若用户又改了表单，用它区分“有没有新输入”。
+  const written = deepClone(normalizedProvider(editForm.value))
   saving.value = true
   try {
     const payload: Record<string, unknown> = {
@@ -413,34 +483,90 @@ async function saveProvider(): Promise<boolean> {
       cards: editForm.value.cards,
       _raw_provider: currentProvider.value?._raw_provider,
     }
+    if (auto) payload['_operation'] = 'auto_save'
     const res = await api.SaveProvider(currentId.value || editForm.value.id, payload) as Record<string, unknown>
     if (res['success']) {
       currentId.value = res['provider_id'] as string
+      isPersisted.value = true
       // 先刷新再提示成功，避免用户同时看到成功与失败提示；刷新失败也只报错、不影响保存结果
       try {
         await loadProviders()
-        if (currentId.value) await loadProvider(currentId.value)
-        toast('success', '保存成功', `已保存 ${res['count']} 个模型到提供商 ${res['provider_id']}`)
+        if (auto) await adoptSavedBaseline(written)
+        else if (currentId.value) await loadProvider(currentId.value)
+        lastSaveError.value = ''
+        if (!auto) toast('success', '保存成功', `已保存 ${res['count']} 个模型到提供商 ${res['provider_id']}`)
       } catch (e) {
-        toast('error', '加载失败', String(e))
+        if (!auto) toast('error', '加载失败', String(e))
       }
       return true
     } else {
-      toast('error', '保存失败', res['error'] as string)
+      lastSaveError.value = String(res['error'] || '')
+      if (!auto) toast('error', '保存失败', res['error'] as string)
       return false
     }
+  } catch (e) {
+    lastSaveError.value = String(e)
+    if (!auto) toast('error', '保存失败', String(e))
+    return false
   } finally { saving.value = false }
 }
 
+// 自动保存成功后的收尾：以磁盘结果作为新基线（后端可能规范化过字段，不更新基线
+// 会让脏判定永远为真、反复触发自动保存）；若保存期间用户没有新输入才把磁盘版本
+// 回写到表单，否则保留用户正在编辑的内容，交给调度器再落一次。
+async function adoptSavedBaseline(written: unknown): Promise<void> {
+  if (!currentId.value) return
+  const res = await api.GetProvider(currentId.value) as Record<string, unknown>
+  if (!res['success']) return
+  const raw = res['provider'] as ProviderEdit
+  const disk: ProviderEdit = { ...raw, cards: raw.cards || [] }
+  savedProvider.value = deepClone(disk)
+  // 后端对未建模字段的保留结果始终以磁盘为准，避免下次保存丢掉它们。
+  currentProvider.value = { ...(currentProvider.value as ProviderEdit), _raw_provider: disk._raw_provider }
+  if (deepEqual(normalizedProvider(editForm.value), written)) {
+    currentProvider.value = disk
+    editForm.value = { ...disk, cards: disk.cards.map((c) => ({ ...c })) }
+  }
+}
+
+// 需要提供商真实存在时调用：尚未落盘就先把当前表单写进配置文件。
+// 保存失败时返回 false（那时会显示真实原因，例如「请填写 Base URL」）。
+async function ensurePersisted(): Promise<boolean> {
+  if (isPersisted.value) return true
+  return await saveProvider(false)
+}
+
+// 删除本身已有 n-popconfirm 确认层，且未保存的改动随之作废——不应再套「保存/不保存」守卫
+// （否则删一个还没落盘的新提供商会被问「是否保存」）。
 function confirmDeleteProvider() {
-  requestLeave(() => { void deleteProvider() })
+  void deleteProvider()
 }
 
 async function deleteProvider() {
+  // 尚未落盘的新提供商磁盘上不存在，本地清空即可，不必也不该调删除接口。
+  if (!isPersisted.value) {
+    toast('success', '已删除', '已丢弃尚未保存的提供商')
+    resetEditor()
+    await loadProviders()
+    return
+  }
   const id = currentId.value!
   const res = await api.DeleteProvider(id) as Record<string, unknown>
-  if (res['success']) { toast('success', '已删除', `提供商「${id}」已删除`); currentId.value = null; currentProvider.value = null; savedProvider.value = null; await loadProviders() }
+  if (res['success']) { toast('success', '已删除', `提供商「${id}」已删除`); resetEditor(); await loadProviders() }
   else toast('error', '删除失败', res['error'] as string)
+}
+
+// 清空编辑区（删除、切换 Agent 后共用），并复位与「已落盘」相关的状态。
+function resetEditor() {
+  currentId.value = null
+  currentProvider.value = null
+  savedProvider.value = null
+  editForm.value = { id: '', name: '', kind: 'openai-compatible', base_url: '', api_key: '', api_key_required: false, options_json: '', cards: [] }
+  isPersisted.value = false
+  httpAckUrl.value = ''
+  lastSaveError.value = ''
+  probe.value = { status: '', parts: [] }
+  linkedEntry.value = null
 }
 async function onAddModel() {
   const mid = await uiPrompt({
@@ -536,8 +662,10 @@ async function onDeleteSelected() {
   }
 }
 
-function onManualRefresh() {
+async function onManualRefresh() {
   if (!currentId.value || !currentProvider.value) { toast('error', '操作失败', '请先选择一个提供商'); return }
+  // 导入页横幅会指向这个提供商，先把它落盘，取消时也不丢数据。
+  if (!(await ensurePersisted())) return
   sessionStorage.setItem('zcode-pm:manualRefresh', JSON.stringify({
     providerId: editForm.value.id,
     providerName: editForm.value.name,
@@ -548,23 +676,17 @@ function onManualRefresh() {
   router.push('/import')
 }
 
-function onAutoRefresh() {
+async function onAutoRefresh() {
   if (!currentId.value) return
-  if (isHttpUrl(editForm.value.base_url)) { pendingHttpAction.value = 'refresh'; showHttpConfirm.value = true; return }
+  if (isHttpUrl(editForm.value.base_url)) {
+    if (!(await confirmHttp())) return
+  }
   if (localStorage.getItem('zcode-pm:skipAutoRefreshConfirm') === '1') {
     void doAutoRefresh()
     return
   }
   dontAskAgain.value = false
   showAutoConfirm.value = true
-}
-
-async function confirmHttpAction() {
-  showHttpConfirm.value = false
-  const action = pendingHttpAction.value
-  pendingHttpAction.value = null
-  if (action === 'save') await saveProvider()
-  else if (action === 'refresh') await doAutoRefresh()
 }
 
 async function confirmAutoRefresh() {
@@ -575,6 +697,9 @@ async function confirmAutoRefresh() {
 
 async function doAutoRefresh() {
   if (!currentId.value) return
+  // 自动重新获取只是读接口、不写盘，但后端按 ID 查提供商；新建未落盘的先保存，
+  // 否则会得到「提供商不存在」这种误导性报错。
+  if (!(await ensurePersisted())) return
   autoRefreshing.value = true
   try {
     const res = await api.RefreshProviderModels(currentId.value, editForm.value.base_url, editForm.value.api_key) as Record<string, unknown>
@@ -663,6 +788,8 @@ async function onKeychainPick(e: KeychainEntry) {
   const info = await getEntryInfo(e.id)
   if (!info || !info.api_key) { toast('error', '填入失败', '无法读取该钥匙串条目'); return }
   editForm.value.api_key = info.api_key
+  // 关联以提供商 ID 记录，新建未落盘时先保存，否则会关联到一个不存在的提供商上。
+  if (!(await ensurePersisted())) return
   const res = await api.SetKeychainLink(linkTargetId.value, e.id)
   if (!res.success) { toast('error', '关联失败', res.error || ''); return }
   kcLinks.value[linkKey(linkTargetId.value)] = e.id
@@ -690,6 +817,8 @@ async function onSaveToKeychain() {
     const info = { name: kcSaveForm.name.trim(), api_key: kcSaveForm.api_key, note: kcSaveForm.note }
     if (entryId) {
       kcSecrets.set(entryId, info)
+      // 关联写的是提供商 ID：新建未落盘时先保存，避免关联到不存在的提供商。
+      if (!(await ensurePersisted())) { kcSaveError.value = lastSaveError.value || '提供商尚未保存'; return }
       const link = await api.SetKeychainLink(linkTargetId.value, entryId)
       if (link.success) {
         kcLinks.value[linkKey(linkTargetId.value)] = entryId
@@ -726,13 +855,58 @@ async function onKeychainUnlink() {
   toast('success', '已解除关联', '已解除与钥匙串条目的关联')
 }
 
+// ---- 自动保存 ----
+// 自动保存的预检：返回非 null 表示本轮不宜自动写入，值是给用户看的暂停原因。
+// 只做「静默也无法成功」的检查——空 Base URL、非法 ID、未确认的 http 明文。
+function autoSavePreflight(): string | null {
+  const f = editForm.value
+  if (!f || !currentProvider.value) return t('manage.reasonProviderId', lang.value)
+  if (!f.id.trim() || !/^[a-zA-Z0-9_:\-]+$/.test(f.id.trim())) return t('manage.reasonProviderId', lang.value)
+  if (!f.base_url.trim()) return t('manage.reasonBaseUrl', lang.value)
+  if (isHttpUrl(f.base_url) && httpAckUrl.value !== f.base_url.trim().toLowerCase()) return t('manage.reasonHttp', lang.value)
+  return null
+}
+
+const autoSave = useAutoSave({
+  isDirty: () => isDirty.value,
+  enabled: () => settingStore.autoSave,
+  preflight: autoSavePreflight,
+  save: async () => {
+    const ok = await saveProvider(true)
+    return { ok, error: ok ? undefined : lastSaveError.value }
+  },
+})
+
+// 自动保存状态行文案：把调度器状态翻成一行安静的提示，不弹 toast 打扰输入。
+const autoSaveLabel = computed(() => {
+  if (!settingStore.autoSave) return ''
+  const st = autoSave.status.value
+  if (st === 'saving') return t('manage.autosaveSaving', lang.value)
+  if (st === 'saved') return t('manage.autosaveSaved', lang.value)
+  if (st === 'paused') return t('manage.autosavePaused', lang.value).replace('{reason}', autoSave.pausedReason.value || '')
+  if (st === 'error') return t('manage.autosaveFailed', lang.value).replace('{error}', autoSave.lastError.value || '')
+  return ''
+})
+const autoSaveKind = computed(() => {
+  const st = autoSave.status.value
+  if (st === 'error') return 'err'
+  if (st === 'paused') return 'warn'
+  if (st === 'saved') return 'ok'
+  return ''
+})
+// 新建未落盘时持续提示一次，让用户知道这个提供商还没进配置文件。
+const isUnsavedNew = computed(() => !!currentProvider.value && !isPersisted.value)
+
+// 自动保存状态行图标：按语义档位取图标，状态字符不进文本
+function statusIconFor(kind: string) {
+  if (kind === 'ok') return CheckmarkCircleOutline
+  if (kind === 'warn') return AlertCircleOutline
+  if (kind === 'err') return CloseCircleOutline
+  return AlertCircleOutline
+}
+
 function onAgentChanged() {
-  currentId.value = null
-  currentProvider.value = null
-  editForm.value = { id: '', name: '', kind: 'openai-compatible', base_url: '', api_key: '', api_key_required: false, options_json: '', cards: [] }
-  savedProvider.value = null
-  probe.value = { status: '', parts: [] }
-  linkedEntry.value = null
+  resetEditor()
   void loadProviders()
   void loadKeychainLinks()
 }
@@ -743,14 +917,25 @@ function onGlobalKeydown(e: KeyboardEvent) {
   if (!e.repeat && isDirty.value && !saving.value) onSaveProvider()
 }
 onMounted(() => {
-  registerManageGuard(() => isDirty.value, saveProvider, discardChanges)
+  // 自动保存的 flush 与调度器共用单飞锁，因此优先用它；autoFlush 决定能否「静默落盘、不弹窗」。
+  registerManageGuard({
+    isDirty: () => isDirty.value,
+    isUnsavedNew: () => isUnsavedNew.value,
+    save: () => saveProvider(false),
+    discard: discardChanges,
+    flush: () => autoSave.flush(),
+    // flush 内部会 await 在途写入并做单飞，因此只需判断自动保存是否开启。
+    autoFlush: () => settingStore.autoSave,
+  })
+  autoSave.start()
   void loadProviders()
   void loadKeychainLinks()
   window.addEventListener('agent-changed', onAgentChanged)
   window.addEventListener('keydown', onGlobalKeydown)
 })
 onUnmounted(() => {
-  registerManageGuard(null, null, null)
+  autoSave.stop()
+  registerManageGuard(null)
   window.removeEventListener('agent-changed', onAgentChanged)
   window.removeEventListener('keydown', onGlobalKeydown)
 })
@@ -799,6 +984,12 @@ onUnmounted(() => {
 .keychain-chip { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .modal-error { color: var(--err); font-size: 12px; }
 .warn-strong { color: var(--warn); }
+/* 自动保存状态行：图标 + 语义色 + 安静基色，常驻于动作区下方 */
+.autosave-status { display: flex; align-items: center; gap: 6px; margin-top: 8px; font-size: 12px; color: var(--fluent-text-soft); }
+.autosave-status .autosave-icon { flex-shrink: 0; }
+.autosave-status.ok { color: var(--ok); }
+.autosave-status.warn { color: var(--warn); }
+.autosave-status.err { color: var(--err); }
 /* 测试结果：图标 + 语义色 + 分段文本（数字段挂全局 .tnum 等宽） */
 .probe-result { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; font-size: 12px; color: var(--fluent-text-soft); margin-top: 8px; word-break: break-all; }
 .probe-result .probe-icon { align-self: center; flex-shrink: 0; }

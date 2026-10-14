@@ -59,6 +59,8 @@ const (
 	OpMigrate        = "migrate"
 	OpRestore        = "restore"
 	OpManual         = "manual"
+	// OpAutoSave 标记前端后台自动保存产生的低价值还原点，清理时优先被淘汰。
+	OpAutoSave = "auto_save"
 )
 
 // 还原点记录的 format 取值。
@@ -422,16 +424,37 @@ func DeleteRestorePoint(id string) error {
 }
 
 // PruneRestorePoints 按保留策略清理还原点，返回删除的条目数。
-// 策略：每个目标路径最多 MaxRestorePoints 个；全部内容合计不超过 MaxRestorePointBytes，
-// 超出时按最旧优先删除；另外清理超过 orphanPointAge 仍没有 meta.json 的残留目录。
+// 策略：每个目标路径最多 MaxRestorePoints 个，超出时先牺牲自动保存（OpAutoSave）
+// 的低价值还原点（最旧优先），仍不够再删最旧的其余还原点；全部内容合计不超过
+// MaxRestorePointBytes，超出时按最旧优先删除；另外清理超过 orphanPointAge 仍没有
+// meta.json 的残留目录。
 func PruneRestorePoints() int {
 	removed := cleanupOrphanPointDirs()
 	points := ListRestorePoints(RestorePointFilter{})
-	perTarget := map[string]int{}
+	// 按目标路径分组：ListRestorePoints 返回新的在前，组内即“最新的在前”。
+	byTarget := map[string][]RestorePoint{}
 	for _, point := range points {
 		key := strings.ToLower(filepath.Clean(point.TargetPath))
-		perTarget[key]++
-		if perTarget[key] > MaxRestorePoints {
+		byTarget[key] = append(byTarget[key], point)
+	}
+	for _, group := range byTarget {
+		overflow := len(group) - MaxRestorePoints
+		if overflow <= 0 {
+			continue
+		}
+		// 先删该目标最旧的自动保存还原点；不够再按最旧优先删其余还原点。
+		victims := make([]RestorePoint, 0, overflow)
+		for i := len(group) - 1; i >= 0 && len(victims) < overflow; i-- {
+			if group[i].Operation == OpAutoSave {
+				victims = append(victims, group[i])
+			}
+		}
+		for i := len(group) - 1; i >= 0 && len(victims) < overflow; i-- {
+			if group[i].Operation != OpAutoSave {
+				victims = append(victims, group[i])
+			}
+		}
+		for _, point := range victims {
 			if err := DeleteRestorePoint(point.ID); err == nil {
 				removed++
 			}

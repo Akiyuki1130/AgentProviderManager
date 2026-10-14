@@ -215,3 +215,103 @@ func TestImportProviderEmptyCardsUsesSpecificMessage(t *testing.T) {
 		t.Fatal("拒绝时不应改动目标文件")
 	}
 }
+
+// 刷新模型：配置里尚不存在的 provider，只要带了 Base URL 覆盖就应能请求成功
+// （新建 provider 在内存里即可“自动重新获取”，无需先保存）。
+func TestRefreshProviderModelsUnknownProviderWithOverride(t *testing.T) {
+	a := sandboxApp(t)
+	srv := modelsServer(t)
+	allowLocalFetch(t)
+
+	target := core.ZCodeProviderConfigPath()
+	writeText(t, target, strings.ReplaceAll(v2ImportFixture, "https://acme.example.invalid/v1", srv.URL))
+	a.targetConfigPath = target
+	a.currentAgent = string(core.AgentZCode)
+
+	// "brandnew" 不在配置里，但覆盖提供了可用的 Base URL。
+	resp := a.RefreshProviderModels("brandnew", srv.URL, "sk-placeholder")
+	requireSuccess(t, resp, "RefreshProviderModels(unknown + override)")
+	if got, _ := resp["count"].(int); got != 2 {
+		t.Fatalf("应获取到 2 个模型，实际 %#v", resp["count"])
+	}
+}
+
+// 刷新模型：配置里不存在的 provider 且没有 Base URL 覆盖时，仍应报“提供商不存在”，
+// 而不是一个误导性的网络/获取错误。
+func TestRefreshProviderModelsUnknownProviderWithoutOverrideFails(t *testing.T) {
+	a := sandboxApp(t)
+	allowLocalFetch(t)
+
+	target := core.ZCodeProviderConfigPath()
+	writeText(t, target, v2ImportFixture)
+	a.targetConfigPath = target
+	a.currentAgent = string(core.AgentZCode)
+
+	resp := a.RefreshProviderModels("brandnew", "", "")
+	if ok, _ := resp["success"].(bool); ok {
+		t.Fatalf("缺少覆盖时不应成功：%v", resp)
+	}
+	msg, _ := resp["error"].(string)
+	if !strings.Contains(msg, "不存在") || !strings.Contains(msg, "brandnew") {
+		t.Fatalf("应是“提供商不存在”的解析错误，实际：%s", msg)
+	}
+}
+
+// 回归：已存在的 provider 在不传覆盖时，仍按原样解析配置里的 Base URL 与凭据。
+func TestRefreshProviderModelsExistingProviderUsesStoredConfig(t *testing.T) {
+	a := sandboxApp(t)
+	srv := modelsServer(t)
+	allowLocalFetch(t)
+
+	target := core.ZCodeProviderConfigPath()
+	writeText(t, target, strings.ReplaceAll(v2ImportFixture, "https://acme.example.invalid/v1", srv.URL))
+	a.targetConfigPath = target
+	a.currentAgent = string(core.AgentZCode)
+
+	resp := a.RefreshProviderModels("acme", "", "")
+	requireSuccess(t, resp, "RefreshProviderModels(existing)")
+	if got, _ := resp["count"].(int); got != 2 {
+		t.Fatalf("应获取到 2 个模型，实际 %#v", resp["count"])
+	}
+}
+
+// SaveProvider 的 _operation 白名单：只有精确的 "auto_save" 才写进还原点，
+// 其它值（含伪造的 "hack"）与缺省都保持 save_provider。
+func TestSaveProviderAutoSaveOperationIsWhitelisted(t *testing.T) {
+	a := sandboxApp(t)
+	target := core.ZCodeConfig()
+	writeText(t, target, legacyProviderFixture)
+	a.targetConfigPath = target
+	a.currentAgent = string(core.AgentZCode)
+
+	save := func(op interface{}, name string) {
+		t.Helper()
+		payload := map[string]interface{}{
+			"id":       "acme",
+			"name":     name,
+			"kind":     "openai-compatible",
+			"base_url": "https://acme.example.invalid/v1",
+			"api_key":  "sk-test",
+			"cards":    []core.ModelCard{{ModelID: "m1"}},
+		}
+		if op != nil {
+			payload["_operation"] = op
+		}
+		requireSuccess(t, a.SaveProvider("acme", payload), "SaveProvider "+name)
+	}
+
+	save(core.OpAutoSave, "AutoSave")
+	if points := pointsFor(t, target); len(points) == 0 || points[0].Operation != core.OpAutoSave {
+		t.Fatalf("_operation=auto_save 应产生 auto_save 还原点：%+v", points)
+	}
+
+	save("hack", "Hack")
+	if points := pointsFor(t, target); points[0].Operation != core.OpSaveProvider {
+		t.Fatalf("伪造的 _operation=hack 应回落到 save_provider：%+v", points[0])
+	}
+
+	save(nil, "NoOp")
+	if points := pointsFor(t, target); points[0].Operation != core.OpSaveProvider {
+		t.Fatalf("缺省 _operation 应为 save_provider：%+v", points[0])
+	}
+}

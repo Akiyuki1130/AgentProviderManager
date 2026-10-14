@@ -970,6 +970,12 @@ func (a *App) SaveProvider(providerID string, provider map[string]interface{}) m
 	if target == "" {
 		return map[string]interface{}{"success": false, "error": "请先选择目标配置文件"}
 	}
+	// 前端可在 payload 里用 _operation=auto_save 声明这是后台自动保存（严格白名单，
+	// 只认这一个精确值）；这样还原点清理会把自动保存当作低价值记录优先淘汰。
+	op := core.OpSaveProvider
+	if v, _ := provider["_operation"].(string); v == core.OpAutoSave {
+		op = core.OpAutoSave
+	}
 	// 注册了 backend 的 agent（ZCode 的两种格式 + DeepSeek Harness 的 profile/settings）
 	// 一律走统一分发：文档变换交给 backend，备份与写盘时机仍由本函数控制。
 	if backend, berr := core.GetBackend(agent, target); berr == nil {
@@ -990,7 +996,7 @@ func (a *App) SaveProvider(providerID string, provider map[string]interface{}) m
 				}
 			}
 		}
-		snapshot, errResp := a.prepareChange(target, agent, core.OpSaveProvider, newID, "", "")
+		snapshot, errResp := a.prepareChange(target, agent, op, newID, "", "")
 		if errResp != nil {
 			return errResp
 		}
@@ -1032,7 +1038,7 @@ func (a *App) SaveProvider(providerID string, provider map[string]interface{}) m
 				return map[string]interface{}{"success": false, "error": "检测到模型列表为空。为避免误删已有模型，已取消保存；如需清空模型，请逐个删除。"}
 			}
 		}
-		snapshot, errResp := a.prepareChange(target, agent, core.OpSaveProvider, newID, "", "")
+		snapshot, errResp := a.prepareChange(target, agent, op, newID, "", "")
 		if errResp != nil {
 			return errResp
 		}
@@ -1069,7 +1075,7 @@ func (a *App) SaveProvider(providerID string, provider map[string]interface{}) m
 			return map[string]interface{}{"success": false, "error": "检测到模型列表为空。为避免误删已有模型，已取消保存；如需清空模型，请逐个删除。"}
 		}
 	}
-	snapshot, errResp := a.prepareChange(target, agent, core.OpSaveProvider, newID, "", "")
+	snapshot, errResp := a.prepareChange(target, agent, op, newID, "", "")
 	if errResp != nil {
 		return errResp
 	}
@@ -1373,15 +1379,17 @@ func (a *App) RefreshProviderModels(providerID, baseURLOverride, apiKeyOverride 
 			return map[string]interface{}{"success": false, "error": rerr.Error()}
 		}
 		edit, gerr := backend.Store(doc).Get(doc, providerID)
-		if gerr != nil {
+		// 重新获取模型只返回模型列表、绝不写盘，因此“尚未保存进配置的新建 provider”
+		// 只要带了 Base URL 覆盖就同样可以请求；没有覆盖时维持原来的“提供商不存在”报错。
+		if gerr != nil && strings.TrimSpace(baseURLOverride) == "" {
 			return map[string]interface{}{"success": false, "error": gerr.Error()}
 		}
 		baseURL := strings.TrimSpace(baseURLOverride)
-		if baseURL == "" {
+		if baseURL == "" && edit != nil {
 			baseURL = edit.BaseURL
 		}
 		apiKey := strings.TrimSpace(apiKeyOverride)
-		if apiKey == "" {
+		if apiKey == "" && edit != nil {
 			apiKey = edit.APIKey
 		}
 		if baseURL == "" {
@@ -1394,15 +1402,16 @@ func (a *App) RefreshProviderModels(providerID, baseURLOverride, apiKeyOverride 
 		return map[string]interface{}{"success": false, "error": err.Error()}
 	}
 	provider, err := core.ProviderToEdit(cfg, providerID)
-	if err != nil {
+	// 同 backend 分支：解析失败时，只要有 Base URL 覆盖就允许继续（新建未保存的 provider）。
+	if err != nil && strings.TrimSpace(baseURLOverride) == "" {
 		return map[string]interface{}{"success": false, "error": err.Error()}
 	}
 	baseURL := strings.TrimSpace(baseURLOverride)
-	if baseURL == "" {
+	if baseURL == "" && provider != nil {
 		baseURL = provider.BaseURL
 	}
 	apiKey := strings.TrimSpace(apiKeyOverride)
-	if apiKey == "" {
+	if apiKey == "" && provider != nil {
 		apiKey = provider.APIKey
 	}
 	if baseURL == "" {

@@ -27,15 +27,15 @@
       <ToastContainer ref="toastRef" />
       <EditContextMenu />
       <UiDialogHost />
-      <n-modal v-model:show="leaveShow" preset="card" title="未保存的更改" style="width: 420px" :mask-closable="false">
+      <n-modal v-model:show="leaveShow" preset="card" :title="t('leave.title', settingStore.resolvedLang)" style="width: 420px" :mask-closable="false">
         <div style="font-size: 13px; line-height: 1.7">
-          当前提供商有未保存的更改，是否保存？
+          {{ leaveIsNew ? t('leave.bodyNew', settingStore.resolvedLang) : t('leave.body', settingStore.resolvedLang) }}
         </div>
         <template #footer>
           <div style="display: flex; justify-content: flex-end; gap: 8px">
-            <n-button :disabled="leaveSaving" @click="cancelLeave">取消</n-button>
-            <n-button type="error" ghost :disabled="leaveSaving" @click="confirmLeave(false)">不保存</n-button>
-            <n-button type="primary" :loading="leaveSaving" @click="confirmLeave(true)">保存</n-button>
+            <n-button :disabled="leaveSaving" @click="cancelLeave">{{ t('leave.cancel', settingStore.resolvedLang) }}</n-button>
+            <n-button type="error" ghost :disabled="leaveSaving" @click="confirmLeave(false)">{{ leaveIsNew ? t('leave.discardNew', settingStore.resolvedLang) : t('leave.discard', settingStore.resolvedLang) }}</n-button>
+            <n-button type="primary" :loading="leaveSaving" @click="confirmLeave(true)">{{ t('leave.save', settingStore.resolvedLang) }}</n-button>
           </div>
         </template>
       </n-modal>
@@ -80,7 +80,7 @@ import { NConfigProvider, NDialogProvider, NModal, NButton, zhCN, dateZhCN, enUS
 import type { GlobalTheme } from 'naive-ui'
 import { useSettingStore } from './stores/setting'
 import type { AgentID } from './stores/setting'
-import { requestLeave, cancelLeave, confirmLeave, leaveShow, leaveSaving, leaveDirty } from './stores/leaveGuard'
+import { requestLeave, cancelLeave, confirmLeave, leaveShow, leaveSaving, leaveDirty, leaveIsNew } from './stores/leaveGuard'
 import { useUpdateStore } from './stores/update'
 import { t } from './i18n'
 import { buildThemeOverrides, isDark as isDarkFn, darkTheme, resolveTheme } from './styles/theme'
@@ -141,7 +141,7 @@ const naiveDateLocale = computed(() => {
 })
 
 function onChangeAgent(agent: string) {
-  requestLeave(() => { void doChangeAgent(agent) })
+  void requestLeave(() => { void doChangeAgent(agent) })
 }
 
 async function doChangeAgent(agent: string) {
@@ -199,7 +199,7 @@ async function doInstallUpdate() {
 function confirmUpdateInstall() {
   updatePromptShow.value = false
   if (leaveDirty()) {
-    requestLeave(() => { void doInstallUpdate() })
+    void requestLeave(() => { void doInstallUpdate() })
     return
   }
   void doInstallUpdate()

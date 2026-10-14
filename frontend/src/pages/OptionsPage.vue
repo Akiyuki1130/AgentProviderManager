@@ -120,6 +120,16 @@
 
         <div class="opt-row">
           <div class="opt-info">
+            <div class="opt-name">{{ t('options.autoSave', lang) }}</div>
+            <div class="opt-desc">{{ t('options.autoSaveDesc', lang) }}</div>
+          </div>
+          <div class="opt-ctrl">
+            <n-switch :value="settingStore.autoSave" @update:value="onAutoSaveChange" />
+          </div>
+        </div>
+
+        <div class="opt-row">
+          <div class="opt-info">
             <div class="opt-name">{{ t('options.intensity', lang) }}</div>
             <div class="opt-desc">{{ t('options.intensityDesc', lang) }}</div>
           </div>
@@ -296,6 +306,11 @@ async function onAutoFillChange(v: boolean) {
 function onIntensityChange(v: boolean) {
   settingStore.setReasoningAllIntensities(v)
   toast('success', t('options.intensity', lang.value), t('common.ok', lang.value))
+}
+// 纯客户端偏好，无后端调用：直接落 localStorage 并提示
+function onAutoSaveChange(v: boolean) {
+  settingStore.setAutoSave(v)
+  toast('success', t('options.autoSave', lang.value), t('common.ok', lang.value))
 }
 function onAutoUpdateChange(v: boolean) {
   settingStore.setAutoUpdate(v)

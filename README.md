@@ -45,6 +45,7 @@ DeepSeek Harness 0.2（当前桌面端与 CLI 的 web profile）把用户配置�
 - 同级 `.bak_<时间戳>` 备份、指纹检查与“恢复最近备份”；默认每个文件最多保留 2 份同级备份。
 - 在 ZCode（新版 / 旧版）与 DeepSeek Harness（0.2 profile patch / 0.1 `settings.yaml`）之间选择性迁移 provider（追加/合并或覆盖），或从 `/v1/models` 获取模型后导入当前 Agent。
 - 输入框提供只含“剪切 / 复制 / 粘贴”的自定义右键菜单。
+- 外观：浅色 / 深色 / 跟随系统三选，强调色提供 8 个预设色板 + 自定义取色；`Ctrl+S` 保存当前提供商（仅在编辑区有未保存修改时触发），提供商搜索框按 `Esc` 清空。
 - 不包含模型代理、计费、遥测或自动上传；可选的自动更新只从本项目 GitHub Release 检查并下载正式版本。
 
 ### 安全与隐私边界
@@ -167,6 +168,8 @@ go vet ./...
 git diff --check
 ```
 
+前端改动请先阅读 [`UI-GUIDELINES.md`](UI-GUIDELINES.md)（零 emoji、零原生弹窗、设计 token、复用组件层等硬性约定）。
+
 请不要提交真实的 `%USERPROFILE%` 配置、`.dsh` 凭据、API Key、备份、`frontend/dist`、`frontend/wailsjs` 或 `build/bin`。
 
 ### 许可证
@@ -214,6 +217,7 @@ The product is currently **Windows-only**. It uses Wails and WebView2, and the W
 - Sibling `.bak_<timestamp>` backups with fingerprint checks and "restore recent backup"; two sibling backups are kept per file.
 - Migrate providers between ZCode (new / legacy) and DeepSeek Harness (0.2 profile patch / 0.1 `settings.yaml`), in merge or overwrite mode, or discover models through `/v1/models` and import them into the current agent.
 - Show only Cut, Copy, and Paste in the custom context menu for text inputs.
+- Appearance: light / dark / follow-system, with an accent picker (eight preset swatches plus a custom color); `Ctrl+S` saves the current provider (only when the editor has unsaved changes) and `Esc` clears the provider search box.
 - No proxying, telemetry, or background upload is included. Optional updates use the fixed GitHub Release source and always require explicit restart confirmation.
 
 ### Security and privacy boundary
@@ -279,6 +283,6 @@ wails build
 
 ### Development and license
 
-Run `npm run build`, `go test ./...`, `go vet ./...`, and `git diff --check` before submitting changes. Never commit real user configuration, `.dsh` credentials, API keys, backups, generated frontend output, Wails bindings, or local binaries.
+Run `npm run build`, `go test ./...`, `go vet ./...`, and `git diff --check` before submitting changes. Front-end work must follow [`UI-GUIDELINES.md`](UI-GUIDELINES.md) (zero emoji, no native dialogs, design tokens, the shared component layer). Never commit real user configuration, `.dsh` credentials, API keys, backups, generated frontend output, Wails bindings, or local binaries.
 
 The source code is released under the MIT License; see [`LICENSE`](LICENSE). Third-party dependencies and the WebView2 runtime remain under their respective licenses. Fluent-style UI references do not imply Microsoft endorsement or affiliation.

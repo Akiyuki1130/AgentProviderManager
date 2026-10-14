@@ -59,6 +59,12 @@ The updater uses the fixed GitHub repository `Akiyuki1130/AgentProviderManager` 
 
 Downloading never replaces or restarts the application. Installation requires an explicit user confirmation. The helper then waits for the old process to exit, verifies the staged file again, backs up the current executable, replaces the original path (including a user-renamed executable), rolls back on launch failure, and starts the new executable at that same path. The restarted application receives a restricted cleanup directive and retries removal of the temporary `.apm-backup-*` file after Windows releases the old process image. Do not remove URL/SSRF validation, SHA-256 verification, the no-shell argument handling, or the restart confirmation.
 
+## Frontend / UI conventions
+
+- Frontend work follows `UI-GUIDELINES.md` (Chinese). Read it before touching `frontend/src/**`; it holds the binding rules that must not regress: zero emoji (icons come from `@vicons/ionicons5` via `<n-icon>`, never baked into i18n strings), zero native `prompt()`/`confirm()`/`alert()` (use `uiConfirm`/`uiPrompt` from `stores/uiDialog.ts`), no new UI library, and every color/radius/duration/reveal goes through the tokens in `styles/global.css` + `styles/theme.ts`.
+- Reuse the existing layer instead of re-inventing it: `components/ui/PageHeader.vue` (all pages), `StickySaveBar.vue`, `UiDialogHost.vue`; composables `useToast` / `useStagger` / `useHighlight`; canonical control classes `.field` / `.switch` / `.check` / `.badge` / `.pill` in `global.css`.
+- Run `cd frontend && npm run build` (includes `vue-tsc --noEmit`) after frontend changes, and check both light and dark themes by hand.
+
 ## Git and release hygiene
 
 - Do not commit API keys, `.dsh` credentials, provider configurations, backups, DPAPI data, GitHub tokens, `node_modules`, generated `frontend/dist`, temporary EXEs, or unrelated files from the parent directory.

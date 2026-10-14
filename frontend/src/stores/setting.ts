@@ -16,6 +16,7 @@ const PRIVATE_HOSTS_KEY = 'apm:privateHosts'
 const AUTOFILL_KEY = 'apm:autofill'
 const REASONING_ALL_KEY = 'apm:reasoningAll'
 const AUTO_UPDATE_KEY = 'apm:autoUpdate'
+const AUTO_SAVE_KEY = 'apm:autoSave'
 const LEGACY_THEME_KEY = 'zcode-pm:theme'
 const LEGACY_LANG_KEY = 'zcode-pm:lang'
 const LEGACY_ACCENT_KEY = 'zcode-pm:accent'
@@ -70,6 +71,7 @@ export const useSettingStore = defineStore('setting', () => {
   const privateHostsAllowed = ref<boolean>(loadBool(PRIVATE_HOSTS_KEY, false))
   const autoFillLimits = ref<boolean>(loadBool(AUTOFILL_KEY, true))
   const reasoningAllIntensities = ref<boolean>(loadBool(REASONING_ALL_KEY, false))
+  const autoSave = ref<boolean>(loadBool(AUTO_SAVE_KEY, true))
   const autoUpdate = ref<boolean>(loadBool(AUTO_UPDATE_KEY, false))
   const systemDark = ref<boolean>(window.matchMedia('(prefers-color-scheme: dark)').matches)
 
@@ -150,6 +152,11 @@ export const useSettingStore = defineStore('setting', () => {
     reasoningAllIntensities.value = v
     try { localStorage.setItem(REASONING_ALL_KEY, String(v)) } catch { /* ignore */ }
   }
+  // 纯客户端偏好：无后端调用，只写 localStorage
+  function setAutoSave(v: boolean) {
+    autoSave.value = v
+    try { localStorage.setItem(AUTO_SAVE_KEY, String(v)) } catch { /* ignore */ }
+  }
   function setAutoUpdate(v: boolean) {
     autoUpdate.value = v
     try { localStorage.setItem(AUTO_UPDATE_KEY, String(v)) } catch { /* ignore */ }
@@ -159,7 +166,7 @@ export const useSettingStore = defineStore('setting', () => {
     try { localStorage.setItem(AGENT_KEY, a) } catch { /* ignore */ }
   }
   return {
-    theme, lang, accentColor, agent, httpEnabled, privateHostsAllowed, autoFillLimits, reasoningAllIntensities, autoUpdate, systemDark, resolvedLang,
-    initTheme, setTheme, setLang, setAccentColor, setHttpEnabled, setPrivateHostsAllowed, setAutoFillLimits, setReasoningAllIntensities, setAutoUpdate, setAgent,
+    theme, lang, accentColor, agent, httpEnabled, privateHostsAllowed, autoFillLimits, reasoningAllIntensities, autoSave, autoUpdate, systemDark, resolvedLang,
+    initTheme, setTheme, setLang, setAccentColor, setHttpEnabled, setPrivateHostsAllowed, setAutoFillLimits, setReasoningAllIntensities, setAutoSave, setAutoUpdate, setAgent,
   }
 })

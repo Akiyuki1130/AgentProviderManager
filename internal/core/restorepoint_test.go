@@ -301,6 +301,88 @@ func idForIndex(i int) string {
 	return "2026010" + string(rune('0'+i/10)) + "_0000" + string(rune('0'+i%10)) + "0_000000"
 }
 
+// writeMetaPointForTest 直接在沙箱还原点目录里写出一个还原点（比逐个创建快）。
+func writeMetaPointForTest(t *testing.T, root, id, target, operation string) {
+	t.Helper()
+	dir := filepath.Join(root, id)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	meta := RestorePoint{
+		ID:         id,
+		CreatedAt:  "2026-01-01T00:00:00Z",
+		AgentID:    string(AgentZCode),
+		TargetPath: target,
+		Format:     FormatLegacy,
+		Existed:    true,
+		SizeBytes:  10,
+		Operation:  operation,
+	}
+	data, _ := json.Marshal(meta)
+	if err := os.WriteFile(filepath.Join(dir, RestorePointMetaName), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// 保留策略优先淘汰自动保存：超过上限时先删最旧的 OpAutoSave，绝不因“更旧”而牺牲
+// 真实的 OpSaveProvider；且每个目标恰好删掉 len-MaxRestorePoints 个。
+func TestPruneRestorePointsSacrificesAutoSaveFirst(t *testing.T) {
+	home := restorePointHome(t)
+	target := filepath.Join(home, ".zcode", "v2", "config.json")
+	root := RestorePointsDir()
+	if err := os.MkdirAll(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	// 故意把最旧的一段留给真实保存点，新的一段全是自动保存：
+	// 旧实现会最先删掉这 10 个真实点；新实现必须先删自动保存。
+	const realOldest = 10
+	const autoCount = 50
+	total := realOldest + autoCount
+	realIDs := map[string]bool{}
+	for i := 0; i < total; i++ {
+		id := idForIndex(i)
+		op := OpAutoSave
+		if i < realOldest {
+			op = OpSaveProvider
+			realIDs[id] = true
+		}
+		writeMetaPointForTest(t, root, id, target, op)
+	}
+
+	overflow := total - MaxRestorePoints
+	if removed := PruneRestorePoints(); removed != overflow {
+		t.Fatalf("清理条数 = %d, want %d", removed, overflow)
+	}
+	kept := ListRestorePoints(RestorePointFilter{TargetPath: target})
+	if len(kept) != MaxRestorePoints {
+		t.Fatalf("保留条数 = %d, want %d", len(kept), MaxRestorePoints)
+	}
+	keptReal, keptAuto := 0, 0
+	for _, point := range kept {
+		switch point.Operation {
+		case OpAutoSave:
+			keptAuto++
+		case OpSaveProvider:
+			keptReal++
+		}
+		if realIDs[point.ID] && point.Operation != OpSaveProvider {
+			t.Errorf("真实保存点 %s 的 operation 被改动：%s", point.ID, point.Operation)
+		}
+	}
+	if keptReal != realOldest {
+		t.Errorf("所有真实保存点都应存活：得到 %d, want %d", keptReal, realOldest)
+	}
+	if keptAuto != MaxRestorePoints-realOldest {
+		t.Errorf("自动保存点应只被删掉 %d 个：存活 %d", overflow, keptAuto)
+	}
+	// 每个被牺牲的 ID 都必须是自动保存点。
+	for id := range realIDs {
+		if _, err := ReadRestorePoint(id); err != nil {
+			t.Errorf("真实保存点 %s 不应被删除：%v", id, err)
+		}
+	}
+}
+
 // ID 校验必须挡住路径穿越。
 func TestRestorePointIDValidation(t *testing.T) {
 	for _, bad := range []string{"", "..", "../x", "20260101_000000_000000/../../x", "abc"} {
