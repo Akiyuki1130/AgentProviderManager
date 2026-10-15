@@ -469,8 +469,9 @@ git diff --check
 
 ## 10. 阶段 E — 模型能力维度补齐（harness 中立层）
 
-> **状态：已实施（2026-10-15）**。E1（中立能力层 + 三 harness 映射）、E2（数据源加宽）、E3（前端能力区）
-> 全部落地，E4 的集中验证与收尾在进行中；实施中的裁决与偏差逐条记录在 10.8。
+> **状态：已实施并验证（2026-10-15），已提交 `976656d`**。E1（中立能力层 + 三 harness 映射）、E2（数据源加宽）、
+> E3（前端能力区）、E4（集中验证：`go build/vet/test`、两条脚本 `--check`、`npm run build`、`wails build`、
+> `git diff --check` 全绿）全部完成；实施中的裁决与偏差逐条记录在 10.8。
 > 触发问题：模型参数里除了上下文 / 输出 / 思考档位，
 > 还能记录「是否支持图片 / 视频 / 音频 / PDF / 结构化输出 / 工具调用」等能力，用户要求「能自动填的全填」，
 > 且**不局限于 ZCode v2**——DSH 与后续 harness 都要从同一层取值。
@@ -735,6 +736,19 @@ toolCall、jsonSchemaOutput、nativeWebSearch、midConversationSystem）；仍**
   `frontend/src/pages/ManagePage.vue`、`frontend/src/pages/ImportPage.vue`、`frontend/src/i18n/index.ts`、
   `CHANGELOG.md`、`TODO.md`、本文件。
 
+**实际落地与上面清单的差异（2026-10-15 收尾对账）**：
+
+- **新增中另出现**：`internal/core/capability_features.go`（生成表解析器，主会话写）、
+  `internal/core/model_features_test.go`、`capability_features_test.go`、`cards_features_test.go`、
+  `features_harness_test.go`、`presets_features_test.go`（测试）。
+- **修改中另出现**：`internal/core/presets.go`（「自动匹配」顺带补能力位）、
+  `internal/core/backend_deepseek.go` 与 `internal/core/deepseek_store.go`（内部键落盘出口）、
+  `internal/core/core_test.go`（opencode 导入出口的内部键断言）、`internal/zcodeprovider/convert_test.go`、
+  `AGENTS.md` / `UI-GUIDELINES.md` / `README.md` / `SECURITY.md`（约定与对外说明随功能同步，
+  见 10.8 第 13 条）。
+- **计划里明确不做**（也已记在 10.6 与 `TODO.md`）：价格 / 知识截止 / 开源权重等维度、
+  运行时可更新能力表（第 18 项 d 的阶段 4，需单独评审）。
+
 ### 10.8 实施记录与偏差（2026-10-15）
 
 1. **契约层先由主会话写死**（`model_features.go`、`capability_features.go`、`models.go` 的 DTO 字段、
@@ -771,6 +785,15 @@ toolCall、jsonSchemaOutput、nativeWebSearch、midConversationSystem）；仍**
     `ImportProvider` 在「没有注册 backend」时的兜底分支会直写 `CardsToCfgMap` 的产物且不剥离内部键。
     该分支当前不可达（两个可选 Agent 的 `GetBackend` 恒有解），且会连带泄漏 `_raw_cfg` /
     `_off_alias` 等**既有**内部键，属存量隐患，不在本轮改动面内。
+12. **两项验证本轮未做（需人工 / 真实窗口，已记入 `TODO.md` 第 20 项）**：
+    ① 对 CMD GOAT 猫猫 / 秋雪复测能力覆盖率——`AGENTS.md` 禁止读取真实用户配置与凭据，
+    这一步只能由用户在应用里复核，我没有代做；
+    ② 浅色 / 深色两套主题的人工目测——同样要在真实 Wails 窗口里看，本轮只做到 `npm run build`
+    （含 `vue-tsc --noEmit` 通过）与源码级检查（i18n 三语齐全、`frontend/src` emoji 扫描 0 命中）。
+13. **跨文件的约定清单已同步**（代码提交之后补的一次 `docs:` 提交）：`AGENTS.md`（三条 `--check`
+    闸门 + 能力层不变量 + `useCapabilityFill`）、`UI-GUIDELINES.md`（composable 表、`.pill.inferred`、
+    「能力位是三态」）、`README.md`（中英文功能清单与用户指南）、`SECURITY.md`（能力表随程序分发、
+    运行时不向社区目录发请求）。
 
 ## 附录 A：证据与未能独立验证的事项
 

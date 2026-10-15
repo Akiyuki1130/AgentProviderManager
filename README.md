@@ -34,9 +34,9 @@ DeepSeek Harness 0.2（当前桌面端与 CLI 的 web profile）把用户配置�
 - `responses`：OpenAI Responses 风格服务。
 - 创建、编辑、删除和重命名 provider。
 - 添加、删除、搜索和批量编辑模型卡片。
-- 编辑 reasoning、variants、context window、output token、modalities、headers 和额外 options。
+- 编辑 reasoning、variants、context window、output token、modalities、headers 和额外 options；模型卡展开区还可逐位确认**模型能力**（输入模态 5 位、输出模态、工具调用、结构化输出、原生联网搜索、对话中途 system、附件、支持温度参数）。
 - 通过 `/v1/models` 获取模型列表；Base URL 会规范化后再请求，响应仅支持 JSON。
-- 常用模型上下文长度和输出长度自动匹配，可在导入页或管理页批量执行。
+- 常用模型上下文长度、输出长度与能力位自动匹配，可在导入页或管理页批量执行；能力位按 ZCode 内建规则、站点规则与社区离线目录分级推断（provider 自报优先），推断结果以「推断支持」弱化标注，可逐位采纳或一键「按能力表补全」（只补空缺，不覆盖已有选择）。写入策略是**只写入确认支持的能力**：未勾选 = 未知，交给目标 Agent 自己的默认值，因此不会因为能力记录不全而弄坏配置。
 - API Key 钥匙串：Windows 使用 DPAPI 加密；旧版本可逆 Base64 数据只用于一次性迁移读取，新的保存不会再静默降级为 Base64。
 - 钥匙串 ↔ 提供商联动：提供商编辑与导入表单可从钥匙串选择条目一键填入 API Key，也可把当前 Key 存入钥匙串；关联关系记录在应用设置中（不改动 harness 配置文件），编辑页显示同步状态并支持覆盖 / 更新 / 解除，钥匙串页显示每个条目被多少提供商使用。
 - 测试连接：对提供商执行两段探测——先走 `/v1/models` 校验地址与鉴权，再向该协议的真实对话端点发送 1-token 请求实测可用性，并给出分类错误（DNS/超时/HTTP 状态码）与逐段耗时。
@@ -208,9 +208,9 @@ The product is currently **Windows-only**. It uses Wails and WebView2, and the W
 - `responses` for OpenAI Responses-style services.
 - Create, edit, delete, and rename providers.
 - Add, delete, search, and bulk-edit model cards.
-- Edit reasoning, variants, context window, output token limits, modalities, headers, and custom options.
+- Edit reasoning, variants, context window, output token limits, modalities, headers, and custom options; the expanded model card also records **model capabilities** bit by bit (five input modalities, output modality, tool call, structured output, native web search, mid-conversation system, attachment, temperature support).
 - Discover models through a JSON `/v1/models` endpoint with response, model-count, and redirect limits.
-- Apply built-in context/output presets to common models.
+- Apply built-in context/output presets to common models, and match capability bits from the layered capability tables (provider self-report first, then ZCode built-in rules, site rules, and offline community catalogs). Inferred bits are shown as "inferred support" and can be accepted one by one or filled in bulk, which only fills gaps and never overwrites your own choices. Only positively supported capabilities are written — a cleared bit means "unknown" and the target agent's own default applies, so incomplete data never breaks a config.
 - Store API keys in a Windows DPAPI-protected keychain. Legacy reversible Base64 files are accepted only for one-time migration; new writes do not silently downgrade to Base64.
 - Link keychain entries to providers: fill the API key field from a searchable keychain picker, save the current key into the keychain, and the linkage lives in app settings (the harness config file is never modified). The editor shows a sync chip (apply / update / unlink) and the keychain page shows how many providers use each entry.
 - Test a connection with a two-stage probe: `/v1/models` for reachability and auth, then a 1-token chat request against the kind's real endpoint, with classified errors (DNS / timeout / HTTP status) and per-stage latency.
@@ -264,7 +264,7 @@ wails build
 
 1. Select an agent and verify its configuration path. For DeepSeek, use `DSH_HOME` or the file picker when needed.
 2. Back up important files before the first edit. The application creates a backup on successful write and reports its path.
-3. Edit providers and model cards in **Manage**. Review auto-filled model limits before saving.
+3. Edit providers and model cards in **Manage**. Review auto-filled model limits and capability bits before saving: only positively supported capabilities are written, and a cleared bit means “unknown” (the target agent's own default applies).
 4. Use **Import** to call a compatible JSON `/v1/models` endpoint. This is not a universal discovery API for every vendor.
 5. Use **Keychain** for local key organization, but protect configuration files and backups as well. Clipboard and `sessionStorage` are sensitive surfaces.
 6. Use **Migrate** only after reviewing the preview. ZCode (new / legacy) and DeepSeek Harness (0.2 profile patch / 0.1 `settings.yaml`) can be migrated into each other in both directions: providers are read through each side's config backend, written through the target's backend, and API keys land in the right place (`.credentials.yaml` for DSH 0.2). A profile patch shadowed by the home-level patch is still refused.

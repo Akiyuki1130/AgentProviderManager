@@ -43,9 +43,17 @@ cd ..
 go test ./...
 go vet ./...
 go mod verify
+node scripts/sync-version.mjs --check
+node scripts/sync-model-catalog.mjs --check
+node scripts/sync-ability-catalog.mjs --check
 wails build
 git diff --check
 ```
+
+三条 `--check` 都只做字节级比对、完全离线且跨天幂等；它们校验的是 `VERSION` 与四张生成表
+（`version_gen.go`、`model_catalog_gen.go`、`model_site_rules_gen.go`、`capability_catalog_gen.go`、
+`capability_features_gen.go`）是否与各自的源保持一致，漂移即失败。只有 `sync-ability-catalog.mjs`
+的 `--update-snapshot` 会联网重裁 `internal/core/data/models-dev-snapshot.json`（开发者机手工触发）。
 
 Windows 更新器包另需编译其测试：
 
@@ -64,6 +72,7 @@ GOOS=windows GOARCH=amd64 go test -c ./internal/update
 - `context.Context` 不贯穿 `internal/core`：core 函数接收 `time.Duration`，由 app 层用 `context.WithTimeout` 包裹调用。
 - 后端在 `init()` 里通过 `core.RegisterBackendFor` / `RegisterBackendForFormat` 自注册。包初始化阶段不得读取真实用户文件，格式探测函数必须无副作用（`internal/core/backend.go`）。
 - 面向前端的 DTO 集中在 `internal/core/models.go`，使用显式 `snake_case` 标签。内部 meta 字段以下划线前缀（`_operation`、`_raw_*`）。空切片绝不序列化为 `null`。
+- **模型能力是 harness 中立的一层**：`internal/core/model_features.go` 的 `ModelFeatures`（输入/输出模态、工具调用、结构化输出、原生联网搜索、中段 system、附件、温度）**全部三态——`nil` = 未知，不是「不支持」**。写盘**只写真**：未知与「假」一律省略键，绝不写 `false` / `null` / `enabled` / `requiresMfjsToolSchema` / `optionSpecs.*.map`（ZCode 的 overlay 里省略 = 不覆盖，`null` 才是显式清空）。卡片与写入端之间只经内部通道 `_apm_capabilities`，**任何写盘出口都必须剥离它**（`stripAPMInternalModelKeys`）。两张生成的能力表彼此独立、解析契约不得互改：`capability_catalog_gen.go` 的 `ctx|out|levels` 与 `capability_features_gen.go` 的 `<输入模态>|<输出模态>|<flags>`（解析 fail-closed，只收录已知为真的位）；两张表分别由 `scripts/sync-model-catalog.mjs` 与 `scripts/sync-ability-catalog.mjs` 在**构建期**生成（见「验证命令」的 `--check`），运行时不发任何网络请求。
 - 不得移除的安全不变量：URL/SSRF 校验（默认拒绝 HTTP 与私网地址）、重定向逐跳复检并在跨主机跳转时剥离 `Authorization`、对每个对外错误做 `RedactSensitive`、以及更新器的主机白名单与防 DNS rebinding 复检。全仓库没有任何 `os/exec`。
 
 ## 测试
@@ -97,7 +106,7 @@ ZIP 里面向用户的可执行文件名保持 `AgentProviderManager.exe`，这�
 ## 前端 / UI 约定
 
 - 前端工作遵循 `UI-GUIDELINES.md`（中文）。改动 `frontend/src/**` 之前先读它；其中是不得回退的硬性规则：零 emoji（图标来自 `@vicons/ionicons5`，经 `<n-icon>` 渲染，绝不写进 i18n 字符串）、零原生 `prompt()`/`confirm()`/`alert()`（改用 `stores/uiDialog.ts` 的 `uiConfirm`/`uiPrompt`）、不引入新的 UI 库、以及每个颜色/圆角/时长/显现都必须走 `styles/global.css` + `styles/theme.ts` 里的 token。
-- 复用既有层，不要重造：`components/ui/PageHeader.vue`（所有页面）、`StickySaveBar.vue`、`UiDialogHost.vue`；composable `useToast` / `useStagger` / `useHighlight` / `useVendorGroup`（厂商分组与筛选的唯一实现）；`global.css` 里的规范控件类 `.field` / `.switch` / `.check` / `.badge` / `.pill` / `.vendor-group*`。
+- 复用既有层，不要重造：`components/ui/PageHeader.vue`（所有页面）、`StickySaveBar.vue`、`UiDialogHost.vue`；composable `useToast` / `useStagger` / `useHighlight` / `useVendorGroup`（厂商分组与筛选的唯一实现）/ `useCapabilityFill`（能力位批量补全的唯一实现）；`global.css` 里的规范控件类 `.field` / `.switch` / `.check` / `.badge` / `.pill` / `.vendor-group*`。
 - 前端改动后运行 `cd frontend && npm run build`（内含 `vue-tsc --noEmit`），并手工检查浅色与深色两套主题。
 - 只用相对导入；`@/*` 别名虽已配置但零使用。跨组件共享状态用模块级 `ref`（见 `stores/uiDialog.ts`、`composables/useToast.ts`），不用 `provide`/`inject`。
 
