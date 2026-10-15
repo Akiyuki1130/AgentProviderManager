@@ -1,6 +1,6 @@
 # AgentProviderManager 前端 UI 指引
 
-> 本文是 APM 前端的**长期约定**，不是一次性整改记录。实施过程与逐条差距清单见（已完成归档的）[`UIUX-POLISH-PLAN.md`](UIUX-POLISH-PLAN.md)。
+> 本文是 APM 前端的**长期约定**，不是一次性整改记录。实施过程与逐条差距清单见（已完成归档的）[`Archive/UIUX-POLISH-PLAN.md`](Archive/UIUX-POLISH-PLAN.md)。
 > 适用范围：`frontend/src/**`。所有改动（含 AI 子代理）在提交前都应对照本文件自查。
 
 ---

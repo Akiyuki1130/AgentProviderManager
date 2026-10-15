@@ -1,26 +1,26 @@
-# Security Policy
+# 安全政策
 
-## Supported versions
+## 支持的版本
 
-Security fixes target the latest published release. Please include the exact version and commit when reporting an issue.
+安全修复只面向最新已发布的版本。上报问题时请附上确切的版本号与提交。
 
-## Reporting a vulnerability
+## 漏洞上报
 
-Do not open a public issue for an undisclosed vulnerability. Contact the repository owner through the private security reporting mechanism configured on GitHub, or request a private contact channel from the owner.
+未公开的漏洞不要开公开 issue。请通过 GitHub 上为本仓库配置的私有安全上报渠道联系仓库所有者，或向所有者索取一个私有联系通道。
 
-Please include:
+请一并提供：
 
-- affected version and Windows version;
-- reproduction steps using placeholder credentials only;
-- impact and any relevant logs with secrets removed;
-- a suggested mitigation if available.
+- 受影响的版本与 Windows 版本；
+- 仅使用占位凭据的复现步骤；
+- 影响范围，以及已去除密钥的相关日志；
+- 如有可行的缓解方案，也请附上。
 
-Never send real API keys, `.dsh` credentials, configuration files, backups, or DPAPI-protected keychain files in a report.
+绝不要在报告中发送真实 API Key、`.dsh` 凭据、配置文件、备份或受 DPAPI 保护的钥匙串文件。
 
-## Security boundaries
+## 安全边界
 
-The application is a local Windows desktop tool. It sends API keys only when the user explicitly requests model discovery or saves a provider to the selected local configuration. The configured URL is restricted to HTTP/HTTPS and host validation rejects localhost, loopback, private, link-local, unspecified, and reserved addresses. HTTP can be explicitly enabled by the user and is not confidential.
+本应用是本地 Windows 桌面工具。只有用户显式请求模型发现或把提供商保存到所选本地配置时，它才会发送 API Key。配置的 URL 仅限 HTTP/HTTPS，主机校验会拒绝 localhost、环回、私有、链路本地、未指定与保留地址。HTTP 只能由用户显式开启，且不具备机密性。
 
-The application does not provide a network proxy, sandbox, malware protection, or a guarantee that a third-party provider is trustworthy. Protect configuration files, backups, the DeepSeek credentials file, session storage, and the system clipboard.
+本应用不提供网络代理、沙箱、恶意软件防护，也不对第三方提供商的可信度作任何保证。请保护好配置文件、备份、DeepSeek 凭据文件、会话存储与系统剪贴板。
 
-Optional updates contact only the fixed HTTPS GitHub API/release hosts for this repository. Release metadata accepts stable versions only; the Windows amd64 executable is size-limited and SHA-256 checked before staging. Installation waits for the current process to exit and requires an explicit restart confirmation. The updater does not accept arbitrary URLs or shell commands from the frontend.
+可选更新只访问本仓库固定的 HTTPS GitHub API/发布主机。发布元数据只接受稳定版本；Windows amd64 可执行文件有大小限制，并在暂存前做 SHA-256 校验。安装会等待当前进程退出，且需要用户显式确认重启。更新器不接受前端传入的任意 URL 或 shell 命令。

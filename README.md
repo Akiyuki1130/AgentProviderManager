@@ -19,7 +19,7 @@ Agent Provider Manager（简称 **APM**）是一个 Windows 桌面工具，用�
 | Agent | 默认配置位置 | 支持的操作 |
 |---|---|---|
 | **ZCode** | `%USERPROFILE%\.zcode\v2\provider_config.json`（新版，优先）/ `%USERPROFILE%\.zcode\v2\config.json`（旧版） | 读取、编辑、保存、还原点、provider/model 管理、旧版供应商一次性导入、ZCode 3.14 兼容性检查与一键修复、跨 Agent 迁移（源 / 目标） |
-| **DeepSeek Harness** | 0.2：`%USERPROFILE%\\.dsh\\profiles\\desktop\\cordis.patch.yml`（桌面端，优先）/ `profiles\\web\\cordis.patch.yml`（`dsh web`、CLI）/ `cordis.patch.yml`（home 级，优先级最高）。0.1：`settings.yaml`（`.yml` / `.json`，只作为旧格式保留） | 读取、编辑、保存、还原点、provider/model 管理、跨 Agent 迁移（源 / 目标）；provider 写入 `llm-pi-ai` 条目的 `config.providers`，API Key 以 `apiKeyEnv` 引用写入 `.credentials.yaml`（`version: 1` + `refs`） |
+| **DeepSeek Harness** | 0.2：`%USERPROFILE%\.dsh\profiles\desktop\cordis.patch.yml`（桌面端，优先）/ `profiles\web\cordis.patch.yml`（`dsh web`、CLI）/ `cordis.patch.yml`（home 级，优先级最高）。0.1：`settings.yaml`（`.yml` / `.json`，只作为旧格式保留） | 读取、编辑、保存、还原点、provider/model 管理、跨 Agent 迁移（源 / 目标）；provider 写入 `llm-pi-ai` 条目的 `config.providers`，API Key 以 `apiKeyEnv` 引用写入 `.credentials.yaml`（`version: 1` + `refs`） |
 
 > **OpenCode**：入口已在应用内完全隐藏（暂不适配，后续再说）。相关代码与历史还原点数据保留，但顶部栏、迁移页与编辑器里都不会再出现 OpenCode。
 
@@ -110,19 +110,19 @@ wails build
 
 程序会尽量保留未被界面编辑的原生 provider 字段（例如 ZCode 新版规则里本工具不编辑的键）；不同 Agent 的原生 schema 并不完全相同，重大升级前仍应保留备份。
 
-#### 3. 从服务商获取模型
+#### 4. 从服务商获取模型
 
 在“导入”页输入 Base URL、API Key、provider 名称和类型，点击“获取模型列表”。程序会规范化 Base URL 并访问对应的 `/v1/models` 端点，限制响应大小、模型数量和重定向次数，并对每次重定向再次执行地址安全检查。
 
 服务商必须提供兼容的 JSON 模型列表接口；并非所有 Anthropic、Responses 或自定义网关都提供 `/v1/models`，拉取失败时请按照服务商文档填写模型。
 
-#### 4. 使用 API Key 钥匙串
+#### 5. 使用 API Key 钥匙串
 
 在“钥匙串”页添加名称、API Key 和备注。Windows 构建使用 DPAPI 保护钥匙串内容；配置文件和备份仍可能包含明文或环境变量引用，不能只保护钥匙串文件。
 
 可以复制单个或多个 API Key，也可以使用“填入导入页”把一次性密钥传给导入流程。不要在共享屏幕、日志或截图中展示真实 API Key。
 
-#### 5. 导入与迁移
+#### 6. 导入与迁移
 
 - 在“迁移”页选择源 / 目标 Agent（ZCode 与 DeepSeek Harness 可互为源与目标）和各自的配置文件，预览两侧的 provider 列表后选择要迁移的条目：
   - ZCode 新版（`provider_config.json`）与旧版（`config.json`）、DeepSeek Harness 0.2 profile patch 与 0.1 `settings.yaml` 都通过各自的 config backend 读写，不再依赖旧版顶层 `provider` 映射，因此两个方向都可用。
@@ -131,7 +131,7 @@ wails build
 - 在“导入”页输入 Base URL 与 API Key 后点击“获取模型列表”，勾选模型再导入当前 Agent；已存在的 provider 可选择合并模型或整体覆盖。
 - 所有写入都会先建立同级备份与还原点，执行前请阅读预览并保留离线备份。
 
-#### 6. 右键菜单和布局
+#### 7. 右键菜单和布局
 
 文本 `input` 与 `textarea` 上右键只显示“剪切、复制、粘贴”。无选区时剪切和复制会禁用，只读输入框只允许复制；checkbox、按钮、文件选择器等非文本控件不会显示编辑菜单。菜单会在窗口边界内定位。
 
@@ -154,6 +154,8 @@ wails build
 main.go                         Wails 入口和版本
 internal/core/                  配置、模型、URL 安全、迁移、备份、DPAPI
 internal/dshprovider/         DeepSeek Harness 0.2 profile patch / 凭据文档
+internal/zcodeprovider/       ZCode 新版 provider_config.json 的编解码与校验
+internal/update/              内置更新器（下载、校验、替换与回滚）
 internal/app/                   Wails 绑定和应用状态
 frontend/src/                   Vue 3 页面、组件、Pinia 状态和样式
 build/windows/                  Windows manifest、图标和产品元数据
@@ -191,7 +193,7 @@ APM is a local configuration manager. It is not a proxy, model gateway, hosted s
 | Agent | Default configuration | Supported operations |
 |---|---|---|
 | **ZCode** | `%USERPROFILE%\.zcode\v2\provider_config.json` (new format, preferred) / `%USERPROFILE%\.zcode\v2\config.json` (legacy) | Read/edit/save, restore points, provider/model management, one-time legacy provider import, ZCode 3.14 compatibility check and one-click repair, cross-agent migration (source / target) |
-| **DeepSeek Harness** | 0.2: `%USERPROFILE%\\.dsh\\profiles\\desktop\\cordis.patch.yml` (desktop, preferred) / `profiles\\web\\cordis.patch.yml` (`dsh web`, CLI) / `cordis.patch.yml` (home level, highest precedence). 0.1: `settings.yaml` (`.yml` / `.json`, legacy only) | Read/edit/save, restore points, provider/model management, cross-agent migration (source / target); providers live in the `llm-pi-ai` entry's `config.providers`, API keys are stored as `apiKeyEnv` references in `.credentials.yaml` (`version: 1` + `refs`) |
+| **DeepSeek Harness** | 0.2: `%USERPROFILE%\.dsh\profiles\desktop\cordis.patch.yml` (desktop, preferred) / `profiles\web\cordis.patch.yml` (`dsh web`, CLI) / `cordis.patch.yml` (home level, highest precedence). 0.1: `settings.yaml` (`.yml` / `.json`, legacy only) | Read/edit/save, restore points, provider/model management, cross-agent migration (source / target); providers live in the `llm-pi-ai` entry's `config.providers`, API keys are stored as `apiKeyEnv` references in `.credentials.yaml` (`version: 1` + `refs`) |
 
 > **OpenCode** is hidden from the application for now. Its code and historical restore-point data are kept, but it no longer appears in the top bar, the migration page, or the editor.
 
@@ -224,7 +226,7 @@ The product is currently **Windows-only**. It uses Wails and WebView2, and the W
 
 - Only `http` and `https` URLs are accepted. HTTPS is the default. External HTTP is allowed only after the user explicitly enables the HTTP option, and it exposes API keys and request data in plaintext.
 - Hosts are checked before requests and again across redirects. Localhost, loopback, private, link-local, unspecified, and other reserved addresses are rejected by default; they are only allowed after the user explicitly enables the "Allow local & private addresses" option (for example, to reach a local model server). This is SSRF protection, not a complete network isolation boundary.
-- When the user requests model discovery, the API key is sent as `Authorization: Bearer ...` to the user-provided Base URL. The provider may log requests, source IPs, model information, and authentication data. APM does not upload data to the project owner and contains no telemetry or updater.
+- When the user requests model discovery, the API key is sent as `Authorization: Bearer ...` to the user-provided Base URL. The provider may log requests, source IPs, model information, and authentication data. APM does not upload data to the project owner and contains no telemetry.
 - DeepSeek credentials, provider files, sibling `.bak_` backups, restore snapshots and restore-point content may contain API keys. Restore points are written only locally under `%LOCALAPPDATA%\AgentProviderManager\restorepoints` (mode 0600) and are never uploaded or logged, but they are plaintext copies: never commit, upload, or share them, and delete or prune them from the Restore Points page when no longer needed.
 - Optional updates use only HTTPS GitHub API/release hosts for this repository. Stable Windows amd64 assets are size-limited and SHA-256 checked before staging; installation waits for the current process to exit and requires an explicit restart confirmation. The updater does not accept arbitrary URLs or shell commands.
 - The import flow may temporarily use browser `sessionStorage`, and copying a key places it in the system clipboard. Clear the clipboard and avoid screen sharing or shared browser profiles when handling secrets.
