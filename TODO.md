@@ -82,11 +82,11 @@
   3. **可选（原路线二，本轮未做）**：DSH 内嵌 pi-ai 模型目录（`C:\AppData\DSH Desktop\resources\app.asar` 的 `dsh/node_modules/@earendil-works/pi-ai/dist/providers/data/*.json`，含 `contextWindow`/`maxTokens`/`reasoning`/`thinkingLevelMap`，43 个 provider），只覆盖精确 id，作为精确命中的补充；抽取需按 asar 格式解包。
   影响面：只影响「自动补全命中率」，不影响既有正确性；改完重跑 `node scripts/sync-model-catalog.mjs`（内建表）或直接编辑覆盖层，并补 `capability_test.go` 回归用例。
 
-- [ ] **19. 「自动匹配」与拉取模型时的自动补全口径不一致**（2026-10-14 实现导入页厂商分组时发现）
+- [x] **19. 「自动匹配」与拉取模型时的自动补全口径不一致**（2026-10-14 实现导入页厂商分组时发现，同日修复）
   症状：导入页/管理页的「自动匹配」按钮（`ApplyModelPresets`）只查手维护的 `modelPresets` 前缀表，**不走**阶段 B 的能力表；而拉取模型时的自动补全（`BuildModelCards` → `LookupModelCapability`）两层都走。同一个模型，两条路径给出的上限不一样。
-  可复现：`deepseek-v4.1-flash` 只存在于 `internal/core/model_overrides.go`（覆盖层，不在 `modelPresets`）——自动补全能填 ctx 1000000 / out 384000，点「自动匹配」却一格不填。
-  修法（一行级）：`internal/core/presets.go:320` 的 `LookupModelLimits(cards[i].ModelID)` 改用 `LookupModelCapability` 的结果，`filled` 仍只统计 context/output；同步更新 `presets_test.go` 里依赖旧口径的计数断言。
-  依据：`MODEL-MANAGEMENT-PLAN.md`（v6）第 270 行本就写「保留 `LookupModelLimits` / `ApplyModelPresets` 的对外签名与行为（内部改为委托能力表）」——实现时只保住了签名，没切换内部口径。注意 `LookupModelLimits` 自身必须保持"只查预设表"，它是能力表的兜底层，改它会递归。
+  可复现：`deepseek-v4.1-flash` 不在 `modelPresets` 里（内建规则 `.*deepseek-v4[.-]1-flash` 与覆盖层都有值，只是 presets 的前缀匹配在 `.1` 处断裂）——自动补全能填 ctx 1000000 / out 384000，点「自动匹配」却一格不填。
+  修法：`internal/core/presets.go` 的 `ApplyModelPresets` 改用 `LookupModelCapability` 取值，`filled` 仍只统计 context/output；`LookupModelLimits` 保持"只查预设表"不动（它是能力表的兜底层，改会递归）。
+  完成：已切换口径；`TestApplyModelPresets` 期望值按源表重推（`grok-4.6` 的 output 128000 来自内建规则，不再是「未公开故为 0」），新增 `TestApplyModelPresetsUsesCapabilityTable` 锁定口径（含"该 ID 不在 presets 表内"的前置断言）。`go test ./... -count=1` 与 `go vet ./...` 全绿。
 
 - [ ] **6. 还原点页筛选与分组**
   按 Agent/操作类型/日期过滤；加「清理孤立条目」按钮（顺带解决 1 的存量污染）；回滚前给差异预览（改了哪个文件、几个提供商）。

@@ -310,23 +310,33 @@ func emptyToken(v interface{}) bool {
 	return false
 }
 
-// ApplyModelPresets applies the preset limits to the cards, overwriting any
-// existing context/output values that the preset covers. The caller is
-// expected to confirm with the user before overwriting filled values.
+// ApplyModelPresets applies the inferred context/output limits to the cards, overwriting
+// any existing context/output values the inference covers. The caller is expected to
+// confirm with the user before overwriting filled values.
 // It returns the updated cards and the number of fields set.
+//
+// 取值口径与拉取模型时的自动补全完全一致：走 LookupModelCapability（APM 覆盖层 >
+// ZCode 内建规则 > presets 旧表兜底），而不是只查手维护的 modelPresets 表——否则同一个
+// 模型在「拉取」与「自动匹配」两条路径上会得到不同结果（例如只在覆盖层里的
+// deepseek-v4.1-flash：拉取能补全，自动匹配却一格不填）。
+//
+// 保留函数名与签名：它已是 Wails 绑定名（前端 api.ApplyModelPresets），改名要同时动
+// 前端与绑定层，收益不抵。
+//
+// filled 仍只统计 context/output 两类字段（档位补全属于卡片自适应，另行提示）。
 func ApplyModelPresets(cards []ModelCard) ([]ModelCard, int) {
 	filled := 0
 	for i := range cards {
-		p, ok := LookupModelLimits(cards[i].ModelID)
+		cap, ok := LookupModelCapability(cards[i].ModelID)
 		if !ok {
 			continue
 		}
-		if p.Context > 0 {
-			cards[i].Context = p.Context
+		if cap.Context > 0 {
+			cards[i].Context = cap.Context
 			filled++
 		}
-		if p.Output > 0 {
-			cards[i].Output = p.Output
+		if cap.Output > 0 {
+			cards[i].Output = cap.Output
 			filled++
 		}
 	}

@@ -112,16 +112,18 @@ func TestLookupModelLimitsContextOnly(t *testing.T) {
 }
 
 func TestApplyModelPresets(t *testing.T) {
+	// 期望值来源（不取运行结果）：1/4/6 由内建规则给出，2/3 落在 presets 兜底，5 无任何来源。
 	cards := []ModelCard{
-		{ModelID: "deepseek-v4-flash", Context: "", Output: ""},
-		{ModelID: "gpt-5.6-luna", Context: nil, Output: nil},
-		{ModelID: "claude-opus-4-6", Context: 900000, Output: "64k"}, // preset overwrites filled values
-		{ModelID: "grok-4.6", Context: "", Output: ""},               // context only (output not in preset)
-		{ModelID: "mystery-model", Context: "64k", Output: "8k"},     // no preset, must stay untouched
+		{ModelID: "deepseek-v4-flash", Context: "", Output: ""},      // 内建规则 1000000/384000
+		{ModelID: "gpt-5.6-luna", Context: nil, Output: nil},         // 无内建规则，presets 兜底
+		{ModelID: "claude-opus-4-6", Context: 900000, Output: "64k"}, // 覆盖已填值（无内建规则，presets 兜底）
+		{ModelID: "grok-4.6", Context: "", Output: ""},               // 内建规则同时给出 ctx 与 output
+		{ModelID: "mystery-model", Context: "64k", Output: "8k"},     // 无规则命中（`.*` 兜底规则被有意跳过），必须原样不动
+		{ModelID: "deepseek-v4.1-flash", Context: "", Output: ""},    // 不在 presets 表内，只能由能力表（覆盖层/内建规则）补全
 	}
 	updated, filled := ApplyModelPresets(cards)
-	if filled != 7 {
-		t.Fatalf("filled=%d, want 7", filled)
+	if filled != 10 {
+		t.Fatalf("filled=%d, want 10", filled)
 	}
 	if updated[0].Context != 1000000 || updated[0].Output != 384000 {
 		t.Errorf("deepseek-v4-flash not filled: %v %v", updated[0].Context, updated[0].Output)
@@ -132,11 +134,36 @@ func TestApplyModelPresets(t *testing.T) {
 	if updated[2].Context != 1000000 || updated[2].Output != 128000 {
 		t.Errorf("existing values not overwritten: %v %v", updated[2].Context, updated[2].Output)
 	}
-	if updated[3].Context != 500000 || updated[3].Output != "" {
-		t.Errorf("grok-4.6 partial fill wrong: %v %v", updated[3].Context, updated[3].Output)
+	if updated[3].Context != 500000 || updated[3].Output != 128000 {
+		t.Errorf("grok-4.6 wrong: %v %v", updated[3].Context, updated[3].Output)
 	}
 	if updated[4].Context != "64k" || updated[4].Output != "8k" {
 		t.Errorf("unknown model should stay untouched: %v %v", updated[4].Context, updated[4].Output)
+	}
+	if updated[5].Context != 1000000 || updated[5].Output != 384000 {
+		t.Errorf("deepseek-v4.1-flash not filled from capability table: %v %v", updated[5].Context, updated[5].Output)
+	}
+}
+
+// 「自动匹配」与拉取模型时的自动补全必须同口径：走 LookupModelCapability，而不是只查
+// 手维护的 modelPresets 前缀表（后者对 .1 处的断裂会让 deepseek-v4.1-flash 一格不填）。
+func TestApplyModelPresetsUsesCapabilityTable(t *testing.T) {
+	const id = "deepseek-v4.1-flash"
+	// 先锁定前提：该 ID 不在 presets 表里。若将来有人把它加进去，本用例的区分力就没了。
+	if p, ok := LookupModelLimits(id); ok && p.Context > 0 {
+		t.Fatalf("premise broken: %s now resolves via modelPresets (%+v)", id, p)
+	}
+	cap, ok := LookupModelCapability(id)
+	if !ok || cap.Context == 0 || cap.Output == 0 {
+		t.Fatalf("capability lookup gave nothing: %+v ok=%v", cap, ok)
+	}
+	cards := []ModelCard{{ModelID: id, Context: "", Output: ""}}
+	updated, filled := ApplyModelPresets(cards)
+	if filled != 2 {
+		t.Fatalf("filled=%d, want 2", filled)
+	}
+	if updated[0].Context != cap.Context || updated[0].Output != cap.Output {
+		t.Errorf("got %v/%v, want %v/%v", updated[0].Context, updated[0].Output, cap.Context, cap.Output)
 	}
 }
 

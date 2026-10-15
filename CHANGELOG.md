@@ -31,6 +31,7 @@
 
 - **档位往返与「关闭思考」的一批缺陷（阶段 A）。** off 档位的原始拼法（`disabled` / `none` / `nothink`）经卡片内部字段 `_off_alias` 原样保真，不再被统一改写导致 ZCode 的 `map` 表达式匹配不到；ZCode v2 的「关闭思考」现在真正持久化——按其真实语义把档位集合收敛为单元素 off 词（此前关闭后重读会翻回开启），并删除 `config.enabled → reasoning.enabled` 的错误映射（`config.enabled` 是模型启用位、与思考无关，仍原样保留不丢数据）；默认档位改为按集合回落（优先 high，否则集合内首个非 off 档），不再因集合不含 `high` 而拒绝保存；DSH 档位放开到全部 7 档，`medium` / `xhigh` 不再在读写中被丢弃，`minimal` 不再被折叠成 `low`；legacy 写盘出口剥离 APM 内部键（`offAlias` 等下划线前缀 meta），不再把它们落进用户 `config.json`。顺带删除死代码 `OpencodeEffortOrder` / `OpencodeEffortToVariant`，前端三处硬编码档位表收敛为单一真源 `frontend/src/constants/variants.ts`。
 - `go test` 不再污染真实还原点目录：`internal/core` 里的 `TestZCodeToDeepSeek...`、`TestDeepSeekToZCode...` 与三个 `ApplyLegacyImport` 测试此前只沙箱化了 `DSH_HOME`，把迁移/导入快照写进了 `%LOCALAPPDATA%\AgentProviderManager\restorepoints`。现在它们把 `LOCALAPPDATA`（以及 `USERPROFILE`，并为反向迁移的目标存储列表清空 `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE`）固定到 `t.TempDir()`，与 `setupMigrateTest` 一致。
+- **「自动匹配」与拉取模型时的自动补全口径统一。** `ApplyModelPresets`（管理页/导入页的「自动匹配」按钮）此前只查手维护的 `modelPresets` 前缀表，而 `BuildModelCards`（拉取模型时的自动补全）走能力表（APM 覆盖层 > ZCode 内建 84 条规则 > presets 兜底），于是同一个模型在两条路径上会得到不同上限：`deepseek-v4.1-flash` 这类只在能力表里能命中的 ID，拉取时能补上 1000000 / 384000，点「自动匹配」却一格不填（内建规则 `.*deepseek-v4[.-]1-flash` 与覆盖层本都有值，只是 presets 表的前缀匹配在 `.1` 处断裂）。现在两条路径共用能力表；`filled` 仍只统计上下文/输出两类字段（档位补全由卡片自适应负责），覆盖用户已填值前照旧走前端确认。`LookupModelLimits` 保持「只查预设表」不动——它是能力表的兜底层，改它会递归。回归用例 `TestApplyModelPresetsUsesCapabilityTable` 锁定该口径，并前置断言该 ID 不在 presets 表内，避免前提被后人改动后用例悄悄失去区分力。
 
 ## 2.0.8 — 2026-10-13
 
