@@ -113,6 +113,78 @@
               <input class="field tnum" :value="card.output" @input="onOutputInput" placeholder="留空自动匹配" />
             </div>
             <div class="mc-tip">提示：API 通常只返回模型 ID，以上参数已根据模型名自动推断。上下文与输出长度各自独立，填写即写入、留空不写入。</div>
+            <!-- 阶段 E3「能力」区：harness 中立能力的唯一编辑入口，只读写 card.capabilities。
+                 三态语义（键不存在 = 未知）决定了交互：勾选写 true，取消勾选删键，绝不写 false。
+                 opencode 形态的旧字段 attachment / modalities 不在此区展示，也不做迁移。 -->
+            <div class="mc-caps">
+              <div class="mc-caps-head">
+                <span class="mc-caps-title">{{ t('cap.title', lang) }}</span>
+                <!-- 三态口径整块只说一次：未选择 / 未勾选 = 未知，交给目标客户端默认值。
+                     不承诺「取消勾选 = 告诉客户端不支持」——写端从不下发 false，那种承诺做不到。 -->
+                <span class="mc-caps-note">{{ t('cap.emptyHint', lang) }}</span>
+                <span v-if="inferredSource" class="mc-caps-note">{{ t('cap.sourceLabel', lang).replace('{source}', inferredSource) }}</span>
+              </div>
+              <div class="mc-caps-row">
+                <span class="mc-caps-label">{{ t('cap.input', lang) }}</span>
+                <div class="mc-effort-opts">
+                  <button
+                    v-for="m in CAP_INPUT_MODALITIES"
+                    :key="'in-' + m"
+                    type="button"
+                    class="pill"
+                    :class="{ checked: hasModality('input', m), inferred: isInferredModality('input', m) }"
+                    :aria-pressed="hasModality('input', m)"
+                    :title="isInferredModality('input', m) ? t('cap.inferred', lang) : undefined"
+                    @click="toggleModality('input', m)"
+                  >
+                    <span>{{ modalityLabel(m) }}</span>
+                  </button>
+                </div>
+                <button v-if="adoptableCount('input') > 0" type="button" class="pill mc-caps-adopt" @click="adoptModalities('input')">{{ t('cap.adopt', lang) }}</button>
+              </div>
+              <div class="mc-caps-row">
+                <span class="mc-caps-label">{{ t('cap.output', lang) }}</span>
+                <div class="mc-effort-opts">
+                  <button
+                    v-for="m in CAP_OUTPUT_MODALITIES"
+                    :key="'out-' + m"
+                    type="button"
+                    class="pill"
+                    :class="{ checked: hasModality('output', m), inferred: isInferredModality('output', m) }"
+                    :aria-pressed="hasModality('output', m)"
+                    :title="isInferredModality('output', m) ? t('cap.inferred', lang) : undefined"
+                    @click="toggleModality('output', m)"
+                  >
+                    <span>{{ modalityLabel(m) }}</span>
+                  </button>
+                </div>
+                <button v-if="adoptableCount('output') > 0" type="button" class="pill mc-caps-adopt" @click="adoptModalities('output')">{{ t('cap.adopt', lang) }}</button>
+              </div>
+              <div class="mc-caps-block">
+                <span class="mc-caps-label">{{ t('cap.flags', lang) }}</span>
+                <div class="mc-caps-flags">
+                  <!-- 自绘 .check（与卡片选择框同一控件体系）；勾选 = 写 true，取消 = 删键 -->
+                  <div v-for="f in CAP_FLAG_KEYS" :key="f" class="mc-caps-flag">
+                    <label class="check mc-caps-flag-toggle">
+                      <input type="checkbox" :checked="flagValue(f)" :aria-label="flagLabel(f)" @change="onFlagChange(f, $event)" />
+                      <span class="check-mark" />
+                      <span class="mc-caps-flag-name">{{ flagLabel(f) }}</span>
+                    </label>
+                    <!-- 推断有值而用户未确认时标出「推断支持」，采纳按钮显式写入，不自动改数据 -->
+                    <template v-if="isInferredFlag(f)">
+                      <span class="mc-caps-note">{{ t('cap.inferred', lang) }}</span>
+                      <button
+                        type="button"
+                        class="pill mc-caps-adopt"
+                        :title="t('cap.adoptAria', lang).replace('{name}', flagLabel(f))"
+                        :aria-label="t('cap.adoptAria', lang).replace('{name}', flagLabel(f))"
+                        @click="adoptFlag(f)"
+                      >{{ t('cap.adopt', lang) }}</button>
+                    </template>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </Transition>
@@ -124,7 +196,8 @@
 import { ref, computed } from 'vue'
 import { NIcon } from 'naive-ui'
 import { ChevronDown, CloseOutline } from '@vicons/ionicons5'
-import type { ModelCard } from '../types'
+import type { ModelCapabilities, ModelCard } from '../types'
+import { CAP_FLAG_KEYS, CAP_INPUT_MODALITIES, CAP_OUTPUT_MODALITIES } from '../types'
 import { useSettingStore } from '../stores/setting'
 import { highlightSegments } from '../composables/useHighlight'
 import { t } from '../i18n'
@@ -243,6 +316,98 @@ function commitCustomVariants() {
 }
 function onContextInput(e: Event) { props.card.context = (e.target as HTMLInputElement).value as unknown as string | number; }
 function onOutputInput(e: Event) { props.card.output = (e.target as HTMLInputElement).value as unknown as string | number; }
+
+// ---- 阶段 E3：能力区 ----
+type ModalityDir = 'input' | 'output'
+type FlagKey = (typeof CAP_FLAG_KEYS)[number]
+
+/** 用户可编辑的权威值；缺失即「未知」，不要在这里补默认值。 */
+function caps(): ModelCapabilities { return props.card.capabilities || {} }
+/** 只读推断值，用于标出「推断支持」，绝不回写。 */
+function inferred(): ModelCapabilities { return props.card._capabilities_inferred || {} }
+
+function modalityKey(dir: ModalityDir): 'input_modalities' | 'output_modalities' {
+  return dir === 'input' ? 'input_modalities' : 'output_modalities'
+}
+function modalityOrder(dir: ModalityDir): readonly string[] {
+  return dir === 'input' ? CAP_INPUT_MODALITIES : CAP_OUTPUT_MODALITIES
+}
+
+/**
+ * 回写能力对象：整份为空对象时把 capabilities 键删掉——「什么都没填」仍是未知，
+ * 留一个 `{}` 会让卡片看起来「已确认无任何能力」，与三态语义相悖。
+ * 只改数据不回写后端：保存路径由页面既有的卡片载荷负责。
+ */
+function writeCaps(next: ModelCapabilities) {
+  props.card.capabilities = Object.keys(next).length > 0 ? next : undefined
+  emit('update')
+}
+
+function hasModality(dir: ModalityDir, m: string): boolean {
+  return (caps()[modalityKey(dir)] || []).includes(m)
+}
+
+/** 能力表推断为支持、但用户尚未确认的空位（用于标出「推断支持」）。 */
+function isInferredModality(dir: ModalityDir, m: string): boolean {
+  const inf = inferred()[modalityKey(dir)]
+  return !!inf && inf.includes(m) && !hasModality(dir, m)
+}
+
+/** 该方向可采纳（推断有值且当前缺位、且在规范词表内）的模态数量，0 时不渲染采纳按钮。 */
+function adoptableCount(dir: ModalityDir): number {
+  const inf = inferred()[modalityKey(dir)] || []
+  const order = modalityOrder(dir)
+  return inf.filter((m) => order.includes(m) && !hasModality(dir, m)).length
+}
+
+function toggleModality(dir: ModalityDir, m: string) {
+  const key = modalityKey(dir)
+  const next: ModelCapabilities = { ...caps() }
+  const picked = new Set(next[key] || [])
+  if (picked.has(m)) picked.delete(m)
+  else picked.add(m)
+  // 按规范序重建集合（去重 + 稳定顺序），空集合删键：模态是集合语义，留空数组无法表达「未知」
+  const list = modalityOrder(dir).filter((x) => picked.has(x))
+  if (list.length > 0) next[key] = list
+  else delete next[key]
+  writeCaps(next)
+}
+
+function adoptModalities(dir: ModalityDir) {
+  const key = modalityKey(dir)
+  const order = modalityOrder(dir)
+  const next: ModelCapabilities = { ...caps() }
+  const picked = new Set(next[key] || [])
+  for (const m of inferred()[key] || []) if (order.includes(m)) picked.add(m)
+  next[key] = order.filter((x) => picked.has(x))
+  writeCaps(next)
+}
+
+function flagValue(f: FlagKey): boolean { return caps()[f] === true }
+function isInferredFlag(f: FlagKey): boolean { return inferred()[f] === true && caps()[f] === undefined }
+
+function onFlagChange(f: FlagKey, e: Event) {
+  const next: ModelCapabilities = { ...caps() }
+  if ((e.target as HTMLInputElement).checked) next[f] = true
+  // 取消勾选 = 删键（回到未知），绝不写 false
+  else delete next[f]
+  writeCaps(next)
+}
+
+function adoptFlag(f: FlagKey) {
+  const next: ModelCapabilities = { ...caps() }
+  next[f] = true
+  writeCaps(next)
+}
+
+function modalityLabel(m: string): string { return t(`cap.modal.${m}`, lang.value) }
+function flagLabel(f: FlagKey): string { return t(`cap.flag.${f}`, lang.value) }
+
+/** 推断来源只读展示（`_source` 由后端填，可能缺失）。 */
+const inferredSource = computed(() => {
+  const s = inferred()._source
+  return typeof s === 'string' && s.trim() !== '' ? s.trim() : ''
+})
 </script>
 
 <style scoped>
@@ -290,6 +455,21 @@ function onOutputInput(e: Event) { props.card.output = (e.target as HTMLInputEle
 /* C2：自填档位输入框在 .mc-effort 的 flex 行内占满剩余宽度（全局 .field 为 100% 宽，需在 flex 下归一） */
 .mc-custom-input { flex: 1; min-width: 0; height: 30px; font-size: 12px; }
 .mc-effort-note { font-size: 10px; color: var(--fluent-text-soft); white-space: nowrap; }
+/* 阶段 E3 能力区：横跨整行参数网格的独立区块（与 .mc-effort 同为 grid-column: 1 / -1 的整行块，
+   但用中性底色——能力是用户可编辑的权威值，不是「推断结果」这类提示）。 */
+.mc-caps { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 8px; border: 1px solid var(--fluent-border); border-radius: 8px; padding: 8px 12px; }
+.mc-caps-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.mc-caps-title { font-size: 11px; font-weight: 600; }
+.mc-caps-note { font-size: 10px; color: var(--fluent-text-soft); }
+.mc-caps-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.mc-caps-label { font-size: 11px; color: var(--fluent-text-soft); white-space: nowrap; }
+.mc-caps-block { display: flex; flex-direction: column; gap: 6px; }
+.mc-caps-flags { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 12px; }
+.mc-caps-flag { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.mc-caps-flag-toggle { gap: 6px; min-width: 0; }
+.mc-caps-flag-name { font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 采纳按钮复用 .pill（同屏只有一套胶囊控件体系），这里只压一档尺寸 */
+.mc-caps-adopt { font-size: 10px; padding: 2px 8px; }
 /* B10/C3/D2：原 scoped 的 .effort-opt/.field/.switch/.mc-check/.check-mark 与全局控件规范层重复，已删除改用全局类。
    全局 .switch 轨道为 color-mix(text 22%)，dark 下不再隐形（原 rgba(0,0,0,.18) 硬伤随之消失）；
    全局 .check-mark 边框跟主题（原 #888 死色删除）；.effort-opt 与全局 .pill 视觉完全一致，故本地定义全删。
@@ -298,5 +478,5 @@ function onOutputInput(e: Event) { props.card.output = (e.target as HTMLInputEle
 .field-sm { height: 26px; font-size: 12px; padding: 0 8px; border-radius: 8px; }
 .select-sm { min-width: 100px; height: 26px; font-size: 12px; border-radius: 8px; }
 @media (max-width: 900px) { .mc-quick { display: none; } }
-@media (max-width: 700px) { .mc-params { grid-template-columns: repeat(2, 1fr); } .mc-field.span-2 { grid-column: span 2; } }
+@media (max-width: 700px) { .mc-params { grid-template-columns: repeat(2, 1fr); } .mc-field.span-2 { grid-column: span 2; } .mc-caps-flags { grid-template-columns: 1fr; } }
 </style>

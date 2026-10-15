@@ -82,7 +82,34 @@ func ConvertOpencodeModel(mid string, modelCfg map[string]interface{}, kind stri
 			delete(out, "limit")
 		}
 	}
+	// 中立能力位（E1）：把 opencode 的真实键（modalities{input,output} / tool_call /
+	// temperature / attachment）归一到内部能力通道，卡片侧与三个 harness 的写入端都只读
+	// 中立层。只写真；modalities 原样保留在上面（读、写两侧都要能拿到 output）。
+	if caps := opencodeCapabilitiesFromModel(modelCfg); len(caps) > 0 {
+		out[apmCapabilitiesModelKey] = caps
+	}
 	return out
+}
+
+// opencodeCapabilityKeys 是 opencode 模型条目的布尔能力键 → 中立能力位的映射
+// （见 MODEL-MANAGEMENT-PLAN.md 10.2.3）。
+var opencodeCapabilityKeys = []apmCapabilityKeyMap{
+	{"tool_call", "tool_call"},
+	{"temperature", "temperature"},
+	{"attachment", "attachment"},
+}
+
+// opencodeCapabilitiesFromModel 从 opencode 模型条目反向读出中立能力位：
+// modalities{input,output}（经中立层规范词表过滤）、tool_call、temperature、attachment。
+// 只收录明确为 true 的布尔位与非空模态；未知/假一律省略。
+func opencodeCapabilitiesFromModel(modelCfg map[string]interface{}) map[string]interface{} {
+	modalities, _ := modelCfg["modalities"].(map[string]interface{})
+	flags := apmTrueCapabilityFlags(modelCfg, opencodeCapabilityKeys)
+	return apmCapabilitiesPayload(
+		NormalizeInputModalities(apmModalityWords(modalities["input"])),
+		NormalizeOutputModalities(apmModalityWords(modalities["output"])),
+		flags...,
+	)
 }
 
 func InferOpencodeKind(baseURL, npm string) string {
@@ -197,7 +224,58 @@ func OpenCodeModelFromCfg(modelID string, cfg map[string]interface{}) map[string
 			delete(out, "limit")
 		}
 	}
+	// 中立能力位 → opencode 的真实键（E1）：modalities{input,output} / tool_call /
+	// temperature / attachment。这两步都是**加法**：只写 true、只补缺失的键，已有的显式值
+	// （包括用户写的 false）与已列出的模态原样保留，绝不因为上游的推断值被覆盖或清空。
+	// `_apm_capabilities` 是 APM 内部键，opencode 的 model schema 不认它，必须删掉。
+	if caps := apmCapabilitiesChannel(out); len(caps) > 0 {
+		applyOpencodeCapabilities(out, caps)
+	}
+	delete(out, apmCapabilitiesModelKey)
 	return out
+}
+
+// applyOpencodeCapabilities 把中立能力位补进 opencode 模型条目：模态与既有取值取并集，
+// 布尔位只在键**缺失**时写 true（不覆盖已存在的显式值，也绝不写 false/null）。
+func applyOpencodeCapabilities(out, caps map[string]interface{}) {
+	inputs := NormalizeInputModalities(apmModalityWords(caps["input_modalities"]))
+	outputs := NormalizeOutputModalities(apmModalityWords(caps["output_modalities"]))
+	if len(inputs) > 0 || len(outputs) > 0 {
+		modalities, _ := out["modalities"].(map[string]interface{})
+		if modalities == nil {
+			modalities = map[string]interface{}{}
+		}
+		mergeOpencodeModalities(modalities, "input", inputs)
+		mergeOpencodeModalities(modalities, "output", outputs)
+		out["modalities"] = modalities
+	}
+	for _, item := range opencodeCapabilityKeys {
+		if !apmCapabilityTrue(caps, item.capability) {
+			continue
+		}
+		if _, exists := out[item.key]; !exists {
+			out[item.key] = true
+		}
+	}
+}
+
+// mergeOpencodeModalities 把规范词 words 并入 modalities[key]（保序去重）：
+// 既有的显式取值原样保留在前，不因为能力位的补全被丢弃。
+func mergeOpencodeModalities(modalities map[string]interface{}, key string, words []string) {
+	if len(words) == 0 {
+		return
+	}
+	merged := make([]interface{}, 0, len(words))
+	seen := map[string]bool{}
+	for _, word := range append(apmModalityWords(modalities[key]), words...) {
+		word = strings.ToLower(strings.TrimSpace(word))
+		if word == "" || seen[word] {
+			continue
+		}
+		seen[word] = true
+		merged = append(merged, word)
+	}
+	modalities[key] = merged
 }
 
 // OpenCodeProviderFromCfg converts an internal provider to native OpenCode.
@@ -365,6 +443,21 @@ func ImportOpencodeProviders(zcodeConfig, opencodeConfig map[string]interface{},
 		} else {
 			providers[id] = converted
 			imported = append(imported, id)
+		}
+	}
+	// 这条路径的产物会被 app 层直接写盘（App.ImportOpencode 用 core.WriteConfig，不经过任何
+	// backend 的 Store.Upsert），因此没有别的剥离出口：`ConvertOpencodeProvider` /
+	// `ConvertOpencodeModel` 为了保真未知字段会带上 `_` 前缀的内部键（模型级
+	// `_apm_capabilities`、`_opencode_raw`，provider 级 `_opencode_raw`），它们只在
+	// 「读配置 → 编辑器中间形态」的往返里有意义，落盘只会污染用户配置。与 legacy ZCode 的
+	// 处理保持同一口径：模型级走 stripAPMInternalModelKeys，provider 级按 `_` 前缀剥。
+	stripAPMInternalModelKeys(result)
+	for _, pv := range providers {
+		pcfg, _ := pv.(map[string]interface{})
+		for key := range pcfg {
+			if strings.HasPrefix(key, "_") {
+				delete(pcfg, key)
+			}
 		}
 	}
 	return result, imported, merged, nil

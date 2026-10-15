@@ -195,6 +195,10 @@ func deepSeekUpsertEntry(doc map[string]interface{}, providerID, newID string, p
 		for k, v := range providerCfg {
 			entry[k] = deepCopyValue(v)
 		}
+		// 旧式顶层布局是「原样并入 providerCfg」，没有 dshModelToRaw 这类编码出口，
+		// 必须在这里剥离 APM 内部模型键（_apm_capabilities / _dsh_raw / _off_alias 等），
+		// 否则它们会落到用户的 DSH 配置里。与 legacy ZCode 路径的处理保持一致。
+		stripAPMInternalModelKeys(entry)
 		providers[newID] = entry
 	}
 }

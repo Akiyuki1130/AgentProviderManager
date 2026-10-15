@@ -133,12 +133,16 @@ func (zcodeV2Store) Get(doc Doc, providerID string) (*ProviderEdit, error) {
 	}
 	// 必须是非 nil 空切片：零模型 provider 不进循环，nil 会被编码成 JSON null，
 	// 前端拿到 null 后在 cards.map 上抛错。
+	// 站点上下文取 api.baseUrl 与 api.type：v2 是唯一能直接读到 ZCode api.type 的格式，
+	// 站点级规则因此在这里可以完整参与（模型名 + baseUrl + apiType 三道门）。
+	baseURL := zcodeprovider.ProviderAPIBaseURL(providerCfg)
+	apiType := zcodeprovider.ProviderAPIType(providerCfg)
 	cards := make([]ModelCard, 0)
 	for _, mr := range cfg.ProviderModelRules() {
 		if zcodeprovider.ModelRuleProviderID(mr) != providerID {
 			continue
 		}
-		cards = append(cards, v2ModelCard(zcodeprovider.ModelRuleModelID(mr), mr))
+		cards = append(cards, v2ModelCard(zcodeprovider.ModelRuleModelID(mr), mr, baseURL, apiType))
 	}
 	sort.Slice(cards, func(i, j int) bool {
 		return strings.ToLower(cards[i].ModelID) < strings.ToLower(cards[j].ModelID)
@@ -155,7 +159,7 @@ func (zcodeV2Store) Get(doc Doc, providerID string) (*ProviderEdit, error) {
 		ID:             providerID,
 		Name:           name,
 		Kind:           uiKindForV2Provider(providerCfg),
-		BaseURL:        zcodeprovider.ProviderAPIBaseURL(providerCfg),
+		BaseURL:        baseURL,
 		APIKey:         apiKey,
 		APIKeyRequired: strings.TrimSpace(apiKey) != "",
 		OptionsJSON:    optionsJSON,
@@ -310,10 +314,19 @@ func v2ModelCount(cfg *zcodeprovider.Config, providerID string, providerCfg map[
 }
 
 // v2ModelCard 把 providerModelRule 还原成编辑器卡片。
-// 中间形态复用 legacy 的模型配置形状（limit / reasoning.variants / modalities.input），
-// 这样 CfgToCard 的既有语义（含 “off” 与 “disabled” 的对应关系）不需要重写。
-func v2ModelCard(modelID string, mr map[string]interface{}) ModelCard {
-	mcfg := zcodeprovider.ModelRuleConfig(mr)
+// 中间形态由 v2LegacyModelCfg 构造（复用 legacy 的模型配置形状：limit /
+// reasoning.variants / modalities.input），这样 CfgToCard 的既有语义（含 “off” 与
+// “disabled” 的对应关系）不需要重写。
+// baseURL / apiType 是该 provider 的 api.baseUrl 与 api.type，透传给能力表以启用
+// 离线目录与站点级规则两层推断。
+func v2ModelCard(modelID string, mr map[string]interface{}, baseURL, apiType string) ModelCard {
+	return CfgToCardForSite(modelID, v2LegacyModelCfg(zcodeprovider.ModelRuleConfig(mr)), baseURL, apiType)
+}
+
+// v2LegacyModelCfg 构造 v2 providerModelRule 对应的 legacy 中间形态。
+// 独立成函数是为了让「读回」的中间产物可被直接断言（不必经过卡片），
+// v2ModelCard 只是它加一层 CfgToCardForSite。
+func v2LegacyModelCfg(mcfg map[string]interface{}) map[string]interface{} {
 	legacy := map[string]interface{}{}
 	limit := map[string]interface{}{}
 	if n, ok := zcodeprovider.ModelContextWindow(mcfg); ok {
@@ -351,6 +364,8 @@ func v2ModelCard(modelID string, mr map[string]interface{}) ModelCard {
 		// 持久化。config.enabled 由 mergeV2ModelRuleConfig 原样保留，不在此处消费。
 		legacy["reasoning"] = reasoning
 	}
+	// 既有行为保持不动：modalities.input 仍只承载 image/video 两位（其余 3 位走
+	// `_apm_capabilities`，由下述 v2ApmCapabilities 带出，写入端取并集）。
 	if format := zcodeprovider.ModelInputFormat(mcfg); format != nil {
 		var inputs []interface{}
 		if b, _ := format["supportsImage"].(bool); b {
@@ -363,7 +378,158 @@ func v2ModelCard(modelID string, mr map[string]interface{}) ModelCard {
 			legacy["modalities"] = map[string]interface{}{"input": inputs}
 		}
 	}
-	return CfgToCard(modelID, legacy)
+	// 中立能力位：把 v2 认的全部能力键收进内部通道，供卡片的 Capabilities 与
+	// 三个 harness 的写入端共用（见 10.2.4②）。
+	if caps := v2ApmCapabilities(mcfg); len(caps) > 0 {
+		legacy[apmCapabilitiesModelKey] = caps
+	}
+	return legacy
+}
+
+// ---- 卡片 ↔ 写入端之间的能力通道（E1，冻结契约见 10.2.4②）----
+
+// apmCapabilitiesModelKey 是卡片与各 harness 写入端之间的内部能力通道键。
+// 带 `_` 前缀，属 APM 内部字段：写盘出口由 cards.go 的 stripAPMInternalModelKeys 统一剥离，
+// 各 harness 的写端（dshModelToRaw / OpenCodeModelFromCfg）也必须显式丢弃它。
+const apmCapabilitiesModelKey = "_apm_capabilities"
+
+// apmCapabilityKeyMap 是一条「harness 侧键名 → 中立能力位」的映射。
+type apmCapabilityKeyMap struct {
+	key        string
+	capability string
+}
+
+// apmCapabilitiesChannel 读取中间形态/配置节点里的内部能力通道。
+func apmCapabilitiesChannel(cfg map[string]interface{}) map[string]interface{} {
+	m, _ := cfg[apmCapabilitiesModelKey].(map[string]interface{})
+	return m
+}
+
+// apmCapabilityTrue 判断能力通道里的某位是否**明确为真**（只认 bool true）。
+// 缺失 / nil / false 一律为假：调用方据此省略键，绝不写 false/null。
+func apmCapabilityTrue(caps map[string]interface{}, key string) bool {
+	v, ok := caps[key].(bool)
+	return ok && v
+}
+
+// apmCapabilitiesPayload 组装能力通道的值：只收录**已知为真**的位。
+// 模态为空则省略该列（不让空切片序列化成 null/[]）；布尔位只在 trueFlags 里出现时写 true。
+// 没有任何已知位时返回 nil，调用方据此整个省略该键。
+func apmCapabilitiesPayload(inputModalities, outputModalities []string, trueFlags ...string) map[string]interface{} {
+	out := map[string]interface{}{}
+	if len(inputModalities) > 0 {
+		out["input_modalities"] = apmCapabilityStrings(inputModalities)
+	}
+	if len(outputModalities) > 0 {
+		out["output_modalities"] = apmCapabilityStrings(outputModalities)
+	}
+	for _, flag := range trueFlags {
+		if flag != "" {
+			out[flag] = true
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// apmCapabilityStrings 把规范词列表转成 []interface{}（元素为 string）。
+// 用 []interface{} 而不是 []string：中间形态要经过 JSON 往返（deepCopyMap），
+// 下游读端（cards.go 的 metaStringList、zcodeprovider 的 stringSlice）两种都认，
+// 而 []interface{} 正是 json.Unmarshal 之后的原生形状。
+func apmCapabilityStrings(words []string) []interface{} {
+	out := make([]interface{}, 0, len(words))
+	for _, word := range words {
+		out = append(out, word)
+	}
+	return out
+}
+
+// apmModalityWords 把配置里的模态值读成字符串列表，兼容 []string / []interface{} /
+// 单个字符串（其余形状读不出，返回 nil）。
+// 这里不做词表过滤：规范词表与规范序统一由 model_features.go 的
+// NormalizeInputModalities / NormalizeOutputModalities 负责（未列出的词 fail-closed 丢弃）。
+func apmModalityWords(value interface{}) []string {
+	switch v := value.(type) {
+	case string:
+		if strings.TrimSpace(v) == "" {
+			return nil
+		}
+		return []string{v}
+	case []string:
+		out := make([]string, len(v))
+		copy(out, v)
+		return out
+	case []interface{}:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+	return nil
+}
+
+// apmTrueCapabilityFlags 从 vals 里挑出「明确为真」的能力位：键存在且值为 bool true 才收录。
+// mapping 是 harness 侧键名 → 中立能力位的映射（顺序即返回顺序）。
+func apmTrueCapabilityFlags(vals map[string]interface{}, mapping []apmCapabilityKeyMap) []string {
+	var flags []string
+	for _, item := range mapping {
+		if v, ok := vals[item.key].(bool); ok && v {
+			flags = append(flags, item.capability)
+		}
+	}
+	return flags
+}
+
+// v2InputFormatModalities 是 v2 `inputFormat.supports*` 键到中立输入模态词的映射，
+// 顺序即 ZCode 的 canonical 键序（order.go 的 inputFormatOrder）。
+var v2InputFormatModalities = []struct {
+	key  string
+	word string
+}{
+	{"supportsText", "text"},
+	{"supportsImage", "image"},
+	{"supportsVideo", "video"},
+	{"supportsAudio", "audio"},
+	{"supportsPdf", "pdf"},
+}
+
+// v2CapabilityPropertyKeys 是 v2 `properties` 布尔键到中立能力位的映射
+// （与 10.2.3 的写盘口径一致）。
+var v2CapabilityPropertyKeys = []apmCapabilityKeyMap{
+	{"supportsToolCall", "tool_call"},
+	{"supportsJsonSchemaOutput", "structured_output"},
+	{"supportsNativeWebSearch", "native_web_search"},
+	{"supportsMidConversationSystem", "mid_conv_system"},
+}
+
+// v2ApmCapabilities 把 v2 modelConfig 里 ZCode 认的能力键收进内部能力通道。
+//
+// 只收「明确为真」的位：v2 的 overlay 语义里省略键 = 不覆盖，false 是显式关闭，
+// null 是显式清空，因此未知一律省略，一个 false/null 都不写。
+// requiresMfjsToolSchema 与 optionSpecs.*.map 本轮不做，因此这里也不读它们。
+func v2ApmCapabilities(mcfg map[string]interface{}) map[string]interface{} {
+	props := zcodeprovider.ModelProperties(mcfg)
+	if len(props) == 0 {
+		return nil
+	}
+	var inputs []string
+	format := zcodeprovider.ModelInputFormat(mcfg)
+	for _, item := range v2InputFormatModalities {
+		if b, _ := format[item.key].(bool); b {
+			inputs = append(inputs, item.word)
+		}
+	}
+	var outputs []string
+	// v2 的 outputFormat 只有 supportsText 一个键，明确为真时等价于 output_modalities=["text"]。
+	if b, _ := zcodeprovider.ModelOutputFormat(mcfg)["supportsText"].(bool); b {
+		outputs = append(outputs, "text")
+	}
+	return apmCapabilitiesPayload(inputs, outputs, apmTrueCapabilityFlags(props, v2CapabilityPropertyKeys)...)
 }
 
 // mergeV2ProviderRule 把 incoming（FromLegacy 产出的 canonical 规则）合并进已有规则。

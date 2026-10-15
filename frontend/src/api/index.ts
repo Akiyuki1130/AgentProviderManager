@@ -159,6 +159,36 @@ export async function BuildSingleCard(modelId: string): Promise<Record<string, u
 export async function ApplyModelPresets(cards: unknown): Promise<Record<string, unknown>> {
   return call('ApplyModelPresets', cards)
 }
+// 站点级「自动匹配」：除预设表外，后端还会用离线目录与站点级能力规则取值，因此要带上
+// 当前表单的 Base URL 与协议类型。
+//
+// apiType 归一：后端站点规则里的 apiTypeMatch 用的是 ZCode 的 api.type
+// （anthropic-messages / openai-chat-completions / openai-responses），而表单里给的是
+// UI kind（anthropic / responses / openai-compatible），在这里做最小映射；
+// 已经是 api.type 的值原样透传。空 kind 按 openai-chat-completions 处理（与
+// internal/zcodeprovider/convert.go 的 apiTypeFromLegacyKind 一致）；无法识别的**非空**
+// kind 在后端会直接报错，这里静默按 chat-completions 处理，但两个调用页面的 kind 下拉
+// 只有上面这几个值，该分支在实际 UI 路径上不可达。
+function normalizeApiType(value: string): string {
+  switch ((value || '').trim().toLowerCase()) {
+    case 'anthropic':
+      return 'anthropic-messages'
+    case 'responses':
+    case 'openai':
+      return 'openai-responses'
+    case 'openai-compatible':
+      return 'openai-chat-completions'
+    case 'anthropic-messages':
+    case 'openai-chat-completions':
+    case 'openai-responses':
+      return (value || '').trim().toLowerCase()
+    default:
+      return 'openai-chat-completions'
+  }
+}
+export async function ApplyModelPresetsForSite(cards: unknown, baseUrl: string, apiType: string): Promise<Record<string, unknown>> {
+  return call('ApplyModelPresetsForSite', cards, baseUrl || '', normalizeApiType(apiType))
+}
 export async function ImportProvider(payload: unknown): Promise<Record<string, unknown>> {
   return call('ImportProvider', payload)
 }

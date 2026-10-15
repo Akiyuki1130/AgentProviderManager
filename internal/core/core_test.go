@@ -374,6 +374,22 @@ func TestOpencodePreviewAndMerge(t *testing.T) {
 	if _, ok := result["provider"].(map[string]interface{})["my-provider"]; !ok {
 		t.Error("provider not imported")
 	}
+	// 导入产物会被直接写盘，APM 内部键（模型级 `_apm_capabilities` / `_opencode_raw`、
+	// provider 级 `_opencode_raw`）必须已被剥离，否则会污染用户配置。
+	importedProvider := result["provider"].(map[string]interface{})["my-provider"].(map[string]interface{})
+	for key := range importedProvider {
+		if strings.HasPrefix(key, "_") {
+			t.Errorf("provider 级内部键 %q 未剥离", key)
+		}
+	}
+	for mid, mv := range importedProvider["models"].(map[string]interface{}) {
+		model, _ := mv.(map[string]interface{})
+		for key := range model {
+			if strings.HasPrefix(key, "_") {
+				t.Errorf("模型 %s 的内部键 %q 未剥离", mid, key)
+			}
+		}
+	}
 }
 
 func TestNativeProviderFormats(t *testing.T) {

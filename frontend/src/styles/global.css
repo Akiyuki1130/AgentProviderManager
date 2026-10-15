@@ -186,6 +186,10 @@ input, textarea, [contenteditable='true'] { user-select: text; -webkit-user-sele
    仍可点开（toggleVariant 不变），用户手动覆盖后照常显示 .checked。全部用现有 token，无写死色。 */
 .pill.unsupported { border-style: dashed; color: var(--fluent-text-soft); opacity: 0.7; }
 .pill.unsupported:hover { opacity: 1; border-color: var(--fluent-text-soft); }
+/* E3 能力区：能力表/provider 推断为支持、但用户尚未确认的空位——弱化虚线 + 推断色描边。
+   与 .checked（用户已确认）和 .unsupported（内建表不支持）明确区分：点击该胶囊即采纳推断。 */
+.pill.inferred { border-style: dashed; border-color: color-mix(in srgb, var(--accent, #0078d4) 55%, transparent); color: var(--accent-text-strong, var(--accent)); opacity: 0.75; }
+.pill.inferred:hover { opacity: 1; border-color: var(--accent, #0078d4); }
 /* 搜索命中高亮（配合 useHighlight 分段渲染，禁 v-html） */
 mark { background: color-mix(in srgb, var(--warn) 32%, transparent); color: inherit; border-radius: 2px; padding: 0 1px; }
 /* 厂商分组视图（阶段 D）：管理页与导入页共用同一套标记与外观，逻辑见 composables/useVendorGroup.ts。

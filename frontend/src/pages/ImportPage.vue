@@ -139,6 +139,25 @@
           <n-button size="small" type="primary" ghost :loading="autoMatchLoading" :disabled="filteredCards.length === 0" @click="onAutoMatchLimits">{{ t('import.autoMatch', lang) }}</n-button>
           <span class="batch-hint">{{ t('import.autoMatchHint', lang) }}</span>
         </div>
+        <!-- 阶段 E3：能力行——多选只列当前可见模型里「可补全」的能力位（带计数），
+             按钮按能力表补全空缺位（已有值一律不覆盖）。结果只落在卡片上，随导入载荷提交。 -->
+        <div class="batch-row batch-row--wrap">
+          <span class="batch-group-label">{{ t('cap.batchLabel', lang) }}</span>
+          <n-select
+            v-model:value="capBits"
+            :options="capBitOptions"
+            :placeholder="t('cap.batchBitsPlaceholder', lang)"
+            :aria-label="t('cap.batchLabel', lang)"
+            multiple
+            clearable
+            :max-tag-count="1"
+            style="width: 200px"
+            size="small"
+          />
+          <n-button size="small" type="primary" ghost :disabled="filteredCards.length === 0" @click="onFillCapabilities"><template #icon><n-icon :component="SparklesOutline" /></template>{{ t('cap.batchFill', lang) }}</n-button>
+          <span class="batch-hint">{{ t('cap.batchHint', lang) }}</span>
+          <span class="batch-hint">{{ t('cap.batchArrayNote', lang) }}</span>
+        </div>
       </div>
       <div class="list-scroll">
         <!-- D10：重新获取期间给旧列表加半透明遮罩 + spinner（pointer-events:none，不毁布局、不挡交互） -->
@@ -199,6 +218,7 @@ import { NButton, NInput, NSelect, NCheckbox, NModal, NIcon, NSpin } from 'naive
 import {
   DocumentTextOutline, KeyOutline, SyncOutline, FlashOutline, CloudDownloadOutline,
   AddOutline, TrashOutline, CheckmarkCircleOutline, CloseCircleOutline, AlertCircleOutline,
+  SparklesOutline,
 } from '@vicons/ionicons5'
 import { uiPrompt, uiConfirm } from '../stores/uiDialog'
 import { useSettingStore } from '../stores/setting'
@@ -208,6 +228,7 @@ import KeychainPicker from '../components/KeychainPicker.vue'
 import PageHeader from '../components/ui/PageHeader.vue'
 import { staggerMs } from '../composables/useStagger'
 import { useVendorGroup, fetchVendorMeta } from '../composables/useVendorGroup'
+import { useCapabilityFill } from '../composables/useCapabilityFill'
 import type { ModelCard as Card, KeychainEntry, ProbeResult } from '../types'
 import { REASONING_VARIANTS, REASONING_VARIANTS_BASIC, pickDefaultVariant } from '../constants/variants'
 import { t } from '../i18n'
@@ -455,6 +476,12 @@ async function batchSetDefault(v: string) {
 }
 function applyBatchLimit(field: 'context' | 'output') { const val = field === 'context' ? batchContext.value : batchOutput.value; for (const c of filteredCards.value) (c as Record<string, unknown>)[field] = val }
 
+// ---- 阶段 E3：能力批量行 ----
+// 选项生成 / 计数 / 只补空缺 / 失效选择收敛 / 汇报都在 useCapabilityFill（两页同一实现）；
+// 作用域与其它批量行一致：当前筛选出的可见模型。结果只落在卡片的 capabilities 上，
+// 由两页既有的卡片载荷（保存 / 导入）提交，不新增接口、不直接写盘。
+const { picked: capBits, options: capBitOptions, fill: onFillCapabilities } = useCapabilityFill(() => filteredCards.value, lang)
+
 async function onAutoMatchLimits() {
   const list = filteredCards.value
   if (list.length === 0) return
@@ -464,7 +491,7 @@ async function onAutoMatchLimits() {
   }
   autoMatchLoading.value = true
   try {
-    const res = await api.ApplyModelPresets(list)
+    const res = await api.ApplyModelPresetsForSite(list, baseUrl.value, kind.value)
     if (!res['success']) { toast('error', t('import.autoMatchFailed', lang.value), (res['error'] as string) || ''); return }
     const updated = (res['cards'] as Card[]) || []
     const byId = new Map(updated.map((c) => [c.model_id, c]))

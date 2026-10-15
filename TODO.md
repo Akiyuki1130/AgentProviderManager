@@ -75,18 +75,45 @@
   - **已提交**：阶段 A + B + C + D 全部改动已于 2026-10-14 随功能提交入库（`3006728` 功能批次、`d04ab90` 文档批次），导入页厂商分组为 `af68a1e`。
   - **需求符合性结论**：#1（自动配置补全）地基已落地（ZCode 正则 + APM 覆盖层；`deepseek-v4.1-flash` 可补全）；#2 已完成（阶段 A 修缺陷 + 阶段 C 自适应档位与高级自填开关）；#3 已完成（阶段 D 厂商分组视图）。**三项原始需求全部落地。**
 
-- [ ] **18. 补齐模型匹配规则**（用户 2026-10-14 明确指出「差一点规则」，留待后续对话实施）
-  阶段 B 的内建能力表目前只覆盖 ZCode `modelRules` 的 84 条家族规则，覆盖不到的部分模型仍拿不到正确的 context/output/档位。需要补齐两处：
-  1. **ZCode 侧**：把 `zcode-builtin.json` 里**未纳入**的两张表按需并入或另建规则——`providerSiteRules`（54 条，每条绑定 `baseUrlMatch` 网关，需带网关上下文才成立）与 `modelApiRules`（72 条，只有 `reasoningLevel.map` 没有 `values`，需结合 `apiTypeMatch`）。当前只在 `model_catalog_gen.go` 里抽了 `modelRules`。
-  2. **APM 自维护覆盖层**：在 `internal/core/model_overrides.go` 里补脚本抽不到的家族/新模型（该表是手写、可随时追加；前缀键要足够长避免误伤兄弟模型，见文件头注释）。
-  3. **可选（原路线二，本轮未做）**：DSH 内嵌 pi-ai 模型目录（`C:\AppData\DSH Desktop\resources\app.asar` 的 `dsh/node_modules/@earendil-works/pi-ai/dist/providers/data/*.json`，含 `contextWindow`/`maxTokens`/`reasoning`/`thinkingLevelMap`，43 个 provider），只覆盖精确 id，作为精确命中的补充；抽取需按 asar 格式解包。
-  影响面：只影响「自动补全命中率」，不影响既有正确性；改完重跑 `node scripts/sync-model-catalog.mjs`（内建表）或直接编辑覆盖层，并补 `capability_test.go` 回归用例。
+- [~] **18. 补齐模型匹配规则**（2026-10-15 主体完成，剩 a–e 五条尾巴）
+  阶段 B 只抽了 ZCode `modelRules` 84 条，覆盖不到的部分模型拿不到正确的 context/output/档位。本轮补齐如下（细节见 `MODEL-MANAGEMENT-PLAN.md` 与 `CHANGELOG.md`）：
+  1. **新增两层离线信源**：`scripts/sync-ability-catalog.mjs` → `internal/core/capability_catalog_gen.go`（**2303 条精确 id**：pi-ai 994 + models.dev 1309；pi-ai 侧逐文件 SHA-256 校验 `.manifest.json`；`--check` **完全离线且跨天幂等**，`--update-snapshot` 才联网刷新 `internal/core/data/models-dev-snapshot.json`；`--verify` 与 OpenRouter `/api/v1/models` 交叉校验、只报告不并入）。
+  2. **站点层**：`scripts/sync-model-catalog.mjs` 追加产出 `model_site_rules_gen.go`（ZCode `providerSiteRules` 54 条，含 `baseUrlMatch`/`apiTypeMatch`）。匹配语义用 asar 内代码实测确认：**模型名全串锚定 + 大小写不敏感；baseUrl/apiType 全串锚定 + 大小写敏感**；baseUrl 先归一化（摘 search/hash、去尾部 `/`）。有意偏离一处：apiType 传空串视作「未知」而跳过，ZCode 只在 `null` 时跳过（受影响的 6 条 `.*` 规则都不给能力字段）。
+  3. **求值链改为五层**（逐字段覆盖）：**provider 自报 > override > ZCode `modelRules` > site（需 baseUrl 命中）> presets（手维护旧表）> catalog（社区目录兜底）**。`presets` 排在 `catalog` 之前是刻意的：社区库不得静默改写 APM 既有值（实测若反向排序会改写 270 个字段，如 `gpt-4` 128000→8192、`gemini-2.5-flash-tts` 1048576→8192）。新增入口：`LookupModelCapabilityForSite` / `BuildModelCardsForSite` / `CfgToCardForSite` / `ApplyModelPresetsForSite`（旧函数保留并转调，行为不变）。
+  4. **拉取模型时读 provider 元数据**（此前只读 5+5 个 token 键，档位全丢）：新增 `metaLevels`（`thinking_level`/`thinkingLevel`/`reasoning_effort(s)`/`supported_efforts`/`reasoning_options[type=effort].values`/`supported_parameters`）与 `metaReasoning`；**provider 给的档位优先于能力表**（`_supported_levels`）；ctx 键补 `max_input_tokens`/`context_size`，out 键补 `output_token_limit`/`max_new_tokens`。
+  5. **实测效果**（CMD GOAT 猫猫 / 秋雪，同一网关 `api.commandcode.ai`，90 个模型）：档位 **43/90 → 79/90**；ctx/out **51/90 → 90/90**。中转 `/v1/models` 只自报 `context_length`，既无输出上限也无档位字段，因此这两个 provider 的收益全部来自静态表与覆盖层。
+  6. **覆盖层**：`model_overrides.go` 新增 7 条（`meituan/LongCat-2.0`、`nvidia/nemotron-3-ultra-550b-a55b`、`poolside/laguna-s-2.1-free`、`qwen/qwen3.6-max-preview`、`stealth/glyph-cluster:free`、`stepfun/step-3.5-flash`、`tencent/hy3-paid`），每个字段标「同族直取 / 上游自报」；上游自报的读数逐条写在条目注释里，网关自报的脱敏快照（只含 id 与 contextLength）**只作开发者本地存档、不入库**（见 `.gitignore`），本地存在时由 `model_overrides_test.go` 断言一致，不存在时该断言跳过。
+  - **剩余（本项未完成部分）**：
+    a. **11 个 id 仍无档位枚举**（各源只给「支持思考」布尔，没有档位列表）：`claude-haiku-4-5-20251001`、`inclusionai/ling-3.0-flash-sante:free`、`meituan/LongCat-2.0`、`MiniMaxAI/MiniMax-M2.5`、`MiniMaxAI/MiniMax-M2.7`、`MiniMaxAI/MiniMax-M3`、`Qwen/Qwen3.6-Max-Preview`、`stealth/glyph-cluster:free`、`xiaomi/mimo-v2.6-flash`、`xiaomi/mimo-v2.6-pro`、`xiaomi/mimo-v2.6-pro-ultraspeed`。下一步：查各家官方文档或 ZCode 升级后的 `modelRules`，有实证再写覆盖层，**不编数**。
+    b. **`--verify` 报出 96 处与 OpenRouter 不一致**（例：`thinkingmachines/inkling` 表内 1048576/32768 vs OR 524288/471859；`z-ai/glm-5.3-flash` 表内 1048576/131072 vs OR 943718）。需按官方文档逐条裁定后写覆盖层；在裁定前保持「ZCode 内建优先」以免引入回归。
+    c. **覆盖层前缀语义**：`Match` 是前缀匹配，`nvidia/nemotron-3-ultra-550b-a55b` 会外溢到 `:free` 兄弟（档位取值刻意取成与之一致，只有 ctx 被一并改写）；此外既有条目 `deepseek-v4.1-flash` 不带命名空间，命中不了网关原拼写 `deepseek/deepseek-v4.1-flash`（数值恰好相同，无实害）。若要把覆盖层写成「精确 id 优先 + 去命名空间容错」，需改 `matchOverride`。
+    d. **阶段 4（运行时手动更新能力表）未做**：需要固定白名单域名 + 既有 URL/SSRF 复检，默认关闭，单独评审后再实施。
+    e. **覆盖层「上游自报」条目的证据登记是手工的**：新增这类条目若忘了登记来源表与 `model_overrides_test.go` 的断言，测试抓不到（只有注释里的文字要求）。彻底修法是把「来源类别 + 证据 id」提升为 `modelOverride` 的结构字段，由测试断言「所有上游自报型条目都必须有证据」。
+  - 影响面：只影响「自动补全命中率」，不改写既有值（新顺序按构造成立，并由回归测试锁定）；不触碰任何写入路径。
 
 - [x] **19. 「自动匹配」与拉取模型时的自动补全口径不一致**（2026-10-14 实现导入页厂商分组时发现，同日修复）
   症状：导入页/管理页的「自动匹配」按钮（`ApplyModelPresets`）只查手维护的 `modelPresets` 前缀表，**不走**阶段 B 的能力表；而拉取模型时的自动补全（`BuildModelCards` → `LookupModelCapability`）两层都走。同一个模型，两条路径给出的上限不一样。
   可复现：`deepseek-v4.1-flash` 不在 `modelPresets` 里（内建规则 `.*deepseek-v4[.-]1-flash` 与覆盖层都有值，只是 presets 的前缀匹配在 `.1` 处断裂）——自动补全能填 ctx 1000000 / out 384000，点「自动匹配」却一格不填。
   修法：`internal/core/presets.go` 的 `ApplyModelPresets` 改用 `LookupModelCapability` 取值，`filled` 仍只统计 context/output；`LookupModelLimits` 保持"只查预设表"不动（它是能力表的兜底层，改会递归）。
   完成：已切换口径；`TestApplyModelPresets` 期望值按源表重推（`grok-4.6` 的 output 128000 来自内建规则，不再是「未公开故为 0」），新增 `TestApplyModelPresetsUsesCapabilityTable` 锁定口径（含"该 ID 不在 presets 表内"的前置断言）。`go test ./... -count=1` 与 `go vet ./...` 全绿。
+
+- [x] **20. 补全模型能力维度（阶段 E，2026-10-15 完成）**
+  触发：模型参数里除上下文/输出/档位外，还有一整类能力可记录（是否支持图片/视频/音频/PDF、结构化输出、工具调用…），用户要求「能自动填的全填」，且**不局限于 ZCode v2**——DSH 与后续 harness 都要从同一层取值。方案与实测证据见 `MODEL-MANAGEMENT-PLAN.md` 第 10 节（含冻结契约 10.2.4 与实施记录 10.8）。
+  1. **中立层**：新增 `internal/core/model_features.go`（`ModelFeatures`：输入模态 5 位、输出模态、工具调用、结构化输出、原生联网搜索、中段 system、附件、温度；**全部三态，`nil` = 未知而非「不支持」**）与并列生成表 `internal/core/capability_features_gen.go`（**2320 条精确 id**，编码 `<输入模态>|<输出模态>|<flags>`，flags 固定序 `tjwmaT`，fail-closed 解析；既有 `ctx|out|levels` 三段表与它的解析器一字未动）。
+  2. **求值链**：override / ZCode 正则 / 站点规则 / presets / 离线目录各层与新增能力位走**同一套逐字段合并**（层间填空缺、层内后命中覆盖），`.*` 兜底规则照旧整条跳过（否则内建兜底的 `supportsToolCall:true` 会占满所有模型）。测试锁定「旧层已给出的位不得被新层改写或清空」（含三态交锋：已知为假不被后层真值覆盖）。
+  3. **三 harness 映射（只写真）**：ZCode v2 → `inputFormat.supports*` / `outputFormat.supportsText` / `supportsToolCall` / `supportsJsonSchemaOutput` / `supportsNativeWebSearch` / `supportsMidConversationSystem`；DSH → `input`（收敛 `{text,image}`，交集空则整键省略）+ `compat.supportsStrictMode` / `compat.supportsTemperature`；opencode → `modalities{input,output}` / `attachment` / `tool_call` / `temperature`。绝不写 `null` / `false` / `enabled` / `requiresMfjsToolSchema` / `optionSpecs.*.map`。
+  4. **顺带修的两个真缺陷**：① `dshModelToRaw` 原样把 `modalities.input` 搬进 DSH `input`，含 video/pdf/audio 会被 DSH schema 拒收（现按交集收敛）；② DSH 两处写出口（旧式顶层 `provider` 布局、`deepSeekBuildEntry` 的合并路径）会把内部键 `_apm_capabilities` / `_dsh_raw` 落盘（现已统一剥离）。
+  5. **数据源加宽**：`sync-model-catalog.mjs` 抽出能力位列（`modelRules` 47/84、`providerSiteRules` 44/54 条带位）；`sync-ability-catalog.mjs` 新增 pi-ai `input[]`+compat 白名单与 models.dev 五个字段，快照重裁 367KB→803KB（155 provider / 3799 条目），同一 id 多来源**取并集**（pi-ai 词表只有 text/image，给不出 pdf 不等于否定）。
+  6. **UI**：模型卡展开区「能力」区（两组胶囊多选 + 六个开关 + 「未勾选 = 未知」说明 + 逐位「采纳推断」）+ 两页批量栏一行「能力」（多选 + 「按能力表补全」，只补空缺），共享 `composables/useCapabilityFill.ts`。
+  - **本轮不做的**：价格 / 知识截止 / 发布日期 / 开源权重（无 harness 落点，快照也不加这几列）；`requiresMfjsToolSchema`、`optionSpecs.*.map`、`config.enabled`；运行时可更新能力表（仍是第 18 项 d 的阶段 4，单独评审）。
+  - **已知残留（非缺陷）**：① 原生联网搜索在两张离线表里恒无数据，只有 ZCode 的 6 条站点规则带该位，因此仅靠精确 id 命中的模型拿不到它（**数据源缺口**，等上游补齐或手工写覆盖层）；② DSH 配置层表达不了工具调用 / 联网搜索 / 中段 system，这三位仍进中立层供展示与其它 harness 使用；③ 前端「取消勾选」只删键（= 未知），清不掉配置里已存在的 `true`——这是「只写真、从不写 false」策略的必然结果；④ 重裁快照带来 `capability_catalog_gen.go` 的 6 行上游漂移（4 行表头 + 2 行改值 + 2 行新增），已在提交说明里注明来源。
+
+
+- [ ] **21. `app.go` 两条通用兜底写入会落盘 APM 内部键**（阶段 E 复核时发现，当前不可达，存量隐患）
+  `App.SaveProvider` 与 `App.ImportProvider` 在「目标 Agent 没有注册 backend」时的兜底分支会把 `CardsToCfgMap` 的产物经 `MergeProviderIntoConfig` + `core.WriteConfig` 直接写盘，**不剥离**内部键（`_raw_cfg` / `_off_alias` / `_vendor` / `_supported_levels` / `_apm_capabilities` 都会落进去）。
+  最省事的修法：在这两条兜底分支写盘前调一次 `core.stripAPMInternalModelKeys`；更彻底的是让它们也走 `targetStore.Upsert`（会改语义，需单独评审）。
+  为什么现在留着：两个可选 Agent（zcode / deepseek）的 `GetBackend` 恒有解，分支当前不可达；它是「将来往 `AllAgents()` 加新 Agent 却忘了注册 backend」时的隐患，与阶段 E 无关（E 只是多了一个会被泄漏的键）。
+  （阶段 E 顺手修掉的两处 DSH 出口与 opencode 导入出口已修，见 `MODEL-MANAGEMENT-PLAN.md` 10.8 第 6/10 条。）
 
 - [ ] **6. 还原点页筛选与分组**
   按 Agent/操作类型/日期过滤；加「清理孤立条目」按钮（顺带解决 1 的存量污染）；回滚前给差异预览（改了哪个文件、几个提供商）。

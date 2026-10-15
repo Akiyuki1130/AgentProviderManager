@@ -372,7 +372,77 @@ func ConvertDeepSeekModel(mid string, modelCfg map[string]interface{}, kind stri
 			}
 		}
 	}
+	// 中立能力位（E1）：DSH 模型级能力面只有 input（text/image）与 compat 里可配置的
+	// supportsStrictMode / supportsTemperature，把它们反向读进内部能力通道（只写真），
+	// 卡片侧的 Capabilities 因此能读回，写入端（dshModelToRaw）也就有了唯一数据源。
+	if caps := dshCapabilitiesFromModel(modelCfg); len(caps) > 0 {
+		out[apmCapabilitiesModelKey] = caps
+	}
 	return out
+}
+
+// dshModalityOrder 是 DSH 模型级 input 的合法取值范围与规范序
+// （见 MODEL-MANAGEMENT-PLAN.md 10.1.3：MODALITIES = {text, image}）。
+var dshModalityOrder = []string{"text", "image"}
+
+// dshCapabilityModalities 取输入模态与 DSH 合法词表 {text,image} 的交集，按规范序去重。
+// 交集为空时返回 nil：调用方据此整键省略——DSH 的 schema 既拒收空数组，也拒收
+// text/image 之外的词（video/pdf/audio）。
+func dshCapabilityModalities(words []string) []string {
+	known := map[string]bool{}
+	for _, word := range NormalizeInputModalities(words) {
+		known[word] = true
+	}
+	out := make([]string, 0, len(dshModalityOrder))
+	for _, word := range dshModalityOrder {
+		if known[word] {
+			out = append(out, word)
+		}
+	}
+	return out
+}
+
+// dshInputModalities 读卡片已知的输入模态候选，优先级：
+//   - 卡片的中立能力位（三个 harness 写入端的唯一数据源）；
+//   - 中间形态的真实键 `modalities.input`（opencode kind 与导入数据）；
+//   - DSH 原生的 `input` 字段——它本身就是输入模态，回落它才能让没有能力位的往返不丢数据。
+func dshInputModalities(card ModelCard) []string {
+	if card.Capabilities != nil && len(card.Capabilities.InputModalities) > 0 {
+		return card.Capabilities.InputModalities
+	}
+	if modalities, ok := card.RawCfg["modalities"].(map[string]interface{}); ok {
+		if words := apmModalityWords(modalities["input"]); len(words) > 0 {
+			return words
+		}
+	}
+	return apmModalityWords(card.RawCfg["input"])
+}
+
+// dshCompatCapabilityKeys 是 DSH compat 里**配置侧允许**、且与能力位对应的键。
+// 其余 catalog-only 的 compat 键（supportsToolSearch / supportsMidConvoSystemMessages /
+// supportsOpenAIGrammarTools / supportsAdditionalTools 等）会被 DSH 的
+// assertOfferedCompatFields 拒绝，一个都不能写；工具调用 / 原生联网搜索 / 对话中途 system
+// 在 DSH 的配置层无法表达，因此也不落键（见 10.1.3）。
+var dshCompatCapabilityKeys = []apmCapabilityKeyMap{
+	{"supportsStrictMode", "structured_output"},
+	{"supportsTemperature", "temperature"},
+}
+
+// dshCapabilitiesFromModel 从 DSH 模型节点反向读出已知为真的能力位：
+//   - input（DSH 只接受 text/image）→ input_modalities；
+//   - compat.supportsStrictMode → structured_output；
+//   - compat.supportsTemperature → temperature。
+//
+// 只读真值：false / null / 读不出的形状一律不写（false 会被当成「显式不支持」，
+// 而 APM 的中立层只有「已知为真」与「未知」两态）。
+func dshCapabilitiesFromModel(modelCfg map[string]interface{}) map[string]interface{} {
+	compat, _ := modelCfg["compat"].(map[string]interface{})
+	flags := apmTrueCapabilityFlags(compat, dshCompatCapabilityKeys)
+	return apmCapabilitiesPayload(
+		dshCapabilityModalities(apmModalityWords(modelCfg["input"])),
+		nil,
+		flags...,
+	)
 }
 
 func ConvertDeepSeekProvider(providerID string, raw map[string]interface{}, kind *string) (string, map[string]interface{}, error) {
@@ -507,7 +577,10 @@ func DeepSeekProviderToEdit(providerID string, raw map[string]interface{}) (*Pro
 	models, _ := normalized["models"].(map[string]interface{})
 	for mid, value := range models {
 		mm, _ := value.(map[string]interface{})
-		card := CfgToCard(mid, mm)
+		// 站点上下文只带 baseURL：DSH 侧只有 UI kind（openai-compatible / anthropic /
+		// responses），没有 ZCode 的 api.type，拿不到就传空串——限定 apiType 的站点规则
+		// 会被跳过（fail-closed），不会误命中。
+		card := CfgToCardForSite(mid, mm, baseURL, "")
 		if card.Context == "" {
 			card.Context = mm["contextWindow"]
 		}
@@ -623,15 +696,49 @@ func dshModelToRaw(card ModelCard, _ string) map[string]interface{} {
 	}
 	delete(m, "_dsh_raw")
 	delete(m, "_opencode_raw")
+	// `_apm_capabilities` 是 APM 的内部能力通道（带 `_` 前缀）：下面的 input / compat
+	// 映射已经把它的内容消费成 DSH 的键，它自己绝不能写进 DSH 配置——DSH 的 modelFields
+	// 是固定集合，多一个键就会被拒。
+	delete(m, apmCapabilitiesModelKey)
 	delete(m, "reasoning")
 	delete(m, "limit")
 	delete(m, "modalities")
 	delete(m, "zcode")
 	delete(m, "source")
 	delete(m, "kind")
-	if rawModalities, ok := card.RawCfg["modalities"].(map[string]interface{}); ok {
-		if input, ok := rawModalities["input"].([]interface{}); ok && len(input) > 0 {
-			m["input"] = input
+	// DSH 的模型级 input 只接受 text/image（MODALITIES = {text, image}，见 10.1.3）。
+	// 这里把卡片已知的输入模态收敛到两者的交集：早先的实现把 `modalities.input`
+	// 原样不过滤地搬进 `input`，一旦含 video/pdf/audio 就会被 DSH 的 schema 拒收，
+	// 连整份配置都会失效。
+	// 交集为空则**整键省略**（既不写空数组，也不写 false/null）——不能给 DSH 塞一个
+	// 它无法表达的输入模态集合。
+	if inputs := dshCapabilityModalities(dshInputModalities(card)); len(inputs) > 0 {
+		m["input"] = apmCapabilityStrings(inputs)
+	} else {
+		delete(m, "input")
+	}
+	// compat：只补两个 DSH 配置侧允许的能力键，并与既有 compat **合并**（不整块替换，
+	// 其它键——包括 headers/timeoutMs 之类无关项——原样保留）。
+	// 只写真：未知与假一律不写键，catalog-only 的 compat 键一个都不写（见 10.1.3）。
+	// 工具调用 / 原生联网搜索 / 对话中途 system 在 DSH 配置层无法表达，只留在中立层。
+	if caps := card.Capabilities; caps != nil {
+		addCompat := map[string]interface{}{}
+		if caps.StructuredOutput != nil && *caps.StructuredOutput {
+			addCompat["supportsStrictMode"] = true
+		}
+		if caps.Temperature != nil && *caps.Temperature {
+			addCompat["supportsTemperature"] = true
+		}
+		if len(addCompat) > 0 {
+			// m 是 card.RawCfg 的深拷贝（deepCopyMap 走 JSON 往返），就地改写不会影响卡片。
+			compat, _ := m["compat"].(map[string]interface{})
+			if compat == nil {
+				compat = map[string]interface{}{}
+			}
+			for k, v := range addCompat {
+				compat[k] = v
+			}
+			m["compat"] = compat
 		}
 	}
 	delete(m, "id")

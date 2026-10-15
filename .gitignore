@@ -9,3 +9,5 @@ build/bin
 .mimosa/
 .zcode/
 reference/
+# 网关自报的脱敏证据快照（只含模型 id 与 contextLength）：开发者本地存档，不入库。
+internal/core/data/commandcode-self-report.json

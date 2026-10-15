@@ -262,7 +262,7 @@ type ModelCapability struct {
     Output          int      // 0 = 未知
     ReasoningLevels []string // 规范化后的 off 档 + 强度档；nil = 未知（不推断）
     Vendor          string   // 家族归属，未命中 "unknown"
-    Source          string   // "override" | "zcode" | "preset"（用于测试与调试，不进 DTO）
+    Source          string   // "provider" | "override" | "zcode" | "site" | "catalog" | "preset"；仅供测试与调试，本身不进 DTO
 }
 func LookupModelCapability(modelID string) (ModelCapability, bool)
 ```
@@ -466,6 +466,311 @@ git diff --check
 来自 `UI-GUIDELINES.md`：零 emoji（图标走 `@vicons/ionicons5`）；禁用原生 `prompt/confirm/alert`（用 `uiConfirm`/`uiPrompt`）；不新增 UI 库、不推翻既有骨架；颜色/圆角/时长/动效一律走 `styles/global.css` + `styles/theme.ts` 的 token；**错峰入场（`useStagger`）的序号不能空档**——分组与条件渲染会移动序号；复用既有 composable 与 `.pill`/`.badge` 等规范控件并补齐 a11y；同屏不得并存两套控件体系；「失败不得伪装成功、失败态不等于空态、异步要有占位」；i18n 三语齐全。
 
 来自 `AGENTS.md`：只用相对导入（`@/*` 别名零使用）；跨组件共享用模块级 `ref`，不用 `provide`/`inject`；Wails 绑定不返回 `error`，一律 `{success, error, error_code}`，前端把 reject 与 `success:false` 都归一为 rejection；DTO 集中在 `models.go`、内部 meta 用 `_` 前缀、空切片不序列化为 `null`；依赖方向单向（`core` 不得引入 Wails、`internal/update` 不得依赖 Wails）；`init()` 阶段不得读真实用户文件、格式探测函数必须无副作用（B 的新生成文件必须遵守）；改动 `frontend/src/**` 前先读 `UI-GUIDELINES.md`。
+
+## 10. 阶段 E — 模型能力维度补齐（harness 中立层）
+
+> **状态：已实施（2026-10-15）**。E1（中立能力层 + 三 harness 映射）、E2（数据源加宽）、E3（前端能力区）
+> 全部落地，E4 的集中验证与收尾在进行中；实施中的裁决与偏差逐条记录在 10.8。
+> 触发问题：模型参数里除了上下文 / 输出 / 思考档位，
+> 还能记录「是否支持图片 / 视频 / 音频 / PDF / 结构化输出 / 工具调用」等能力，用户要求「能自动填的全填」，
+> 且**不局限于 ZCode v2**——DSH 与后续 harness 都要从同一层取值。
+>
+> 与此前各阶段的关系：阶段 B 建的是 **ctx / out / 档位** 三维的能力表（对应 `TODO.md` 第 18 项，已实现未提交）；
+> 本节是把同一套分层机制**扩成超集能力维度**，并要求中立层不再泄漏 harness 专有键名。
+
+### 10.0 已确认的决定（用户 2026-10-15 拍板）
+
+1. **范围**：输入模态 5 位（文 / 图 / 视 / 音 / PDF）+ 输出模态 + 工具调用 + 结构化输出 + 原生联网搜索 + 对话中途 system。
+2. **落盘策略**：**只写推断为真的位，从不写 `false`，从不写 `null`**。留空 = 让目标 harness 自己的默认值生效。
+3. **数据源**：加宽 models.dev 快照。
+4. **UI**：`ModelCard` 展开区加「能力」区 + 两页批量栏各加一行。
+5. **架构**：能力数据是 **harness 中立**的一层，ZCode v2 / DSH / opencode 与后续 harness 都从同一层取值、各自映射。
+
+### 10.1 事实基线（本轮已查实，带证据）
+
+#### 10.1.1 ZCode 的合并语义（asar `/out/host/index.js` 实证）
+
+- 内建 `modelRules` 在前、个人 `providerModelRules` 在后，`composeEffective` 拼接后**逐字段 overlay**。
+- `overlayValue(t, n) = n === undefined ? t : n` ⇒ **省略键 = 不覆盖**；而 `overlayConfig` 里 **`null` = 显式清空**。
+- 个人配置里的表名是 `providerModelRules` / `manualProviderModelRules`（**不是** `modelRules`），且 `.strict()`。
+- 内建 `modelRules[0]` 是 `modelMatch: ".*"` 兜底规则，已填满 `properties` 全部 8 键 + `optionSpecs` 两键
+  （ctx 200000 / out 32000 / `supportsText:true` / `supportsToolCall:true` / `supportsJsonSchemaOutput:false` …）。
+- ⇒ **「只写真、留空即安全」成立**：省略键回落到内建 `.*` 的默认值，`validateComplete` 不报 issue，模型保持可选。
+- ⇒ 反例风险只有三条：① 写 `null`（会被当清空）；② 写进 `manualProviderModelRules`
+  （命中时会先 `clearManualModelConfig` 清空再覆盖，且该表 schema 是必填子集，写不全让整份个人配置解析失败）；
+  ③ 写 `enabled`（会把模型从列表里关掉，现有 `convert.go:227-230` 已明确不写）。
+- 既有实现已经刻意偏离内建兜底：`internal/core/capability.go:263-275` 的 `mergeCatalog` **跳过 `Pattern == ".*"`**，
+  以免未知模型被填成猜测值（否则用户自命名的本地模型会被写进 200000/32000）。
+  **新增能力位必须沿用同一跳过**，否则 `.*` 的 `supportsToolCall:true` 会占满所有模型、后面几层永远轮不到。
+
+#### 10.1.2 ZCode v2 能力键全集（`internal/zcodeprovider/schema.go:176-212`、`order.go:56-75`）
+
+| 维度 | 键 |
+|---|---|
+| 输入模态 5 位 | `properties.inputFormat.supports{Text,Image,Video,Audio,Pdf}` |
+| 输出模态 | `properties.outputFormat.supportsText` |
+| 工具调用 | `properties.supportsToolCall` |
+| 结构化输出 | `properties.supportsJsonSchemaOutput` |
+| 原生联网搜索 | `properties.supportsNativeWebSearch` |
+| 对话中途 system | `properties.supportsMidConversationSystem` |
+| mfjs 工具 schema | `properties.requiresMfjsToolSchema`（本轮不做） |
+| 注入表达式 | `optionSpecs.reasoningLevel.map` / `maxOutputTokens.map`（本轮不做） |
+| 模型启用位 | `config.enabled`（本轮不做） |
+
+现状：`internal/zcodeprovider/convert.go:285-302` 的 `legacyInputFormat` **只**把 `modalities.input` 里的
+image/video 映射成 `supportsImage`/`supportsVideo`，注释明写「不推断 text/audio/pdf，避免编造用户数据」。
+
+#### 10.1.3 DSH 能力面（asar `dsh/node_modules/@deepseek-ai/dsh-llm-pi-ai/lib/index.js` 实证）
+
+- 模型级 `modelFields`（`:1003-1010`）= `{name, contextWindow, maxTokens, input, reasoningEfforts, compat}`。
+- **`MODALITIES = {text, image}`（`:279-282`），模型 `input` 只接受这两种**（`:1007`）；路由级另有
+  `defaultInput`（`:1027`，默认 `["text"]`）。
+- `compat` 配置侧只允许 27 键白名单（`:963-990`）。与能力相关者：`supportsStrictMode`（结构化输出，消费于
+  `constrained-sampling.js:163-167`）、`supportsTemperature`（`anthropic-messages.js:143`）、`supportsStrictTools`。
+- `assertOfferedCompatFields` / `COMPAT_GATES`（`:514-533, 609-711`）会**拒绝**配置里出现 catalog-only 的
+  compat 键：`supportsToolSearch` / `supportsMidConvoSystemMessages` / `supportsOpenAIGrammarTools` /
+  `supportsAdditionalTools` 等——它们只能来自内嵌 catalog。
+- ⇒ DSH 可写入的能力仅：`input`（收敛到 text/image）、`compat.supportsStrictMode`、`compat.supportsTemperature`。
+  工具调用 / 联网搜索 / 中段 system **在 DSH 配置层无法表达**（仍进中立层供展示与给别的 harness 用）。
+- **现存缺陷（本轮顺带修）**：`internal/core/deepseek.go:635-639` 把 `card.RawCfg["modalities"]["input"]`
+  **原样不过滤**搬进 DSH `input`；一旦含 video/pdf/audio 会被 DSH 的 schema 拒绝。必须收敛。
+
+#### 10.1.4 opencode 能力面（`opencode_schema.json`）
+
+模型条目 `modalities{input,output}` 的 enum 就是 `text|audio|image|video|pdf`（`:484-539`）；
+`attachment`（`:363`）、`temperature`（`:369`）、`tool_call`（`:372`）为 boolean；`cost` 为 object。
+APM 已透传 `modalities`/`attachment`（`cards.go:417-422, 471-486`），但**没有 UI、也没有从能力表填充**，
+且 Go 侧不做取值域校验。
+
+#### 10.1.5 中立层现状
+
+- `internal/core/capability.go:26-41` 的 `ModelCapability` 只有 `Context/Output/ReasoningLevels/Vendor/Source` 五列，
+  **无任何模态 / 工具位**。
+- `internal/core/models.go:4-32` 的 `ModelCard.Modalities` 是**无类型 map**；`Attachment` 是 opencode 专用 bool。
+- 离线目录编码 `capability_catalog.go:87-110` 为 `ctx|out|levels` 三段，解析要求**恰好三段**（fail-closed）。
+- 生成脚本 `scripts/sync-model-catalog.mjs:10-11` 明确声明不抽 capabilities；
+  `scripts/sync-ability-catalog.mjs` 只抽 `contextWindow/maxTokens/thinkingLevelMap` 与 models.dev 的 4 键，
+  **主动丢弃** modalities / tool_call / structured_output / attachment / temperature。
+- 仓库快照 `internal/core/data/models-dev-snapshot.json`（367KB）每个模型**只有 4 键**：
+  `context / output / reasoning / levels`。
+
+### 10.2 阶段 E1 — 中立能力层 + 三 harness 映射
+
+#### 10.2.1 新增 `internal/core/model_features.go`
+
+```go
+// 全部三态：nil = 未知（不写盘）。modalities 存「已知支持」的正向集合。
+type ModelFeatures struct {
+    InputModalities  []string // 规范序：text, image, video, audio, pdf
+    OutputModalities []string // 规范序：text, audio, image, video, pdf
+    ToolCall         *bool
+    StructuredOutput *bool // ZCode supportsJsonSchemaOutput / DSH compat.supportsStrictMode
+    NativeWebSearch  *bool
+    MidConvSystem    *bool
+    Attachment       *bool
+    Temperature      *bool // 能力档，非数值温度
+}
+```
+
+- `NormalizeModalities(list)`：只留已知词表内取值、按固定规范序排序去重，空结果返回 nil。
+- `mergeFeatures(dst, src)`：逐字段，`dst` 已有值则不改（与 ctx/out 的「前层胜出」同构）。
+- `HasAny()`：供 UI / 日志判断。
+
+配套：`ModelCapability` 增加 `Features ModelFeatures`；`modelOverride` / `catalogRule` / `siteRule` 各加 features 列；
+`lookupCapabilityForSite` 在六个层里按同一顺序合并 features（`.*` 跳过语义不变）。
+
+#### 10.2.2 卡片成为中立能力的载体
+
+`ModelCard` 增加强类型字段（前端可直接编辑）：
+
+```go
+Capabilities *ModelCapabilities `json:"capabilities,omitempty"`
+// input_modalities / output_modalities / tool_call / structured_output /
+// native_web_search / mid_conv_system / attachment / temperature
+```
+
+- `BuildModelCardsForSite` / `CfgToCardForSite` 从 `LookupModelCapabilityForSite` 结果与 provider 自报字段
+  共同填 `Capabilities`（**provider 自报优先**，沿用既有优先级）。
+- **归并 opencode 形状**：读入时把既有 `attachment` / `modalities` 映射进 `Capabilities`；写出时 opencode 分支
+  从 `Capabilities` 反向映射回 `modalities{input,output}` / `attachment`。**现有 opencode 往返测试必须原样通过**。
+- 三个 writer 一律**读卡片的 `Capabilities`**，不各自猜键名。
+
+#### 10.2.3 写盘约束（不变量）
+
+| harness | 映射（只写真；键不存在则省略） | 明确不写 |
+|---|---|---|
+| ZCode v2 | `inputFormat.supports{Text,Image,Video,Audio,Pdf}`、`outputFormat.supportsText`、`supportsToolCall`、`supportsJsonSchemaOutput`、`supportsNativeWebSearch`、`supportsMidConversationSystem` | `null`、`false`、`enabled`、`requiresMfjsToolSchema`、`optionSpecs.*.map` |
+| DSH | `input` ← `InputModalities ∩ {text,image}`（**空则整键省略**，不留空数组）；`compat.supportsStrictMode` ← StructuredOutput；`compat.supportsTemperature` ← Temperature | catalog-only compat 键；工具调用 / 联网搜索 / 中段 system（DSH 配置层无法表达） |
+| opencode | `modalities{input,output}`（全词表）、`attachment`、`tool_call`、`temperature` | — |
+
+落点文件：ZCode v2 在 `internal/zcodeprovider/convert.go`（`modelRuleFromLegacy`）与 `internal/core/backend_zcode_v2.go`；
+DSH 在 `internal/core/deepseek.go` 的 `dshModelToRaw`；opencode 在 `internal/core/opencode.go` 与
+`internal/core/cards.go` 的 `isOpenCode` 分支。
+
+#### 10.2.4 冻结契约（实施前由主会话确认，实施中不得单方面改变）
+
+**① 中立类型与 DTO（已落地，主会话所有）**
+
+- `internal/core/model_features.go`：`ModelFeatures`（8 个能力列 + `Source`）、
+  `NormalizeInputModalities` / `NormalizeOutputModalities` / `hasModality` / `IsEmpty` / `HasAny` /
+  `featureBool` / `mergeFeatures`（前层胜出、后层填空缺）；`type ModelCapabilities = ModelFeatures`
+  是同一结构的展示名，**不允许再定义第二份**。
+- `internal/core/models.go`：`ModelCard.Capabilities *ModelCapabilities`（用户可编辑、写入端唯一数据源）
+  与 `ModelCard.CapabilitiesInferred *ModelCapabilities`（`_` 前缀，仅供展示与「按能力表补全」，绝不写盘）。
+- `internal/core/capability.go`：`ModelCapability.Features ModelFeatures`（求值链路填充）。
+- `internal/core/capability_features.go`：生成表解析器，格式 `<input>|<output>|<flags>`，
+  flags 固定序 `tjwmaT`（toolCall / jsonSchema / webSearch / midConv / attachment / temperature），
+  每字符 `1`（已知为真）或 `-`；段数/长度不符即 fail-closed 返回零值。**与
+  `ctx|out|levels` 那张表完全独立**（互不解析对方）。
+
+**② 卡片 ↔ 写入端之间的内部通道 `_apm_capabilities`（冻结）**
+
+`CardToCfg` 在**所有 kind** 下都往 legacy 中间形态写入（`stripInternalModelKeysInModels`
+按 `_` 前缀统一剥离，因此它永远不会落盘）：
+
+```json
+"_apm_capabilities": {
+  "input_modalities": ["text", "image"],   // 仅已知支持项，按规范序
+  "output_modalities": ["text"],
+  "tool_call": true,                        // 只写 true；未知/假一律省略该键
+  "structured_output": true,
+  "native_web_search": true,
+  "mid_conv_system": true,
+  "attachment": true,
+  "temperature": true
+}
+```
+
+- **读端**：`internal/zcodeprovider/convert.go`（v2 适配）读它映射到 `properties.*`；
+  `opencode.go` / `deepseek.go` 拿到的是 `ModelCard`，直接读 `card.Capabilities`。
+- **opencode kind 额外**写真实键（`modalities{input,output}` / `attachment` / `tool_call` / `temperature`），
+  由既有 `isOpenCode` 分支负责；非 opencode kind 不写 `modalities`（保持既有行为，
+  避免给 ZCode 3.14 legacy 文档塞它不认的键）。
+- 只有「已知为真」的布尔位才出现；未知一律省略键，**绝不写 `false` / `null`**。
+
+**③ 各 harness 的键映射（写端唯一口径）**
+
+见 10.2.3 的表，补充两条实现细节：
+
+- ZCode v2 的 `outputFormat.supportsText` 由 `output_modalities` 含 `text` 推出；
+  `inputFormat.supports{Text,Image,Video,Audio,Pdf}` 由 `input_modalities` 逐项推出。
+  同时把既有 `legacyInputFormat`（原只映射 image/video）扩到全部 5 词——
+  它读的是**数据**而非推断，所以扩全不是编造。
+- DSH 的 `compat` 必须与既有 compat **合并**（不整块替换）；`input` 收敛到
+  `{text,image}` 的交集，交集为空则**整键省略**（不留空数组）。
+
+**④ 生成物边界**
+
+- 新增 `internal/core/capability_features_gen.go`（`map[string]string`，只收录有能力的 id），
+  由 `scripts/sync-ability-catalog.mjs` 生成；`capability_catalog_gen.go` /
+  `model_catalog_gen.go` / `model_site_rules_gen.go` 的既有编码**不得改变**。
+- `model_catalog_gen.go` / `model_site_rules_gen.go` 的 `catalogRule` / `siteRule` 结构体可新增
+  features 列（由主会话在求值链路侧定义），但**必须保持既有字段名与顺序**，
+  生成脚本按新增列追加即可；旧解析契约（恰好三段）不动。
+
+### 10.3 阶段 E2 — 数据源加宽
+
+**`scripts/sync-model-catalog.mjs`**：`modelRules` 与 `providerSiteRules` 抽取新增能力位（inputFormat 5、outputFormat、
+toolCall、jsonSchemaOutput、nativeWebSearch、midConversationSystem）；仍**不抽** `requiresMfjsToolSchema` /
+`optionSpecs.*.map` / `config.enabled`。
+
+**`scripts/sync-ability-catalog.mjs`**：
+
+- pi-ai：读 `input[]`（text/image）与 `compat` 子集（脚本内维护**显式白名单映射表**，如
+  `supportsStrictMode` → 结构化输出、`supportsTemperature`、`supportsMidConvoSystemMessages`）。
+- models.dev：`buildSnapshot` 加宽为 `modalities{input,output}`、`tool_call`、`structured_output`、`attachment`、
+  `temperature`。需在开发者机跑**一次** `--update-snapshot`（联网）重裁快照；此后 `--check` 仍完全离线幂等。
+- **编码决策**：新增**并列产物** `internal/core/capability_features_gen.go`（`map[string]string`，值形如
+  `text,image|text|1-0--1`，flags 固定顺序 `t(oolCall) j(sonSchema) w(ebSearch) m(idConv) a(ttachment) T(emperature)`，
+  每字符 `1`/`0`/`-`），**不动**现有 2303 行 `ctx|out|levels` 与它「恰好三段、fail-closed」的解析器及测试。
+  理由：零风险、`--check` diff 最小、旧解析契约不破。只收录「有能力的 id」。
+
+**`internal/core/model_overrides.go`**：条目可选带 features 列，供手工纠偏。
+
+### 10.4 阶段 E3 — 前端
+
+- `frontend/src/types/index.ts`：加 `capabilities` 类型（与后端 DTO 对齐）。
+- `frontend/src/components/ModelCard.vue` 展开区新增「能力」区：
+  - 输入模态 5 个 `.pill` 多选（复用档位胶囊写法）；输出模态按 opencode 词表多选。
+  - 6 个布尔位（工具调用 / 结构化输出 / 原生联网搜索 / 中段 system / 附件 / 支持温度）：`.check`。
+  - 推断来源弱化提示（仿既有 `_supported_levels` 的 note 写法），推断值可被用户覆盖。
+- 批量栏：`frontend/src/pages/ManagePage.vue` 与 `ImportPage.vue` 各加一行「能力」——按当前模型集动态生成
+  （带计数）的多选 `n-select` + 「按推断填充」按钮，走能力表。选型逻辑仿 `composables/useVendorGroup.ts`。
+- `frontend/src/i18n/index.ts`：新增键，**zh/en/ja 三语齐全、零 emoji、不硬编码中文**。
+- 复用既有层（`.pill` / `.check` / `.field` / `.batch-pill` / `PageHeader` / `StickySaveBar`），不新增 UI 库。
+
+### 10.5 阶段 E4 — 测试与验证
+
+- **中立层**：逐字段覆盖、`.*` 跳过、只写真、never-null。
+- **ZCode v2**：部分 `inputFormat` 对象被接受、读回往返；断言输出里**永不出现** `null` / `enabled` /
+  `requiresMfjsToolSchema` / `*.map`。
+- **DSH**：`input` 收敛到 `{text,image}`、空则省略；`compat` 只用 27 键白名单。**新增反例测试**：喂含 video/pdf 的
+  modalities，断言被收敛且不产生非法值。
+- **opencode**：modalities / attachment / tool_call / temperature 往返。
+- **零回归**：把现有 2376-id 契约（`internal/core/capability_regression_test.go`）扩到 features——旧层已给的 features
+  不得被新层改写，并保留反空断言。
+- **生成物**：两个 `--check` 离线幂等；快照重裁后在无网环境可复现。
+- **端到端**：`go build ./...`、`go vet ./...`、`go test ./... -count=1`、`go mod verify`、`cd frontend && npm run build`、
+  `wails build`、`git diff --check`；对 CMD GOAT 猫猫 / 秋雪（90 模型）复测能力覆盖率。
+- **人工**：浅色与深色两套主题目测。
+
+### 10.6 不做 / 不变量
+
+- 不写 `null`（ZCode overlay 会当清空）、不写 `false`、不写 `enabled`、不写 `requiresMfjsToolSchema`、
+  不写 `optionSpecs.*.map`。
+- 不改任何写入路径（`PrepareChange` / `WriteConfigBytes` / `guardZCodeV2Doc`）；不新增运行时网络
+  （快照重裁只在开发者机手动触发）。
+- **价格 / 知识截止 / 发布日期 / 开源权重**本轮不做（无 harness 落点）；models.dev 快照也不加这几列，
+  后续要加是独立小改动。
+- 不触碰真实用户配置与凭据；测试一律占位值 + `t.TempDir()` / `t.Setenv` 沙箱。
+
+### 10.7 涉及文件清单
+
+- **新增**：`internal/core/model_features.go`、`internal/core/model_features_test.go`、
+  `internal/core/capability_features_gen.go`（生成物）。
+- **修改**：`internal/core/capability*.go`、`cards.go`、`models.go`、`model_overrides.go`、`backend_zcode_v2.go`、
+  `internal/zcodeprovider/convert.go`、`internal/core/deepseek.go`、`internal/core/opencode.go`、
+  `internal/core/data/models-dev-snapshot.json`（重裁）、`scripts/sync-ability-catalog.mjs`、
+  `scripts/sync-model-catalog.mjs`、`frontend/src/types/index.ts`、`frontend/src/components/ModelCard.vue`、
+  `frontend/src/pages/ManagePage.vue`、`frontend/src/pages/ImportPage.vue`、`frontend/src/i18n/index.ts`、
+  `CHANGELOG.md`、`TODO.md`、本文件。
+
+### 10.8 实施记录与偏差（2026-10-15）
+
+1. **契约层先由主会话写死**（`model_features.go`、`capability_features.go`、`models.go` 的 DTO 字段、
+   `ModelCapability.Features`），再按**文件归属互不重叠**并行五路实施（求值链路 / 卡片层 /
+   harness 适配 / 数据脚本 / 前端），主会话集中编译、跑测、复核。这样每路都能独立编译，
+   不需要跨文件协商键名。
+2. **模态的合并语义分两层**：**跨层**仍是「前层胜出、后层填空缺」（`mergeFeatures`）；
+   但**同一张生成表内部**，pi-ai 与 models.dev 对同一 id 的模态取**并集**、布尔位取「或」——
+   pi-ai 的 `MODALITIES` 词表只有 `text,image`，它给不出 pdf/video/audio 并不等于否定它们。
+3. **卡片层「只记真」**：provider 明确说 `false` 时**丢弃**（不记成 `false`）。理由：中立层的写盘策略
+   是「只写真、留空让目标 harness 的默认值生效」，记下 `false` 既没有落点，又容易被展示误读成
+   「已确认不支持」。三态里「已知为假」只可能来自用户手改。
+4. **`_capabilities_inferred` 加 `HasAny()` 守卫**：推断不出任何已知位时不填该字段，
+   避免每张未知模型卡片都带一个空对象。
+5. **「自动匹配」顺带补能力位**（`ApplyModelPresetsForSite`），语义为**只补空缺**：ctx/out 是估算值
+   可以覆盖，能力位可能已被用户逐位确认过，覆盖等于抹掉用户选择。`filled` 仍只统计 ctx/out。
+6. **修掉 DSH 两处内部键落盘泄漏**（实施中发现，均属既有同类问题）：旧式顶层 `provider` 布局
+   `deepSeekUpsertEntry` 原样并入编辑载荷的 `models`；`deepSeekBuildEntry` 在合并语义下经
+   `overlayModelNode` 保留旧节点里未被覆盖的键。现在前者走 `stripAPMInternalModelKeys`，
+   后者在写出口对每个模型节点统一剥下划线前缀键（`_apm_capabilities` 与既有的 `_dsh_raw` 一并覆盖）。
+7. **快照重裁的连带漂移**：`models.dev` 快照加宽（367KB → 803KB）会让
+   `capability_catalog_gen.go` 出现 6 行上游漂移（4 行表头计数 + 2 行改值 + 2 行新增，
+   例 `agnes-3.0-flash` context 524288→512000、`qwen3.6` 档位由 5 档变空）。这些是**上游数据本身的变化**，
+   不是编码改动；不接受漂移就只能放弃快照加宽（能力位表会少一半来源），故保留并在此记录。
+8. **站点层不跳过 `.*`**：只有 `catalogRule.Pattern == ".*"` 那条内建兜底要跳（跳过它是 APM 的既有契约），
+   站点规则里的 `.*` 模型名是 ZCode 自己写死的站点级规则，照常参与。
+9. **测试前提改为注入合成表**：凡是「某层给不出东西」才能成立的用例，一律注入合成表/合成 id，
+   而不是断言真实生成表里没有某个 id——生成物会随快照重裁变化，这样重裁时不会出现假失败。
+10. **内部键落盘的第三个出口也补上了**：`ImportOpencodeProviders` 的产物由 `App.ImportOpencode`
+    经 `core.WriteConfig` 直写（不过任何 backend 的 `Store.Upsert`），E1 在中间形态里新增的
+    `_apm_capabilities` 会顺着它落盘（既有的模型级/提供商级 `_opencode_raw` 早就如此）。
+    该入口在 UI 上已隐藏、当前不可达，但 Wails 绑定仍在，故照样修：出口处按同一口径剥 `_` 前缀键。
+11. **已知但未修的潜在出口（记录在 `TODO.md` 第 21 项）**：`app.go` 的 `SaveProvider` /
+    `ImportProvider` 在「没有注册 backend」时的兜底分支会直写 `CardsToCfgMap` 的产物且不剥离内部键。
+    该分支当前不可达（两个可选 Agent 的 `GetBackend` 恒有解），且会连带泄漏 `_raw_cfg` /
+    `_off_alias` 等**既有**内部键，属存量隐患，不在本轮改动面内。
 
 ## 附录 A：证据与未能独立验证的事项
 

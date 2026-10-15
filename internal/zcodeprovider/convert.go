@@ -44,6 +44,17 @@ var legacyModelKnownKeys = map[string]bool{
 	"contextWindow":   true,
 	"maxOutputTokens": true,
 	"deleted":         true, // deleted 模型会被跳过（与 ZCode 的迁移一致）
+	// 以下键都是 APM 自己写进中间形态的（cards.go 的 CardToCfg）：
+	//   - `_apm_capabilities` 是卡片 ↔ 写端之间的内部能力通道（带 `_` 前缀，写盘出口
+	//     会被 stripAPMInternalModelKeys 剥离）；
+	//   - tool_call / attachment / temperature 是 opencode kind 额外写出的**真实**能力键。
+	// 它们都会被 modelRuleFromLegacy 消费（见下方的 legacyInputFormat /
+	// legacyOutputFormat / legacyCapabilityPropertyKeys），因此列入已知键，
+	// 否则自己写出去的东西会被误报成 DroppedFields。
+	"_apm_capabilities": true,
+	"tool_call":         true,
+	"attachment":        true,
+	"temperature":       true,
 }
 
 var legacyLimitKnownKeys = map[string]bool{
@@ -60,6 +71,9 @@ var legacyReasoningKnownKeys = map[string]bool{
 
 var legacyModalitiesKnownKeys = map[string]bool{
 	"input": true,
+	// output 是 opencode kind 写出的真实键（`_apm_capabilities.output_modalities` 也覆盖它）：
+	// legacyOutputFormat 会用它推 outputFormat.supportsText，因此同样算已知键。
+	"output": true,
 }
 
 // FromLegacy 把旧版 ZCode config.json 的 provider 映射转换为 v2 个人配置。
@@ -217,6 +231,18 @@ func modelRuleFromLegacy(pid, mid string, mraw map[string]interface{}) map[strin
 	if format := legacyInputFormat(mraw); len(format) > 0 {
 		properties["inputFormat"] = format
 	}
+	if format := legacyOutputFormat(mraw); len(format) > 0 {
+		properties["outputFormat"] = format
+	}
+	// 布尔能力位只来自卡片侧的内部通道，且只在**明确为真**时写：未知/假一律省略键。
+	// 绝不写 requiresMfjsToolSchema（本轮不做）与 optionSpecs.*.map（那是注入表达式，
+	// 由 ZCode 内建数据提供，APM 无从推断）。
+	caps := apmCapabilities(mraw)
+	for _, item := range legacyCapabilityPropertyKeys {
+		if apmCapabilityTrue(caps, item.capability) {
+			properties[item.property] = true
+		}
+	}
 
 	if len(properties) > 0 {
 		mcfg["properties"] = properties
@@ -282,23 +308,99 @@ func legacyReasoningVariants(mraw map[string]interface{}) []string {
 	return out
 }
 
-// legacyInputFormat 只映射映射表明确给出的 image / video，
-// 不推断 text/audio/pdf，避免编造用户数据。
-func legacyInputFormat(mraw map[string]interface{}) map[string]interface{} {
+// legacyInputFormatKeys 是中立输入模态词到 v2 `inputFormat.supports*` 键的映射，
+// 顺序与 ZCode 的 canonical 键序（order.go 的 inputFormatOrder）一致。
+var legacyInputFormatKeys = []struct {
+	word string
+	key  string
+}{
+	{"text", "supportsText"},
+	{"image", "supportsImage"},
+	{"video", "supportsVideo"},
+	{"audio", "supportsAudio"},
+	{"pdf", "supportsPdf"},
+}
+
+// legacyCapabilityPropertyKeys 是中立布尔能力位到 v2 `properties` 键的映射（写端唯一口径，
+// 见 MODEL-MANAGEMENT-PLAN.md 10.2.3）。顺序即 propertiesOrder 里这几个键的顺序。
+var legacyCapabilityPropertyKeys = []struct {
+	capability string
+	property   string
+}{
+	{"tool_call", "supportsToolCall"},
+	{"structured_output", "supportsJsonSchemaOutput"},
+	{"native_web_search", "supportsNativeWebSearch"},
+	{"mid_conv_system", "supportsMidConversationSystem"},
+}
+
+// apmCapabilities 读取卡片 ↔ 写端之间的内部能力通道 `_apm_capabilities`。
+//
+// 该键由 cards.go 的 CardToCfg 写入（数据源是 card.Capabilities），带 `_` 前缀，写盘出口
+// 由 stripAPMInternalModelKeys 统一剥离，因此它永远不会落到用户配置里。形状见
+// MODEL-MANAGEMENT-PLAN.md 10.2.4②。
+func apmCapabilities(mraw map[string]interface{}) map[string]interface{} {
+	m, _ := mraw["_apm_capabilities"].(map[string]interface{})
+	return m
+}
+
+// apmCapabilityTrue 判断某个能力位是否**明确为真**。只认 bool true：键缺失、nil、false 或
+// 别的类型一律为假。写入端据此省略键——v2 的 overlay 语义里省略 = 不覆盖，而 null 是显式
+// 清空、false 是显式关闭，两者都绝不能写。
+func apmCapabilityTrue(caps map[string]interface{}, key string) bool {
+	v, ok := caps[key].(bool)
+	return ok && v
+}
+
+// legacyModalitiesInput 读中间形态里真实键 `modalities.input` 的原始词表。
+// 这里不做词表过滤：规范词表由 legacyInputFormatKeys 负责（未列出的词自然取不到键）。
+func legacyModalitiesInput(mraw map[string]interface{}) []string {
 	modalities, _ := mraw["modalities"].(map[string]interface{})
-	if modalities == nil {
-		return nil
+	return stringSlice(modalities["input"])
+}
+
+// legacyInputFormat 把中间形态里**明确列出**的输入模态映射为 v2 的
+// `inputFormat.supports{Text,Image,Video,Audio,Pdf}`（5 个词全部映射）。
+//
+// 早先这里只映射 image/video，注释理由是「不推断 text/audio/pdf，避免编造用户数据」。
+// 扩到全部 5 词并不是放宽这条纪律：本函数读的是**数据本身**——用户配置或导入数据里明确
+// 列出的模态（真实键 `modalities.input` 与内部通道 `_apm_capabilities.input_modalities`），
+// 如实转写而已。「不推断」依然成立：没有列出的模态一律不写键，绝不因为缺失就补上支持。
+//
+// 两个来源取并集（同一位不重复）：`modalities.input` 是 opencode kind 与导入数据里的真实键，
+// `_apm_capabilities` 是卡片侧的能力声明。
+func legacyInputFormat(mraw map[string]interface{}) map[string]interface{} {
+	words := map[string]bool{}
+	for _, modality := range legacyModalitiesInput(mraw) {
+		words[strings.ToLower(strings.TrimSpace(modality))] = true
+	}
+	for _, modality := range stringSlice(apmCapabilities(mraw)["input_modalities"]) {
+		words[strings.ToLower(strings.TrimSpace(modality))] = true
 	}
 	format := map[string]interface{}{}
-	for _, modality := range stringSlice(modalities["input"]) {
-		switch strings.ToLower(strings.TrimSpace(modality)) {
-		case "image":
-			format["supportsImage"] = true
-		case "video":
-			format["supportsVideo"] = true
+	for _, item := range legacyInputFormatKeys {
+		if words[item.word] {
+			format[item.key] = true
 		}
 	}
 	return format
+}
+
+// legacyOutputFormat 由输出模态推 v2 的 `outputFormat`：v2 目前只有 supportsText 一个键，
+// 且只在**明确含 text** 时写真。来源同样是真实键 `modalities.output` 与内部通道
+// `_apm_capabilities.output_modalities` 的并集。读不出 text 时返回 nil，调用方据此省略整键。
+func legacyOutputFormat(mraw map[string]interface{}) map[string]interface{} {
+	modalities, _ := mraw["modalities"].(map[string]interface{})
+	for _, list := range [][]string{
+		stringSlice(modalities["output"]),
+		stringSlice(apmCapabilities(mraw)["output_modalities"]),
+	} {
+		for _, modality := range list {
+			if strings.EqualFold(strings.TrimSpace(modality), "text") {
+				return map[string]interface{}{"supportsText": true}
+			}
+		}
+	}
+	return nil
 }
 
 // ToLegacy 把 v2 个人配置转换为旧版 config.json 文档形状 {"provider": {...}}。

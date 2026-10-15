@@ -186,7 +186,10 @@ func ProviderToEdit(config map[string]interface{}, providerID string) (*Provider
 	cards := make([]ModelCard, 0)
 	for mid, mcfg := range models {
 		mm, _ := mcfg.(map[string]interface{})
-		cards = append(cards, CfgToCard(mid, mm))
+		// 站点上下文只带 baseURL：旧版 config.json 里只有 kind（openai-compatible /
+		// anthropic / openai），没有 ZCode 新版的 api.type，拿不到就传空串——限定
+		// apiType 的站点规则会被跳过（fail-closed），不会误命中。
+		cards = append(cards, CfgToCardForSite(mid, mm, baseURLStr, ""))
 	}
 	// sort by model_id lower
 	for i := 0; i < len(cards); i++ {

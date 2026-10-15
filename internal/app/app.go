@@ -1391,7 +1391,9 @@ func (a *App) FetchModels(baseURL, apiKey string) map[string]interface{} {
 		}
 		return map[string]interface{}{"success": false, "error": core.ShortText(err.Error(), 300), "error_code": "OTHER"}
 	}
-	cards := core.BuildModelCards(raw, a.autoFillLimits())
+	cards := core.BuildModelCardsForSite(raw, a.autoFillLimits(), baseURL, "")
+	// apiType 只传空串：/models 请求本身只带 baseURL 与 apiKey，协议类型无从得知；
+	// 限定 apiType 的站点规则会被跳过（fail-closed），而不是按 baseURL 猜一个。
 	if len(cards) == 0 {
 		return map[string]interface{}{"success": false, "error": "API 返回了空模型列表"}
 	}
@@ -1465,6 +1467,16 @@ func (a *App) BuildSingleCard(modelID string) map[string]interface{} {
 // The UI confirms with the user before overwriting filled values.
 func (a *App) ApplyModelPresets(cards []core.ModelCard) map[string]interface{} {
 	updated, filled := core.ApplyModelPresets(cards)
+	return map[string]interface{}{"success": true, "cards": updated, "filled": filled}
+}
+
+// ApplyModelPresetsForSite 与 ApplyModelPresets 返回值结构相同，额外接受 provider 的
+// Base URL 与 API 类型：离线精确目录与站点级能力规则（例如 opencode 网关上同名的
+// 模型有不同上限/档位）因此也能参与「自动匹配」。
+//
+// baseURL 为空时逐字段等价于 ApplyModelPresets；apiType 取不到时传空串。
+func (a *App) ApplyModelPresetsForSite(cards []core.ModelCard, baseURL, apiType string) map[string]interface{} {
+	updated, filled := core.ApplyModelPresetsForSite(cards, baseURL, apiType)
 	return map[string]interface{}{"success": true, "cards": updated, "filled": filled}
 }
 

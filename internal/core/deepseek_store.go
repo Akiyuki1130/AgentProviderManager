@@ -200,6 +200,9 @@ func deepSeekRouteExtras(opts map[string]interface{}) map[string]interface{} {
 // deepSeekBuildEntry 生成 pi-ai 路由条目（0.1 的 llm-pi-ai 段与 0.2 的 profile patch 共用）。
 // 返回的 envName/apiKey 由调用方交给 stageDeepSeekCredential。
 // takenEnvNames 是文档里已被其它 provider 占用的引用名（envName -> ID），用于派生时消歧。
+//
+// 读卡走 CfgToCardForSite 并带上本 provider 的 baseURL；DSH 侧没有 ZCode 的 api.type，
+// apiType 一律传空串（限定 apiType 的站点规则因此不参与，fail-closed）。
 func deepSeekBuildEntry(providerID string, providerCfg map[string]interface{}, existing map[string]interface{}, mergeModels bool, takenEnvNames map[string]string) (entry map[string]interface{}, envName, apiKey string) {
 	entry = map[string]interface{}{}
 	if existing != nil {
@@ -234,7 +237,7 @@ func deepSeekBuildEntry(providerID string, providerCfg map[string]interface{}, e
 				}
 				continue
 			}
-			encoded := dshModelToRaw(CfgToCard(mid, next), uiKind)
+			encoded := dshModelToRaw(CfgToCardForSite(mid, next, baseURL, ""), uiKind)
 			if mergeModels {
 				// 合并语义以旧节点为基座叠加本次提交的字段：目标里未被本次提交
 				// 涉及的键（目标独有字段）得以保留，与 legacy 的
@@ -257,7 +260,19 @@ func deepSeekBuildEntry(providerID string, providerCfg map[string]interface{}, e
 	sort.Strings(ids)
 	for _, mid := range ids {
 		mm, _ := modelsMap[mid].(map[string]interface{})
-		ordered = append(ordered, dshModelToRaw(CfgToCard(mid, mm), uiKind))
+		ordered = append(ordered, dshModelToRaw(CfgToCardForSite(mid, mm, baseURL, ""), uiKind))
+	}
+	// APM 内部模型键（_apm_capabilities / _dsh_raw / _off_alias 等）只服务于卡片往返，
+	// 绝不落盘。dshModelToRaw 已经删掉自己产出的两个键，但合并语义下的 overlayModelNode
+	// 会保留旧节点里未被本次提交覆盖的键，编辑载荷本身也带着这些内部键，所以这里在写出口
+	// 对每个模型节点统一再剥一次（与 legacy 路径的 stripAPMInternalModelKeys 同一口径）。
+	for _, value := range ordered {
+		node, _ := value.(map[string]interface{})
+		for key := range node {
+			if strings.HasPrefix(key, "_") {
+				delete(node, key)
+			}
+		}
 	}
 
 	entry["displayName"] = providerCfg["name"]

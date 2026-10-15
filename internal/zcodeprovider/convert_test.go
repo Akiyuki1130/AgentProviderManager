@@ -3,6 +3,7 @@ package zcodeprovider
 import (
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -144,8 +145,16 @@ func TestFromLegacyMapping(t *testing.T) {
 		if format["supportsVideo"] != true {
 			t.Errorf("inputFormat.supportsVideo = %v, want true", format["supportsVideo"])
 		}
-		if _, ok := format["supportsText"]; ok {
-			t.Errorf("不应推断 supportsText，实际 %v", format)
+		// E1：输入模态扩到全部 5 词。这里读的是数据本身（legacy 的 modalities.input 里
+		// 明确列了 text），因此 supportsText 必须写；没有列出的 audio/pdf 仍然不写。
+		if format["supportsText"] != true {
+			t.Errorf("inputFormat.supportsText = %v, want true（modalities.input 里明确列了 text）", format["supportsText"])
+		}
+		if _, ok := format["supportsAudio"]; ok {
+			t.Errorf("不应凭空补 supportsAudio，实际 %v", format)
+		}
+		if _, ok := format["supportsPdf"]; ok {
+			t.Errorf("不应凭空补 supportsPdf，实际 %v", format)
 		}
 		if _, hasMap := ModelReasoningLevelMap(mcfg); hasMap {
 			t.Errorf("不应编造 reasoningLevel.map")
@@ -245,7 +254,6 @@ func TestFromLegacyEdgeCases(t *testing.T) {
 // ④ DroppedFields 清单。
 func TestDroppedFields(t *testing.T) {
 	want := []string{
-		"models.acme-large.attachment",
 		"models.acme-large.name",
 		"models.acme-large.reasoning.defaultVariant",
 		"models.acme-large.reasoning.enabled",
@@ -255,6 +263,8 @@ func TestDroppedFields(t *testing.T) {
 		"zcode.modified",
 		"zcode.priority",
 	}
+	// 注意：模型级 attachment / tool_call / temperature / `_apm_capabilities` 已被 APM
+	// 自己写成可映射键（E1，见 legacyModelKnownKeys），因此不再出现在丢失清单里。
 	if got := DroppedFields(legacyProvider(t, "acme")); !reflect.DeepEqual(got, want) {
 		t.Fatalf("DroppedFields(acme) = %v, want %v", got, want)
 	}
@@ -483,4 +493,224 @@ func TestFromLegacyAPITypeFromEndpoints(t *testing.T) {
 	if got := ProviderAPIType(RuleConfig(cfg.ProviderRule("x"))); got != APITypeOpenAIChatCompletions {
 		t.Errorf("endpoints.paths 兜底 = %q", got)
 	}
+}
+
+// ---- 阶段 E1：中立能力位（`_apm_capabilities`）-> v2 properties ----
+
+// capabilitiesLegacyProvider 构造一个只带能力位相关字段的 legacy provider（占位值）。
+func capabilitiesLegacyProvider(models map[string]interface{}) map[string]interface{} {
+	return map[string]interface{}{
+		"name":    "Acme",
+		"kind":    "openai-compatible",
+		"options": map[string]interface{}{"baseURL": "https://api.example.invalid/v1"},
+		"models":  models,
+	}
+}
+
+// fromLegacyModels 用给定 models 表跑一次 FromLegacy，返回产物与丢失清单。
+func fromLegacyModels(t *testing.T, models map[string]interface{}) (*Config, []string) {
+	t.Helper()
+	cfg, dropped, err := FromLegacy(map[string]interface{}{
+		"provider": map[string]interface{}{"acme": capabilitiesLegacyProvider(models)},
+	})
+	if err != nil {
+		t.Fatalf("FromLegacy 失败：%v", err)
+	}
+	if _, err := Encode(cfg); err != nil {
+		t.Fatalf("产物应能通过严格 Encode：%v", err)
+	}
+	return cfg, dropped
+}
+
+// modelConfigOf 取某模型的 config（模型规则缺失即失败）。
+func modelConfigOf(t *testing.T, cfg *Config, modelID string) map[string]interface{} {
+	t.Helper()
+	mr := cfg.ProviderModelRule("acme", modelID)
+	if mr == nil {
+		t.Fatalf("缺少 providerModelRule acme/%s", modelID)
+	}
+	return ModelRuleConfig(mr)
+}
+
+// assertNoForbiddenModelJSON 断言模型 config 的 JSON 里永不出现写盘禁止项：
+// null（ZCode 的 overlay 会当成显式清空）、"enabled"（模型启用位）、
+// requiresMfjsToolSchema 与 optionSpecs.*.map（本轮都不做）。
+func assertNoForbiddenModelJSON(t *testing.T, mcfg map[string]interface{}) {
+	t.Helper()
+	b, err := json.Marshal(mcfg)
+	if err != nil {
+		t.Fatalf("序列化失败：%v", err)
+	}
+	text := string(b)
+	for _, banned := range []string{"null", `"enabled"`, "requiresMfjsToolSchema", `"map"`} {
+		if strings.Contains(text, banned) {
+			t.Errorf("模型 config 里不允许出现 %s：%s", banned, text)
+		}
+	}
+}
+
+// 能力位（真值）必须映射到 v2 的 inputFormat / outputFormat / properties 布尔键；
+// 模态取 `modalities.input` 与 `_apm_capabilities.input_modalities` 的并集（同一位不重复）。
+func TestFromLegacyAPMCapabilitiesMapping(t *testing.T) {
+	models := map[string]interface{}{
+		"full": map[string]interface{}{
+			"_apm_capabilities": map[string]interface{}{
+				"input_modalities":  []interface{}{"text", "image", "video", "audio", "pdf"},
+				"output_modalities": []interface{}{"text"},
+				"tool_call":         true,
+				"structured_output": true,
+				"native_web_search": true,
+				"mid_conv_system":   true,
+				// 未知 / 假 / 空一律不得写键：
+				"attachment":  false,
+				"temperature": nil,
+				"unknown_bit": true,
+			},
+			// image 与能力位里的 image 重复，但只应产生一个 supportsImage。
+			"modalities": map[string]interface{}{
+				"input":  []interface{}{"image"},
+				"output": []interface{}{"audio"},
+			},
+		},
+	}
+	cfg, dropped := fromLegacyModels(t, models)
+	mcfg := modelConfigOf(t, cfg, "full")
+
+	format := ModelInputFormat(mcfg)
+	for _, key := range []string{"supportsText", "supportsImage", "supportsVideo", "supportsAudio", "supportsPdf"} {
+		if format[key] != true {
+			t.Errorf("inputFormat.%s = %v, want true", key, format[key])
+		}
+	}
+	if len(format) != 5 {
+		t.Errorf("inputFormat 只应含 5 个 supports 位，实际 %v", format)
+	}
+	if got := ModelOutputFormat(mcfg)["supportsText"]; got != true {
+		t.Errorf("outputFormat.supportsText = %v, want true（output_modalities 含 text）", got)
+	}
+	props := ModelProperties(mcfg)
+	for _, key := range []string{"supportsToolCall", "supportsJsonSchemaOutput", "supportsNativeWebSearch", "supportsMidConversationSystem"} {
+		if props[key] != true {
+			t.Errorf("properties.%s = %v, want true", key, props[key])
+		}
+	}
+	if len(props) != 6 {
+		t.Errorf("properties 只允许 inputFormat/outputFormat + 4 个布尔位，实际 %v", props)
+	}
+	encoded, err := Encode(cfg)
+	if err != nil {
+		t.Fatalf("Encode 失败：%v", err)
+	}
+	if _, err := Decode(encoded); err != nil {
+		t.Fatalf("产物无法通过严格 Decode：%v", err)
+	}
+	// 自己写出去的能力位与真实键都必须是已知键，不得被误报为丢失。
+	if len(dropped) != 0 {
+		t.Fatalf("dropped = %v, want 空", dropped)
+	}
+	// 内部能力通道绝不能落进配置。
+	if _, ok := mcfg["_apm_capabilities"]; ok {
+		t.Error("_apm_capabilities 是 APM 内部键，不得出现在 v2 模型规则里")
+	}
+	assertNoForbiddenModelJSON(t, mcfg)
+}
+
+// 全部为未知/假的能力位：一个键都不许写（空模态也不留空数组）。
+func TestFromLegacyAPMCapabilitiesOmitsUnknown(t *testing.T) {
+	cfg, _ := fromLegacyModels(t, map[string]interface{}{
+		"empty": map[string]interface{}{
+			"_apm_capabilities": map[string]interface{}{
+				"input_modalities":  []string{"hologram"}, // 词表外的模态 fail-closed 丢弃
+				"output_modalities": []string{"audio"},    // 不含 text -> 不写 outputFormat
+				"tool_call":         false,
+				"structured_output": nil,
+				"mid_conv_system":   "true", // 字符串形态不是真值
+			},
+		},
+	})
+	mcfg := modelConfigOf(t, cfg, "empty")
+	if _, ok := mcfg["properties"]; ok {
+		t.Fatalf("没有任何已知为真的能力位时不应写 properties：%v", mcfg)
+	}
+	assertNoForbiddenModelJSON(t, mcfg)
+}
+
+// `modalities.input` 里的 5 个词全部映射；没列出的位不补（仍不「从缺失推断支持」）。
+func TestLegacyInputFormatMapsAllFiveWords(t *testing.T) {
+	cfg, _ := fromLegacyModels(t, map[string]interface{}{
+		"all": map[string]interface{}{"modalities": map[string]interface{}{
+			"input": []interface{}{"text", "image", "video", "audio", "pdf"},
+		}},
+		"only-video": map[string]interface{}{"modalities": map[string]interface{}{
+			"input": []interface{}{"video"},
+		}},
+		"none": map[string]interface{}{},
+	})
+
+	all := ModelInputFormat(modelConfigOf(t, cfg, "all"))
+	if len(all) != 5 {
+		t.Fatalf("5 个模态词都应映射，实际 %v", all)
+	}
+
+	only := ModelInputFormat(modelConfigOf(t, cfg, "only-video"))
+	if len(only) != 1 || only["supportsVideo"] != true {
+		t.Fatalf("只列了 video 时只应写 supportsVideo，实际 %v", only)
+	}
+	for _, key := range []string{"supportsText", "supportsImage", "supportsAudio", "supportsPdf"} {
+		if _, ok := only[key]; ok {
+			t.Errorf("没有列出的模态不得推断为支持：%v", only)
+		}
+	}
+
+	if _, ok := modelConfigOf(t, cfg, "none")["properties"]; ok {
+		t.Error("没有任何模态信息时不应写 properties")
+	}
+}
+
+// outputFormat.supportsText 只在明确列出 text 时写。
+func TestLegacyOutputFormatRequiresText(t *testing.T) {
+	cfg, _ := fromLegacyModels(t, map[string]interface{}{
+		"audio-only": map[string]interface{}{"modalities": map[string]interface{}{"output": []interface{}{"audio"}}},
+		"text-out": map[string]interface{}{"_apm_capabilities": map[string]interface{}{
+			"output_modalities": []string{"text", "audio"},
+		}},
+	})
+
+	if got := ModelOutputFormat(modelConfigOf(t, cfg, "audio-only")); len(got) != 0 {
+		t.Errorf("输出模态不含 text 时不应写 outputFormat，实际 %v", got)
+	}
+	out := ModelOutputFormat(modelConfigOf(t, cfg, "text-out"))
+	if out["supportsText"] != true || len(out) != 1 {
+		t.Errorf("outputFormat = %v, want {supportsText:true}", out)
+	}
+}
+
+// opencode kind 写出的真实能力键（tool_call / attachment / temperature）算已知键、不报丢失，
+// 但它们不是 ZCode v2 的键：布尔位只来自 `_apm_capabilities`，因此这里不映射。
+func TestLegacyOpencodeCapabilityKeysAreKnownButNotMapped(t *testing.T) {
+	cfg, dropped := fromLegacyModels(t, map[string]interface{}{
+		"oc": map[string]interface{}{
+			"tool_call":   true,
+			"attachment":  true,
+			"temperature": true,
+			"modalities": map[string]interface{}{
+				"input":  []interface{}{"text", "image"},
+				"output": []interface{}{"text"},
+			},
+		},
+	})
+	if len(dropped) != 0 {
+		t.Fatalf("opencode 能力键与 modalities.output 都不应报丢失，实际 %v", dropped)
+	}
+	mcfg := modelConfigOf(t, cfg, "oc")
+	props := ModelProperties(mcfg)
+	for _, key := range []string{"supportsToolCall", "supportsJsonSchemaOutput", "supportsNativeWebSearch", "supportsMidConversationSystem"} {
+		if _, ok := props[key]; ok {
+			t.Errorf("布尔位只来自 _apm_capabilities，不应由 %s 推出：%v", key, props)
+		}
+	}
+	if len(ModelInputFormat(mcfg)) != 2 || ModelOutputFormat(mcfg)["supportsText"] != true {
+		t.Errorf("模态仍应正常映射：%v / %v", ModelInputFormat(mcfg), ModelOutputFormat(mcfg))
+	}
+	assertNoForbiddenModelJSON(t, mcfg)
 }

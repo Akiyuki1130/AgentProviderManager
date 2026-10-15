@@ -323,14 +323,29 @@ func emptyToken(v interface{}) bool {
 // 保留函数名与签名：它已是 Wails 绑定名（前端 api.ApplyModelPresets），改名要同时动
 // 前端与绑定层，收益不抵。
 //
+// 本函数没有站点上下文，等价于 ApplyModelPresetsForSite(cards, "", "")；知道 provider
+// 的 baseUrl / api.type 时改用后者，让离线目录与站点级规则一起参与。
+//
 // filled 仍只统计 context/output 两类字段（档位补全属于卡片自适应，另行提示）。
 func ApplyModelPresets(cards []ModelCard) ([]ModelCard, int) {
+	return ApplyModelPresetsForSite(cards, "", "")
+}
+
+// ApplyModelPresetsForSite 是带站点上下文的「自动匹配」：除覆盖层 / 内建正则 / presets
+// 旧表外，离线精确目录与站点级规则（例如 opencode 网关的专属档位）也参与取值。
+//
+// 语义与 ApplyModelPresets 完全一致（覆盖式写入 ctx/out，filled 计字段数），只是把
+// baseURL / apiType 透传给 LookupModelCapabilityForSite。baseURL 为空时与前者逐字段等价。
+// apiType 取不到时传空串：限定 apiType 的站点规则会被跳过（fail-closed），而不是误命中。
+//
+// 中立能力位（capabilities）用同一次分层求值的结果一并填充，但采取**只补空缺**的语义
+// （卡片已有选择一律保留），与前端「按能力表补全」按钮同一口径——ctx/out 是估算值可以覆盖，
+// 能力位则可能已经被用户逐位确认过，覆盖等于抹掉用户的选择。能力位不计入 filled
+// （filled 仍是 ctx/out 的字段数，前端有独立的能力入口与计数）。
+func ApplyModelPresetsForSite(cards []ModelCard, baseURL, apiType string) ([]ModelCard, int) {
 	filled := 0
 	for i := range cards {
-		cap, ok := LookupModelCapability(cards[i].ModelID)
-		if !ok {
-			continue
-		}
+		cap := LookupModelCapabilityForSite(cards[i].ModelID, baseURL, apiType)
 		if cap.Context > 0 {
 			cards[i].Context = cap.Context
 			filled++
@@ -338,6 +353,15 @@ func ApplyModelPresets(cards []ModelCard) ([]ModelCard, int) {
 		if cap.Output > 0 {
 			cards[i].Output = cap.Output
 			filled++
+		}
+		if cap.Features.HasAny() {
+			var cur ModelFeatures
+			if cards[i].Capabilities != nil {
+				cur = *cards[i].Capabilities
+			}
+			if merged := mergeFeatures(cur, cap.Features); merged.HasAny() {
+				cards[i].Capabilities = &merged
+			}
 		}
 	}
 	return cards, filled

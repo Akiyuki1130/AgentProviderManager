@@ -14,10 +14,23 @@ type ModelCard struct {
 	RawReasoningEnabled *bool                  `json:"_raw_reasoning_enabled,omitempty"`
 	// OffAlias 记录配置里 off 档位的原始拼法（disabled / none / nothink）。
 	// ZCode 的档位集合里 off 词随家族变化，写回时必须用原拼法，否则模型 map 表达式匹配不到。
-	OffAlias            string                 `json:"_off_alias,omitempty"`
-	// _vendor / _supported_levels 是 APM 依据内建能力表推断的内部字段，绝不写回配置。
-	Vendor              string                 `json:"_vendor,omitempty"`
-	SupportedLevels     []string               `json:"_supported_levels,omitempty"`
+	OffAlias string `json:"_off_alias,omitempty"`
+	// _vendor / _supported_levels 是 APM 内部字段，绝不写回配置（写盘出口统一由
+	// cards.go 的 stripAPMInternalModelKeys 剥离）。两者的取值口径见 capability.go 的
+	// ModelCapability.Source（分层顺序在 lookupCapabilityForSite）：
+	//   - _vendor：厂商判定（detectVendor）或覆盖层给出，纯展示，与补全开关无关；
+	//   - _supported_levels：**优先来自 provider 自报的档位枚举**（cards.go 的 metaLevels，
+	//     那是 API 事实，即使 autoFill 关闭也写），provider 没给时才在 autoFill 为真时
+	//     回落到能力表档位。
+	Vendor          string                 `json:"_vendor,omitempty"`
+	SupportedLevels []string               `json:"_supported_levels,omitempty"`
+	// Capabilities 是用户可编辑的**中立能力位**（输入/输出模态、工具调用、结构化输出等），
+	// 三个 harness 的写入端都只读它、各自映射到自己的键名（映射约束见 MODEL-MANAGEMENT-PLAN.md
+	// 第 10.2.3）。后端从能力分层表与 provider 自报字段推断后填充，用户可覆盖。
+	Capabilities *ModelCapabilities `json:"capabilities,omitempty"`
+	// _capabilities_inferred 是「能力表算出来的原始推断值」，只用于前端展示来源与
+	// 「按能力表补全」按钮；它绝不写盘（写入端只读 Capabilities）。
+	CapabilitiesInferred *ModelCapabilities `json:"_capabilities_inferred,omitempty"`
 	Attachment          bool                   `json:"attachment,omitempty"`
 	Modalities          map[string]interface{} `json:"modalities,omitempty"`
 	Headers             map[string]string      `json:"headers,omitempty"`

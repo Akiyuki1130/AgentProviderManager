@@ -1,3 +1,34 @@
+/**
+ * 能力位的规范词表（顺序即后端 NormalizeModalities 的归一化顺序，也是界面上的展示顺序）。
+ * 放在这里是因为 ModelCard 与两个页面的批量栏都要用同一份清单：本阶段的文件独占清单不允许
+ * 新建独立常量模块，仓库里既有的 constants/variants.ts 又不在可改范围内，故与类型同址。
+ */
+export const CAP_INPUT_MODALITIES = ['text', 'image', 'video', 'audio', 'pdf'] as const
+export const CAP_OUTPUT_MODALITIES = ['text', 'audio', 'image', 'video', 'pdf'] as const
+/** 六个布尔能力位的 JSON 键（顺序即界面展示顺序）。 */
+export const CAP_FLAG_KEYS = ['tool_call', 'structured_output', 'native_web_search', 'mid_conv_system', 'attachment', 'temperature'] as const
+
+/**
+ * harness 中立的能力集合（对应后端 internal/core/model_features.go 的 ModelFeatures）。
+ *
+ * **三态语义：键不存在 = 未知**。前端只写「已知为真」：勾选写 `true`，取消勾选把键删掉，
+ * 绝不写 `false`——留空表示「不知道」，由目标客户端自己的默认值兜底，写成 `false` 会变成
+ * 「确认不支持」这种前端无从判断的断言。
+ * 模态是集合语义：键不存在 = 未知；键存在即「已知支持集合」（因此不做半填）。
+ */
+export interface ModelCapabilities {
+  input_modalities?: string[]
+  output_modalities?: string[]
+  tool_call?: boolean
+  structured_output?: boolean
+  native_web_search?: boolean
+  mid_conv_system?: boolean
+  attachment?: boolean
+  temperature?: boolean
+  /** 推断来源标识（内部字段，只读展示）。 */
+  _source?: string
+}
+
 export interface ModelCard {
   model_id: string
   api_returned?: boolean
@@ -20,6 +51,17 @@ export interface ModelCard {
 	 * 为空表示未推断到（展示全集不高亮）。绝不写回配置。
 	 */
 	_supported_levels?: string[]
+	/**
+	 * 用户可编辑的权威能力值，保存时随卡片原样提交（写入端只读它，不改键名）。
+	 * 与下面两个 opencode 形态的旧字段（attachment / modalities）互不影响：
+	 * 能力区只读写 capabilities，旧字段原样保留、不做迁移。
+	 */
+	capabilities?: ModelCapabilities
+	/**
+	 * 能力表 / provider 自报推断出的原始能力值，只读，绝不落盘（下划线前缀会被后端统一剥离）。
+	 * 用于在卡片上标出「推断支持」并提供「采纳推断」，不自动写入 capabilities。
+	 */
+	_capabilities_inferred?: ModelCapabilities
 	attachment?: boolean
 	modalities?: Record<string, unknown>
 	headers?: Record<string, string>
