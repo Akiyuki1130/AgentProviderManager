@@ -268,6 +268,7 @@ import {
 } from '@vicons/ionicons5'
 import { uiPrompt, uiConfirm } from '../stores/uiDialog'
 import { highlightSegments } from '../composables/useHighlight'
+import { useVendorGroup, fetchVendorMeta } from '../composables/useVendorGroup'
 import { useAutoSave } from '../composables/useAutoSave'
 import ModelCard from '../components/ModelCard.vue'
 import KeychainPicker from '../components/KeychainPicker.vue'
@@ -348,49 +349,17 @@ const filteredProviders = computed(() => {
   if (providerSort.value === 'models') return [...list].sort((a, b) => b.model_count - a.model_count)
   return list
 })
-// 阶段 D：厂商分组视图（纯 APM 内部展示，绝不写盘）。
+// 阶段 D：厂商分组视图（共享 composable，与导入页同一实现；纯 APM 内部展示，绝不写盘）。
 // 分组只影响渲染结构；filteredCards 仍是扁平数组，供既有批量逻辑复用。
 // 厂商筛选属于「可见性」的一部分，因此参与 filteredCards（被筛掉的厂商不算可见）。
-const vendorGroupOn = ref(localStorage.getItem('zcpm.vendorGroup') === '1')
-watch(vendorGroupOn, (v) => localStorage.setItem('zcpm.vendorGroup', v ? '1' : '0'))
-const vendorFilter = ref<string[]>([])
-// 卡片所属厂商：_vendor 缺失或为空时归入 unknown。
-function vendorOf(c: Card): string {
-  const v = (c._vendor || '').trim().toLowerCase()
-  return v || 'unknown'
-}
-function vendorLabel(v: string): string {
-  return t(`vendor.${v}`, lang.value)
-}
+const { groupOn: vendorGroupOn, filter: vendorFilter, label: vendorLabel, matches: vendorMatches, options: vendorOptions, groupCards } = useVendorGroup(() => editForm.value.cards, lang)
 const filteredCards = computed(() => {
   const q = manageQuery.value.trim().toLowerCase()
-  const byVendor = (c: Card) => !vendorFilter.value.length || vendorFilter.value.includes(vendorOf(c))
-  if (!q) return editForm.value.cards.filter(byVendor)
-  return editForm.value.cards.filter((c) => (((c.model_id || '') as string).toLowerCase().includes(q) || ((c.name || '') as string).toLowerCase().includes(q)) && byVendor(c))
-})
-// 当前模型集合里实际出现的厂商（供筛选下拉动态生成），带计数。
-const vendorOptions = computed(() => {
-  const seen = new Map<string, number>()
-  for (const c of editForm.value.cards) {
-    const v = vendorOf(c)
-    seen.set(v, (seen.get(v) || 0) + 1)
-  }
-  return [...seen.entries()]
-    .sort((a, b) => (a[0] === 'unknown' ? 1 : b[0] === 'unknown' ? -1 : a[0].localeCompare(b[0])))
-    .map(([v, n]) => ({ label: `${vendorLabel(v)} (${n})`, value: v }))
+  if (!q) return editForm.value.cards.filter(vendorMatches)
+  return editForm.value.cards.filter((c) => (((c.model_id || '') as string).toLowerCase().includes(q) || ((c.name || '') as string).toLowerCase().includes(q)) && vendorMatches(c))
 })
 // 按厂商分组后的渲染结构（保留组内既有顺序）。unknown 组始终排最后。
-const groupedCards = computed(() => {
-  const groups = new Map<string, Card[]>()
-  for (const c of filteredCards.value) {
-    const v = vendorOf(c)
-    if (!groups.has(v)) groups.set(v, [])
-    groups.get(v)!.push(c)
-  }
-  return [...groups.entries()]
-    .sort((a, b) => (a[0] === 'unknown' ? 1 : b[0] === 'unknown' ? -1 : a[0].localeCompare(b[0])))
-    .map(([vendor, cards]) => ({ vendor, cards }))
-})
+const groupedCards = computed(() => groupCards(filteredCards.value))
 const allSelected = computed(() => filteredCards.value.length > 0 && filteredCards.value.every((c) => c.select))
 const hasSelected = computed(() => filteredCards.value.some((c) => c.select))
 const batchReasoningOn = computed(() => filteredCards.value.length > 0 && filteredCards.value.every((c) => c.reasoning))
@@ -651,7 +620,11 @@ async function onAddModel() {
   })
   if (!mid || !mid.trim()) return
   if (editForm.value.cards.some((c) => c.model_id === mid.trim())) { toast('info', '提示', `模型「${mid.trim()}」已在列表中。`); return }
-  editForm.value.cards.push({ model_id: mid.trim(), name: mid.trim(), reasoning: false, variants: [], default_variant: '', context: '', output: '', select: false })
+  const card: Card = { model_id: mid.trim(), name: mid.trim(), reasoning: false, variants: [], default_variant: '', context: '', output: '', select: false }
+  // 补一次能力表推断字段（厂商 / 支持档位），使分组与档位弱化对新增卡片立刻生效
+  const meta = await fetchVendorMeta(card.model_id)
+  if (meta) { card._vendor = meta._vendor; card._supported_levels = meta._supported_levels }
+  editForm.value.cards.push(card)
 }
 
 function removeCard(card: Card) {
@@ -1124,13 +1097,7 @@ onUnmounted(() => {
 .list-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
 .list-header h3 { font-size: 14px; font-weight: 600; }
 .count-label { font-size: 12px; color: var(--fluent-text-soft); }
-/* 阶段 D：厂商分组开关（复用全局 .switch，这里只排布标签与开关） */
-.vendor-group-toggle { display: inline-flex; gap: 6px; align-items: center; font-size: 12px; color: var(--fluent-text); cursor: pointer; }
-/* 分组容器与分组头：沿用既有 token，不引入新配色 */
-.vendor-group { display: flex; flex-direction: column; }
-.vendor-group-head { display: flex; align-items: center; gap: 8px; padding: 6px 4px; margin: 4px 0; border-bottom: 1px solid var(--fluent-border); position: sticky; top: 0; background: var(--fluent-card-bg); z-index: 1; }
-.vendor-group-name { font-size: 12px; font-weight: 600; }
-.vendor-group-count { font-size: 11px; color: var(--fluent-text-soft); }
+/* 阶段 D 厂商分组/开关的外观定义在 global.css 控件规范层（管理页与导入页共用） */
 .batch-bar { display: flex; flex-direction: column; gap: 8px; padding: 8px 12px; background: var(--fluent-bg); border: 1px solid var(--fluent-border); border-radius: 8px; }
 .batch-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .batch-row--wrap { align-items: center; }

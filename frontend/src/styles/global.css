@@ -188,3 +188,11 @@ input, textarea, [contenteditable='true'] { user-select: text; -webkit-user-sele
 .pill.unsupported:hover { opacity: 1; border-color: var(--fluent-text-soft); }
 /* 搜索命中高亮（配合 useHighlight 分段渲染，禁 v-html） */
 mark { background: color-mix(in srgb, var(--warn) 32%, transparent); color: inherit; border-radius: 2px; padding: 0 1px; }
+/* 厂商分组视图（阶段 D）：管理页与导入页共用同一套标记与外观，逻辑见 composables/useVendorGroup.ts。
+   只排布标签与开关（开关本体复用全局 .switch）；分组头 sticky 在所属分组内，随分组滚出。
+   全部用既有 token，不引入新配色。 */
+.vendor-group-toggle { display: inline-flex; gap: 6px; align-items: center; font-size: 12px; color: var(--fluent-text); cursor: pointer; }
+.vendor-group { display: flex; flex-direction: column; }
+.vendor-group-head { display: flex; align-items: center; gap: 8px; padding: 6px 4px; margin: 4px 0; border-bottom: 1px solid var(--fluent-border); position: sticky; top: 0; background: var(--fluent-card-bg); z-index: 1; }
+.vendor-group-name { font-size: 12px; font-weight: 600; }
+.vendor-group-count { font-size: 11px; color: var(--fluent-text-soft); }

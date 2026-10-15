@@ -129,10 +129,11 @@ APM 早期移植了 Fluent 骨架（CSS 变量双主题、accent、侧栏指示�
 | `useToast.ts` | toast 队列 | hover 暂停按 `createdAt` 结算剩余时长；最多 5 条挤掉最旧；`window.__toast(type,title,msg)` 兼容桥保留 |
 | `useStagger.ts` | 错峰 delay | `staggerMs(index)` 页面级；`cachedStaggerMs(id)` 列表级（稳定 id 缓存，>240 自动清） |
 | `useHighlight.ts` | 搜索命中分段 | 返回 `Seg[]` 供模板 `<mark v-if="s.hit">` 渲染；**禁 `v-html`**（大小写不敏感，转义后分段） |
+| `useVendorGroup.ts` | 厂商分组/筛选（管理页 + 导入页唯一实现） | `matches` 串进页面自己的 `filteredCards`（筛选属可见性、参与批量作用域）；`groupCards(filtered)` 出分组结构；`fetchVendorMeta(id)` 给手动添加的卡片补 `_vendor` / `_supported_levels` |
 
 ### 4.3 规范控件类（`global.css`）
 
-`.field`（输入框）/ `.switch`（自绘开关，`:active` 缩放）/ `.check`（自绘勾选）/ `.badge` + `.badge-ok|warn|err` / `.pill`（档位胶囊）/ `mark`（命中高亮）。
+`.field`（输入框）/ `.switch`（自绘开关，`:active` 缩放）/ `.check`（自绘勾选）/ `.badge` + `.badge-ok|warn|err` / `.pill`（档位胶囊）/ `mark`（命中高亮）/ `.vendor-group` + `.vendor-group-head|name|count`、`.vendor-group-toggle`（厂商分组视图，两页共用）。
 
 - 页面里出现同名重复定义时，**删掉改用全局的**（这是 C3/B10 的收口目标）。
 - 自绘交互件必须补 a11y：`role` / `aria-checked` / `tabindex=0` + Enter/Space（`.pill`、`.switch` 已就位，照抄）。

@@ -97,7 +97,7 @@ ZIP 里面向用户的可执行文件名保持 `AgentProviderManager.exe`，这�
 ## 前端 / UI 约定
 
 - 前端工作遵循 `UI-GUIDELINES.md`（中文）。改动 `frontend/src/**` 之前先读它；其中是不得回退的硬性规则：零 emoji（图标来自 `@vicons/ionicons5`，经 `<n-icon>` 渲染，绝不写进 i18n 字符串）、零原生 `prompt()`/`confirm()`/`alert()`（改用 `stores/uiDialog.ts` 的 `uiConfirm`/`uiPrompt`）、不引入新的 UI 库、以及每个颜色/圆角/时长/显现都必须走 `styles/global.css` + `styles/theme.ts` 里的 token。
-- 复用既有层，不要重造：`components/ui/PageHeader.vue`（所有页面）、`StickySaveBar.vue`、`UiDialogHost.vue`；composable `useToast` / `useStagger` / `useHighlight`；`global.css` 里的规范控件类 `.field` / `.switch` / `.check` / `.badge` / `.pill`。
+- 复用既有层，不要重造：`components/ui/PageHeader.vue`（所有页面）、`StickySaveBar.vue`、`UiDialogHost.vue`；composable `useToast` / `useStagger` / `useHighlight` / `useVendorGroup`（厂商分组与筛选的唯一实现）；`global.css` 里的规范控件类 `.field` / `.switch` / `.check` / `.badge` / `.pill` / `.vendor-group*`。
 - 前端改动后运行 `cd frontend && npm run build`（内含 `vue-tsc --noEmit`），并手工检查浅色与深色两套主题。
 - 只用相对导入；`@/*` 别名虽已配置但零使用。跨组件共享状态用模块级 `ref`（见 `stores/uiDialog.ts`、`composables/useToast.ts`），不用 `provide`/`inject`。
 

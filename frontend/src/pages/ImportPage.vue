@@ -87,8 +87,24 @@
     <div class="fluent-card card-pad list-wrap enter-stagger" :style="{ animationDelay: secDelay(6) }">
       <div class="list-header">
         <h3>{{ t('import.modelListTitle', lang) }}</h3>
-        <div style="display:flex; gap:12px; align-items:center">
+        <div class="list-tools">
           <n-input v-model:value="searchQuery" :placeholder="t('import.searchPlaceholder', lang)" clearable size="small" style="width: 220px" :aria-label="t('import.searchAria', lang)" @keyup.esc="searchQuery = ''" />
+          <!-- 阶段 D：厂商多选筛选（选项由当前模型集动态生成），与搜索叠加生效 -->
+          <n-select
+            v-model:value="vendorFilter"
+            :options="vendorOptions"
+            :placeholder="t('vendor.filterPlaceholder', lang)"
+            :aria-label="t('vendor.filterPlaceholder', lang)"
+            multiple
+            clearable
+            :max-tag-count="1"
+            style="width: 200px"
+            size="small"
+          />
+          <label class="vendor-group-toggle">
+            <span>{{ t('vendor.groupToggle', lang) }}</span>
+            <button class="switch" :class="{ on: vendorGroupOn }" role="switch" :aria-checked="vendorGroupOn" :aria-label="t('vendor.groupToggle', lang)" @click="vendorGroupOn = !vendorGroupOn" />
+          </label>
           <span class="count-label tnum">{{ filteredCards.length }} / {{ cards.length }}</span>
           <n-button size="small" @click="onAddModel"><template #icon><n-icon :component="AddOutline" /></template>{{ t('import.addModel', lang) }}</n-button>
         </div>
@@ -143,7 +159,20 @@
         <!-- 模型卡片为单列纵向列表，接全局 list-* FLIP 过渡；空态保持 v-if 兄弟语义，只包卡片本体。
              key 用 model_id（列表内唯一：手动添加按 model_id 去重、自动匹配按 model_id 回写），不用 index -->
         <TransitionGroup name="list" tag="div" class="card-rows">
-          <ModelCard v-for="card in filteredCards" :key="card.model_id" :card="card" :agent="settingStore.agent" :query="searchQuery" :show-select="true" @delete="removeCard(card)" />
+          <!-- 阶段 D：分组开启时按厂商分段渲染（与管理页同一 composable/样式）；
+               分组只改展示结构，批量作用域不变 —— 仍为当前筛选（搜索 + 厂商）出的可见模型 -->
+          <template v-if="vendorGroupOn">
+            <div v-for="g in groupedCards" :key="'grp-' + g.vendor" class="vendor-group">
+              <div class="vendor-group-head">
+                <span class="vendor-group-name">{{ vendorLabel(g.vendor) }}</span>
+                <span class="vendor-group-count">{{ t('vendor.groupCount', lang).replace('{n}', String(g.cards.length)) }}</span>
+              </div>
+              <ModelCard v-for="card in g.cards" :key="card.model_id" :card="card" :agent="settingStore.agent" :query="searchQuery" :show-select="true" @delete="removeCard(card)" />
+            </div>
+          </template>
+          <template v-else>
+            <ModelCard v-for="card in filteredCards" :key="card.model_id" :card="card" :agent="settingStore.agent" :query="searchQuery" :show-select="true" @delete="removeCard(card)" />
+          </template>
         </TransitionGroup>
       </div>
     </div>
@@ -178,6 +207,7 @@ import ModelCard from '../components/ModelCard.vue'
 import KeychainPicker from '../components/KeychainPicker.vue'
 import PageHeader from '../components/ui/PageHeader.vue'
 import { staggerMs } from '../composables/useStagger'
+import { useVendorGroup, fetchVendorMeta } from '../composables/useVendorGroup'
 import type { ModelCard as Card, KeychainEntry, ProbeResult } from '../types'
 import { REASONING_VARIANTS, REASONING_VARIANTS_BASIC, pickDefaultVariant } from '../constants/variants'
 import { t } from '../i18n'
@@ -218,11 +248,16 @@ const kindOptions = computed(() => [
   { label: t('import.kindResponses', lang.value), value: 'responses' },
 ])
 const variantSelectOpts = computed(() => variantOpts.map((v) => ({ label: v, value: v })))
+// 阶段 D：厂商分组 + 筛选（与管理页共用 composable，纯展示、绝不写盘）。
+// 筛选属于「可见性」，因此参与 filteredCards，被筛掉的模型不进入批量作用域。
+const { groupOn: vendorGroupOn, filter: vendorFilter, label: vendorLabel, matches: vendorMatches, options: vendorOptions, groupCards } = useVendorGroup(() => cards.value, lang)
 const filteredCards = computed(() => {
   const q = searchQuery.value.trim().toLowerCase()
-  if (!q) return cards.value
-  return cards.value.filter((c) => ((c.model_id || '') as string).toLowerCase().includes(q) || ((c.name || '') as string).toLowerCase().includes(q))
+  if (!q) return cards.value.filter(vendorMatches)
+  return cards.value.filter((c) => ((c.model_id || '') as string).toLowerCase().includes(q) || ((c.name || '') as string).toLowerCase().includes(q)).filter(vendorMatches)
 })
+// 分组渲染结构（组内保持当前顺序，unknown 组恒排最后）
+const groupedCards = computed(() => groupCards(filteredCards.value))
 const allSelected = computed(() => filteredCards.value.length > 0 && filteredCards.value.every((c) => c.select))
 const batchReasoning = computed(() => filteredCards.value.length > 0 && filteredCards.value.every((c) => c.reasoning))
 
@@ -302,10 +337,14 @@ function clearManualRefresh() {
   sessionStorage.removeItem('zcode-pm:manualRefresh')
 }
 async function onAddModel() {
-  const mid = await uiPrompt({ title: t('import.addModel', lang.value), label: t('import.modelIdLabel', lang.value), placeholder: t('import.modelIdPlaceholder', lang.value), initialValue: 'gpt-4o-mini' })
+  const mid = ((await uiPrompt({ title: t('import.addModel', lang.value), label: t('import.modelIdLabel', lang.value), placeholder: t('import.modelIdPlaceholder', lang.value), initialValue: 'gpt-4o-mini' })) || '').trim()
   if (!mid) return
   if (cards.value.some((c) => c.model_id === mid)) { toast('info', t('import.notice', lang.value), t('import.modelExists', lang.value).replace('{id}', mid)); return }
-  cards.value.push({ model_id: mid, name: mid, reasoning: false, variants: [], default_variant: '', context: '', output: '', select: true })
+  const card: Card = { model_id: mid, name: mid, reasoning: false, variants: [], default_variant: '', context: '', output: '', select: true }
+  // 补一次能力表推断字段（厂商 / 支持档位），使分组与档位弱化对新增卡片立刻生效
+  const meta = await fetchVendorMeta(mid)
+  if (meta) { card._vendor = meta._vendor; card._supported_levels = meta._supported_levels }
+  cards.value.push(card)
 }
 function removeCard(card: Card) { const idx = cards.value.indexOf(card); if (idx >= 0) cards.value.splice(idx, 1) }
 async function onDeleteSelected() {
@@ -601,6 +640,8 @@ async function loadZcodeFormatSections() {
 .list-wrap { display: flex; flex-direction: column; gap: 8px; }
 .list-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
 .list-header h3 { font-size: 14px; font-weight: 600; }
+/* 右侧工具组：窄窗口下整体换行，而不是把选择器压到不可用宽度 */
+.list-tools { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
 .count-label { font-size: 12px; color: var(--fluent-text-soft); }
 .batch-bar { display: flex; flex-direction: column; gap: 8px; padding: 8px 12px; background: var(--fluent-bg); border: 1px solid var(--fluent-border); border-radius: 8px; }
 .batch-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }

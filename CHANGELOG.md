@@ -11,7 +11,7 @@
 - 管理页的提供商侧栏过滤与排序：一个匹配名称/id 的搜索框加一个排序下拉（默认顺序 / 名称 / 模型数），表头计数切换为 `filtered / total`。
 - **模型能力表与自动补全（阶段 B）。** 新增 `scripts/sync-model-catalog.mjs`：从 ZCode 自带资源 `zcode-builtin.json` 抽取 `modelConfigRules.modelRules` 的 84 条家族规则，生成预编译 Go 表 `internal/core/model_catalog_gen.go`（`(?i)^(?:…)$` 全串锚定 + 大小写不敏感，与 ZCode 内部分配器一致；`--check` 幂等校验，可作为提交前手工闸门）。`internal/core/capability.go` 的 `LookupModelCapability` 按「APM 自维护覆盖层（`internal/core/model_overrides.go`）> 内建规则逐字段覆盖 > `presets.go` 兜底」取值，并同时给出厂商归属（19 个家族正则）。有意跳过 `.*` 纯兜底规则，未知模型保持「留空」契约。此前因前缀匹配断裂而匹配不到的 `deepseek-v4.1-flash` 等模型现在能自动补全上下文（1000000）、输出（384000）与档位（off/low/high/max）；`GuessReasoning` 改由能力表驱动（32 个代表模型比对：零 `true→false` 回归、8 个 `false→true` 修正）。
 - **思考档位自适应 + 「允许自填推理档位」高级开关（阶段 C）。** 模型卡片按能力表弱化显示该模型不支持的档位（虚线胶囊，仍可手动点选），开启思考时以支持集合作为种子。选项页新增高级开关（写入 `settings.json`，默认关闭）：打开后档位名跳过白名单（仍去重、归一别名、限长 64 字符并拒绝控制字符），前后端同一上限；DSH 读写两端对称放行，自填档位不再「写进去、重读即消失」。
-- **厂商分组视图（阶段 D，仅 APM 内部）。** 模型列表新增「按厂商分组」开关（`localStorage` 记忆）与厂商多选筛选（选项按当前模型集动态生成、带计数、unknown 排最后）。分组只在渲染层，批量操作作用域不变（仍为当前筛选出的可见模型），分类结果绝不写入配置文件。
+- **厂商分组视图（阶段 D，仅 APM 内部）。** 管理页与导入页的模型列表都支持「按厂商分组」开关（`localStorage` 记忆，两页共用同一偏好）与厂商多选筛选（选项按当前模型集动态生成、带计数、unknown 排最后，列表整体换掉后自动收敛掉已消失的筛选项）。逻辑收敛为唯一实现 `frontend/src/composables/useVendorGroup.ts`、外观收敛到 `global.css` 的 `.vendor-group*`，两页不再各写一份；手动添加的模型也会向能力表补一次厂商归属与支持档位（走既有 `BuildSingleCard`，只取内部 `_` 前缀 meta，不填上下文/输出）。分组只在渲染层，批量操作作用域不变（仍为当前筛选出的可见模型），分类结果绝不写入配置文件。
 
 ### 变更（UI）
 
