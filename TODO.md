@@ -71,7 +71,8 @@
     - i18n 新增 22 键三语齐全、无 emoji。
     - 验证：`npm run build`、`vue-tsc --noEmit`、`go test`、`git diff --check`、`wails build` 端到端全通过，并确认标记进入 `frontend/dist` 产物。
     - 说明：原计划的阶段 D Sub Agent 因**账户余额不足**失败（未产生改动），由主会话直接实现；未做真实窗口的视觉截图核对。
-  - **已提交**：阶段 A + B + C + D 全部改动已于 2026-10-14 随功能提交入库。
+    - **后续补齐（2026-10-14，提交 `af68a1e`）**：导入页模型列表也接入同一开关与厂商多选筛选；逻辑与外观各收敛为一处（`composables/useVendorGroup.ts` + `global.css` 的 `.vendor-group*`），两页不再各写一份；列表整体换掉后自动收敛已消失的筛选项；手动添加的模型经既有 `BuildSingleCard` 补 `_vendor` / `_supported_levels`（只取内部 meta，不填上下文与输出）。
+  - **已提交**：阶段 A + B + C + D 全部改动已于 2026-10-14 随功能提交入库（`3006728` 功能批次、`d04ab90` 文档批次），导入页厂商分组为 `af68a1e`。
   - **需求符合性结论**：#1（自动配置补全）地基已落地（ZCode 正则 + APM 覆盖层；`deepseek-v4.1-flash` 可补全）；#2 已完成（阶段 A 修缺陷 + 阶段 C 自适应档位与高级自填开关）；#3 已完成（阶段 D 厂商分组视图）。**三项原始需求全部落地。**
 
 - [ ] **18. 补齐模型匹配规则**（用户 2026-10-14 明确指出「差一点规则」，留待后续对话实施）
@@ -80,6 +81,12 @@
   2. **APM 自维护覆盖层**：在 `internal/core/model_overrides.go` 里补脚本抽不到的家族/新模型（该表是手写、可随时追加；前缀键要足够长避免误伤兄弟模型，见文件头注释）。
   3. **可选（原路线二，本轮未做）**：DSH 内嵌 pi-ai 模型目录（`C:\AppData\DSH Desktop\resources\app.asar` 的 `dsh/node_modules/@earendil-works/pi-ai/dist/providers/data/*.json`，含 `contextWindow`/`maxTokens`/`reasoning`/`thinkingLevelMap`，43 个 provider），只覆盖精确 id，作为精确命中的补充；抽取需按 asar 格式解包。
   影响面：只影响「自动补全命中率」，不影响既有正确性；改完重跑 `node scripts/sync-model-catalog.mjs`（内建表）或直接编辑覆盖层，并补 `capability_test.go` 回归用例。
+
+- [ ] **19. 「自动匹配」与拉取模型时的自动补全口径不一致**（2026-10-14 实现导入页厂商分组时发现）
+  症状：导入页/管理页的「自动匹配」按钮（`ApplyModelPresets`）只查手维护的 `modelPresets` 前缀表，**不走**阶段 B 的能力表；而拉取模型时的自动补全（`BuildModelCards` → `LookupModelCapability`）两层都走。同一个模型，两条路径给出的上限不一样。
+  可复现：`deepseek-v4.1-flash` 只存在于 `internal/core/model_overrides.go`（覆盖层，不在 `modelPresets`）——自动补全能填 ctx 1000000 / out 384000，点「自动匹配」却一格不填。
+  修法（一行级）：`internal/core/presets.go:320` 的 `LookupModelLimits(cards[i].ModelID)` 改用 `LookupModelCapability` 的结果，`filled` 仍只统计 context/output；同步更新 `presets_test.go` 里依赖旧口径的计数断言。
+  依据：`MODEL-MANAGEMENT-PLAN.md`（v6）第 270 行本就写「保留 `LookupModelLimits` / `ApplyModelPresets` 的对外签名与行为（内部改为委托能力表）」——实现时只保住了签名，没切换内部口径。注意 `LookupModelLimits` 自身必须保持"只查预设表"，它是能力表的兜底层，改它会递归。
 
 - [ ] **6. 还原点页筛选与分组**
   按 Agent/操作类型/日期过滤；加「清理孤立条目」按钮（顺带解决 1 的存量污染）；回滚前给差异预览（改了哪个文件、几个提供商）。
