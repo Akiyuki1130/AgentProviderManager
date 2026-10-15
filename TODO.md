@@ -40,6 +40,47 @@
 
 ## P2 — 体验与安全
 
+- [x] **17. 模型能力/档位/厂商三阶段改造**（阶段 A + B + C + D 全部完成 2026-10-14）
+  详见 `MODEL-MANAGEMENT-PLAN.md`（v6）。四阶段全部完成：A 修档位缺陷 → B 模型能力表地基 → C 档位自适应 + 高级开关 → D 厂商分组视图。
+  - **阶段 A 已完成**：`canonicalVariant` 取消 `minimal→low` 折叠（A-6 核心）；off 词原拼法经新增卡片字段 `_off_alias` 往返保真（A-1/A-8）；`CardToCfg` 默认档位按集合回落、不再因集合不含 `high` 报错（A-2）；关闭思考语义（A-7，已实测确认 `config.enabled` 是模型启用位而非思考位）；DSH 档位放开到 7 档、不再丢 `medium`/`xhigh`（A-6）；前端三处硬编码档位表收敛为单一真源 `frontend/src/constants/variants.ts`（A-3）；ZCode 侧默认档位控件加「仅对 DSH 生效」提示（A-4）。
+  - **独立验证轮**（三个只读 Agent：需求符合性 / 代码审查 / 改进点）发现并修复了一个**本改动引入的阻断回退 S1**：
+    - **S1**：ZCode v2「关闭思考」不再持久化（关闭后重读开关翻回开启）。两重根因：`CardToCfg` 关闭时仍写完整档位集合；`v2ModelCard` 把 `config.enabled` 误映射进 `reasoning.enabled` 导致读回被布尔覆盖。**修法**：关闭时集合收敛为 `["off"]`（ZCode 真实语义 = 档位集合选中 off 词）；删除 `config.enabled → reasoning.enabled` 映射（`config.enabled` 仍由 merge 原样保留，不丢数据）；档位集合不含 off 词的模型（`glm-5.3`、`kimi-k2.7-code`）思考开关禁用并提示。
+    - **M1**：默认档位策略三处不一致 → 统一为 high 优先（`DefaultVariantPreference` 改序、删死项 `none`）。
+    - **M2**：内部键 `offAlias` 会经 legacy 写入路径落进 ZCode `config.json` → 在 legacy 写盘出口剥离内部下划线键。
+    - **M3**：`enabled` 档位在前端胶囊不可见/不可删 → 集合含 `enabled` 时并入选项。
+    - **M6**：新增文案入 i18n 三语。
+    - **死代码**：删 `OpencodeEffortOrder`（零引用）与 `OpencodeEffortToVariant`（已成 no-op）。
+  - 验证：`go build/vet/test ./...` 全通过，前端 `npm run build` 通过，`git diff --check` 干净。关键测试 `TestS1CloseThinkingPersistsAcrossV2RoundTrip` 端到端锁定关闭持久化。
+  - **阶段 B 已完成（2026-10-14）**：新增 `scripts/sync-model-catalog.mjs`（从 ZCode 自带 `zcode-builtin.json` 抽 `modelRules` 84 条生成 Go 表，带 `--check`）+ `internal/core/model_catalog_gen.go`（84 条 `(?i)^(?:...)$` 预编译正则）+ `internal/core/capability.go`（`LookupModelCapability`：override > 正则全表逐字段覆盖 > presets 兜底；`detectVendor` 19 家族）+ `internal/core/model_overrides.go`（APM 自维护覆盖层）+ `capability_test.go`（14 用例）。
+    - **匹配语义三事实**（实测）：ZCode 是**全串锚定 + 大小写不敏感**；**逐字段覆盖**（非取首条命中）；**有意跳过 `Pattern == ".*"` 纯兜底**，避免把未知模型填成 200000（APM 保留「未知留空」契约）。
+    - **`deepseek-v4.1-flash` 已可自动补全**（ctx 1000000 / out 384000 / 档位 off,low,high,max）——用户点名的诉求由内建规则 `.*deepseek-v4[.-]1-flash` 直接解决（此前失败纯因 `presets.go` 前缀匹配在 `.1` 处断裂）。
+    - **`GuessReasoning` 回归面**：32 个代表模型双向比对，**零 `true→false` 回归**，8 个 `false→true` 修正（`deepseek-v4-flash`、`gpt-5.6-luna`、`glm-4.6`、`glm-5.3-flash`、`kimi-k2.6`、`kimi-k2.7-code` 等过去被误判为不支持思考）。
+    - 卡片新增内部字段 `_vendor` / `_supported_levels`（不写盘，已剥离；前端 DTO 已镜像）。
+    - 集中验证：`go build/vet`、`go test ./... -count=1`（6 包全绿）、`npm run build`、两个 `--check`、`go mod verify`、`git diff --check` 全部通过。
+  - **阶段 C 已完成（2026-10-14）**：档位自适应 + 高级自填开关。
+    - **后端**：新增 `internal/core/variant_policy.go`（`SetCustomVariantsAllowed`/`CustomVariantsAllowed`，`sync.RWMutex`+bool）；`NormalizeVariants` 开关打开时跳过白名单（仍去重 + 归一别名 + **限长 `MaxVariantLen=64` + 禁控制字符**）；`CardToCfg` 尊重开关、`CfgToCard` 补填 `Vendor`/`SupportedLevels`；DSH 新增 `dshEffortForWrite`/`dshEffortForRead` 使读/写对称；`app.go` 新增绑定 + `GetOptions()` 聚合 + `Startup()` 同步。
+    - **前端**：`ModelCard.vue` 用 `_supported_levels` 自适应高亮支持的档位（`.pill.unsupported` 弱化不支持的、仍可点开）、开思考时用支持集合做种子；新增「允许自填推理档位」高级开关（`OptionsPage` + `setting.ts`（走后端 `trackSetter`）+ `api` + `App.vue` 回读）；自填输入并入集合（归一判重、限长）；`ManagePage`/`ImportPage` 批量档位支持态标记 + `uiConfirm` 提示；i18n 八条新键三语齐全。
+    - **C0 决策**：既有 `reasoningAllIntensities` **保留**（语义＝开思考时预置几分档的种子大小），与 C1 自适应、C2 自填三者正交，不合并。
+    - **过程补修**：DSH **读端**原本仍按白名单过滤，导致自填档位「写进去、重读就没了」→ 新增 `dshEffortForRead` 并改读端两处，读/写对称；补 `TestDshCustomEffortReadWriteSymmetry` 与 `TestZCodeCustomVariantRoundTripSymmetry`。
+    - **独立代码审查轮**（只读 Agent）：**无阻断**。修两条应修——① 自填档位名无长度/字符校验 → 加 `MaxVariantLen=64` + 禁控制字符（前后端同帽）；② 批量提示文案称「仅作用于勾选项」而实现是「作用于可见模型」（**阶段 A 之前就如此**）→ 修正文案使与行为一致。另修 ja 文案混入中文字「档」8 处、`commitCustomVariants` 补等价归一、删无实证的 `@@` 注释。
+    - 集中验证：`go build/vet/test ./...`（含 `-shuffle=on`）全绿、`npm run build` OK、两个 `--check` OK、`go mod verify`、`git diff --check` 全部通过。
+  - **阶段 D 已完成（2026-10-14）**：厂商分组视图（纯前端 `ManagePage.vue` + i18n）。
+    - 列表头部新增「按厂商分组」开关（`localStorage: zcpm.vendorGroup`）+ 厂商多选筛选（选项由当前模型集动态生成、带计数、`unknown` 排最后）。
+    - `filteredCards` 仍为**扁平数组**（搜索 → 厂商筛选），既有批量逻辑作用域不变；分组只在渲染层（`groupedCards`），`TransitionGroup` 仍只保留在最外层避免嵌套 FLIP 动画错乱。
+    - 分组头显示厂商显示名 + 模型数，用既有 token、无新配色；**不写盘**（分组/筛选纯视图状态）。
+    - i18n 新增 22 键三语齐全、无 emoji。
+    - 验证：`npm run build`、`vue-tsc --noEmit`、`go test`、`git diff --check`、`wails build` 端到端全通过，并确认标记进入 `frontend/dist` 产物。
+    - 说明：原计划的阶段 D Sub Agent 因**账户余额不足**失败（未产生改动），由主会话直接实现；未做真实窗口的视觉截图核对。
+  - **已提交**：阶段 A + B + C + D 全部改动已于 2026-10-14 随功能提交入库。
+  - **需求符合性结论**：#1（自动配置补全）地基已落地（ZCode 正则 + APM 覆盖层；`deepseek-v4.1-flash` 可补全）；#2 已完成（阶段 A 修缺陷 + 阶段 C 自适应档位与高级自填开关）；#3 已完成（阶段 D 厂商分组视图）。**三项原始需求全部落地。**
+
+- [ ] **18. 补齐模型匹配规则**（用户 2026-10-14 明确指出「差一点规则」，留待后续对话实施）
+  阶段 B 的内建能力表目前只覆盖 ZCode `modelRules` 的 84 条家族规则，覆盖不到的部分模型仍拿不到正确的 context/output/档位。需要补齐两处：
+  1. **ZCode 侧**：把 `zcode-builtin.json` 里**未纳入**的两张表按需并入或另建规则——`providerSiteRules`（54 条，每条绑定 `baseUrlMatch` 网关，需带网关上下文才成立）与 `modelApiRules`（72 条，只有 `reasoningLevel.map` 没有 `values`，需结合 `apiTypeMatch`）。当前只在 `model_catalog_gen.go` 里抽了 `modelRules`。
+  2. **APM 自维护覆盖层**：在 `internal/core/model_overrides.go` 里补脚本抽不到的家族/新模型（该表是手写、可随时追加；前缀键要足够长避免误伤兄弟模型，见文件头注释）。
+  3. **可选（原路线二，本轮未做）**：DSH 内嵌 pi-ai 模型目录（`C:\AppData\DSH Desktop\resources\app.asar` 的 `dsh/node_modules/@earendil-works/pi-ai/dist/providers/data/*.json`，含 `contextWindow`/`maxTokens`/`reasoning`/`thinkingLevelMap`，43 个 provider），只覆盖精确 id，作为精确命中的补充；抽取需按 asar 格式解包。
+  影响面：只影响「自动补全命中率」，不影响既有正确性；改完重跑 `node scripts/sync-model-catalog.mjs`（内建表）或直接编辑覆盖层，并补 `capability_test.go` 回归用例。
+
 - [ ] **6. 还原点页筛选与分组**
   按 Agent/操作类型/日期过滤；加「清理孤立条目」按钮（顺带解决 1 的存量污染）；回滚前给差异预览（改了哪个文件、几个提供商）。
 

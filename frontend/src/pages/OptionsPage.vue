@@ -140,6 +140,16 @@
 
         <div class="opt-row">
           <div class="opt-info">
+            <div class="opt-name">{{ t('options.customVariants', lang) }}</div>
+            <div class="opt-desc">{{ t('options.customVariantsDesc', lang) }}</div>
+          </div>
+          <div class="opt-ctrl">
+            <n-switch :value="settingStore.customVariants" @update:value="onCustomVariantsChange" />
+          </div>
+        </div>
+
+        <div class="opt-row">
+          <div class="opt-info">
             <div class="opt-name">{{ t('options.autoupdate', lang) }}</div>
             <div class="opt-desc">{{ t('options.autoupdateDesc', lang) }}</div>
             <div v-if="updateStore.ready" class="update-ready">{{ t('options.updateDownloaded', lang) }}</div>
@@ -306,6 +316,17 @@ async function onAutoFillChange(v: boolean) {
 function onIntensityChange(v: boolean) {
   settingStore.setReasoningAllIntensities(v)
   toast('success', t('options.intensity', lang.value), t('common.ok', lang.value))
+}
+// C2：自填档位开关有后端持久化，成功才弹成功 toast，失败弹错误并回滚受控开关（照 onAutoFillChange）
+async function onCustomVariantsChange(v: boolean) {
+  const prev = settingStore.customVariants
+  try {
+    await settingStore.setCustomVariants(v)
+    toast('success', t('options.customVariants', lang.value), t('common.ok', lang.value))
+  } catch (e) {
+    settingStore.customVariants = prev
+    toast('error', t('options.customVariants', lang.value), errDetail(e))
+  }
 }
 // 纯客户端偏好，无后端调用：直接落 localStorage 并提示
 function onAutoSaveChange(v: boolean) {

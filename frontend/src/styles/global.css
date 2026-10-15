@@ -144,6 +144,10 @@ input, textarea, [contenteditable='true'] { user-select: text; -webkit-user-sele
 .switch.on { background: var(--accent, #0078d4); }
 .switch.on::after { transform: translateX(20px); }
 .switch:active { transform: scale(0.97); }
+/* 禁用态（如无 off 词、无法表达「关闭思考」的模型）：降透明度 + 禁用指针，
+   仍沿用主题 token（--fluent-text 混合），不写死语义色 */
+.switch:disabled { cursor: not-allowed; opacity: 0.5; }
+.switch:disabled:active { transform: none; }
 /* 自绘勾选框：边框跟主题（#888 死色清除，D2） */
 .check { display: inline-flex; align-items: center; cursor: pointer; flex-shrink: 0; position: relative; }
 .check input { position: absolute; opacity: 0; }
@@ -178,5 +182,9 @@ input, textarea, [contenteditable='true'] { user-select: text; -webkit-user-sele
 .pill:hover { border-color: var(--accent, #0078d4); }
 .pill:focus-visible { outline: none; box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent, #0078d4) 25%, transparent); }
 .pill.checked { border-color: var(--accent, #0078d4); background: color-mix(in srgb, var(--accent, #0078d4) 12%, transparent); color: var(--accent-text-strong, var(--accent)); }
+/* C1：未被内建能力表支持的档位——弱化态（低饱和文字 + 虚线边框），与「已勾选」.checked 明确区分。
+   仍可点开（toggleVariant 不变），用户手动覆盖后照常显示 .checked。全部用现有 token，无写死色。 */
+.pill.unsupported { border-style: dashed; color: var(--fluent-text-soft); opacity: 0.7; }
+.pill.unsupported:hover { opacity: 1; border-color: var(--fluent-text-soft); }
 /* 搜索命中高亮（配合 useHighlight 分段渲染，禁 v-html） */
 mark { background: color-mix(in srgb, var(--warn) 32%, transparent); color: inherit; border-radius: 2px; padding: 0 1px; }

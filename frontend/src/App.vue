@@ -238,6 +238,9 @@ onMounted(async () => {
     if (typeof opts['http_enabled'] === 'boolean') settingStore.setHttpEnabled(opts['http_enabled'] as boolean)
     if (typeof opts['private_hosts_enabled'] === 'boolean') settingStore.setPrivateHostsAllowed(opts['private_hosts_enabled'] as boolean)
     if (typeof opts['auto_fill_limits'] === 'boolean') settingStore.setAutoFillLimits(opts['auto_fill_limits'] as boolean)
+    // C2：自填档位开关回填。与 auto_fill_limits 同款做法（该 setter 也会落后端），保持一致；
+    // 用户主动切换同样走 setCustomVariants，store 侧带乐观更新与失败回滚。
+    if (typeof opts['custom_variants_enabled'] === 'boolean') settingStore.setCustomVariants(opts['custom_variants_enabled'] as boolean)
   } catch { /* ignore */ }
   try {
     const ag = await api.GetCurrentAgent() as Record<string, unknown>
@@ -255,6 +258,8 @@ onMounted(async () => {
     }
     await refreshBackup()
   } catch { /* ignore */ }
+  // M7：agent 回读已结束（无论成功与否），标记解析完成，避免依赖 agent 的提示首帧闪现。
+  settingStore.markAgentResolved()
   if (settingStore.autoUpdate) {
     void updateStore.check(false).then(async () => {
       if (updateStore.available && !updateStore.ready) await updateStore.download()

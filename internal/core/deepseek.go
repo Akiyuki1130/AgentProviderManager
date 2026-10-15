@@ -6,11 +6,93 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"agentprovidermanager/internal/dshprovider"
 	"gopkg.in/yaml.v3"
 )
+
+// dshReasoningEffortOrder 是 DSH（DeepSeek Harness）固定 7 档的顺序，
+// 与 DSH 的 THINKING_LEVELS 完全一致。阶段 A 的 A-6 修复后，读端按此顺序排出档位集合。
+var dshReasoningEffortOrder = []string{"off", "minimal", "low", "medium", "high", "xhigh", "max"}
+
+// dshCanonicalEffort 把配置里出现的档位拼法归一到 DSH 的 7 档之一。
+// 返回 ok=false 表示不是 DSH 认识的档位，调用方应直接丢弃。
+//
+// 语义说明（阶段 A）：
+//   - none / disabled / nothink 是跨 Agent 的 off 等价别名，统一折成 DSH 的 "off"；
+//   - minimal 在 DSH 里是合法且独立的档位，绝不折成 low（旧实现会折叠，属 A-6 缺陷）；
+//   - enabled 是 ZCode 特有的单元素语义，DSH 没有对应档位。这里作兼容映射：视为
+//     「开启思考且未指定档位」，落到 DSH 的默认档位 high。这是兼容而非等价，故单独注释。
+func dshCanonicalEffort(value string) (string, bool) {
+	switch lk := strings.ToLower(strings.TrimSpace(value)); lk {
+	case "none", "disabled", "nothink":
+		return "off", true
+	case "off", "minimal", "low", "medium", "high", "xhigh", "max":
+		return lk, true
+	case "enabled":
+		return "high", true
+	default:
+		return "", false
+	}
+}
+
+// dshSortEfforts 把从 map 迭代收集来的档位按 DSH 固定 7 档顺序排列。
+// map 的迭代顺序随机，不排序会让同一份配置每次读出的档位顺序都不同。
+func dshSortEfforts(v []string) []string {
+	rank := func(s string) int {
+		for i, o := range dshReasoningEffortOrder {
+			if o == s {
+				return i
+			}
+		}
+		return len(dshReasoningEffortOrder)
+	}
+	out := make([]string, len(v))
+	copy(out, v)
+	sort.SliceStable(out, func(i, j int) bool { return rank(out[i]) < rank(out[j]) })
+	return out
+}
+
+// dshHasNonOffEffort 判断 reasoningEfforts 映射里是否至少有一个非 off 档位。
+// DSH 的 zod 约束要求非空 dict 必须声明至少一个非 off 档位。
+func dshHasNonOffEffort(efforts map[string]interface{}) bool {
+	for k := range efforts {
+		if k != "off" {
+			return true
+		}
+	}
+	return false
+}
+
+// dshEffortForWrite 是写端把卡片档位名落到 DSH 的解析：先走 dshCanonicalEffort
+// （别名归一 + 7 档白名单 + enabled→high 兼容）；认不出时，仅在「允许自定义档位」
+// 策略打开时放宽为小写去空格的原始名（空串仍丢弃）。
+//
+// off 语义不受放宽影响：别名（disabled/none/nothink）始终先折成 "off"。
+func dshEffortForWrite(value string) (string, bool) {
+	if lv, ok := dshCanonicalEffort(value); ok {
+		return lv, true
+	}
+	if !CustomVariantsAllowed() {
+		return "", false
+	}
+	lv := strings.ToLower(strings.TrimSpace(value))
+	if lv == "" {
+		return "", false
+	}
+	return lv, true
+}
+
+// dshEffortForRead 是读端把配置里的 DSH 档位名解析回卡片的解析。它只是
+// dshEffortForWrite 的**语义别名**（二者当前行为完全一致）：之所以单独命名，
+// 是为了让读/写两侧的意图在调用点自解释、并在将来某一侧需要分化时不改调用点。
+// 语义：先走 dshCanonicalEffort；认不出时仅在「允许自定义档位」策略打开时保留
+// 小写去空格的原始名。否则用户自填的档位会在保存→重读后消失，使「自填」不可用。
+func dshEffortForRead(value string) (string, bool) {
+	return dshEffortForWrite(value)
+}
 
 func isYAMLPath(path string) bool {
 	low := strings.ToLower(path)
@@ -202,15 +284,14 @@ func ConvertDeepSeekModel(mid string, modelCfg map[string]interface{}, kind stri
 		if re == false {
 			// Explicit non-reasoning marker – do not emit reasoning block.
 		} else if m, ok := re.(map[string]interface{}); ok && len(m) > 0 {
+			// A-6 修复：放开到 DSH 全部 7 档，不再丢 medium/xhigh/enabled，
+			// 且 minimal 不再被折成 low。
 			variants := []string{}
 			seen := map[string]bool{}
 			for k, v := range m {
-				lk := strings.ToLower(strings.TrimSpace(k))
-				switch lk {
-				case "none", "disabled", "nothink":
-					lk = "off"
-				case "minimal":
-					lk = "low"
+				lk, ok := dshEffortForRead(k)
+				if !ok {
+					continue
 				}
 				if lk == "off" {
 					if !seen[lk] {
@@ -219,15 +300,9 @@ func ConvertDeepSeekModel(mid string, modelCfg map[string]interface{}, kind stri
 					}
 					continue
 				}
+				// DSH 的 null 只允许 off 档；非 off 档位必须是字符串拼法。
 				if v == nil {
 					continue
-				}
-				if lk != "low" && lk != "high" && lk != "max" {
-					if vv, ok := OpencodeEffortToVariant[lk]; ok {
-						lk = vv
-					} else {
-						continue
-					}
 				}
 				if !seen[lk] {
 					variants = append(variants, lk)
@@ -235,44 +310,14 @@ func ConvertDeepSeekModel(mid string, modelCfg map[string]interface{}, kind stri
 				}
 			}
 			if len(variants) > 0 {
-				var offPart, rest []string
-				for _, v := range variants {
-					if v == "off" {
-						offPart = append(offPart, v)
-					} else {
-						rest = append(rest, v)
-					}
-				}
-				ordered := []string{}
-				for _, v := range OpencodeEffortOrder {
-					for _, r := range rest {
-						if r == v {
-							ordered = append(ordered, r)
-							break
-						}
-					}
-				}
-				for _, r := range rest {
-					found := false
-					for _, o := range ordered {
-						if o == r {
-							found = true
-							break
-						}
-					}
-					if !found {
-						ordered = append(ordered, r)
-					}
-				}
-				variants = append(offPart, ordered...)
-				if len(variants) == 0 {
-					variants = DefaultVariantsFor(kind)
-				}
+				variants = dshSortEfforts(variants)
 				defaultVariant := ""
 				if preferred, ok := modelCfg["reasoningEffort"].(string); ok {
-					preferred = canonicalVariant(preferred)
-					if containsStr(variants, preferred) {
-						defaultVariant = preferred
+					// 用 DSH 自己的归一化，避免依赖 tokens.go 的 canonicalVariant
+					// （它对 minimal 的历史折叠会误判默认档位）。读端同样尊重
+					// 「允许自定义档位」，否则自填的默认档位重读后会丢失。
+					if pv, ok := dshEffortForRead(preferred); ok && containsStr(variants, pv) {
+						defaultVariant = pv
 					}
 				}
 				if defaultVariant == "" {
@@ -595,9 +640,8 @@ func dshModelToRaw(card ModelCard, _ string) map[string]interface{} {
 	if card.Name != "" && card.Name != card.ModelID {
 		m["name"] = card.Name
 	}
-	// DeepSeek only accepts these four effort names. Keep the source enabled
-	// state independently from the selected variants so cross-agent migration
-	// does not silently turn reasoning off or on.
+	// DSH 的档位集合是固定 7 档（off,minimal,low,medium,high,xhigh,max）。
+	// 保留源 enabled 状态与所选档位相互独立，跨 Agent 迁移才不会静默开/关推理。
 	enabled := card.Reasoning
 	explicit := false
 	if card.RawReasoningEnabled != nil {
@@ -613,30 +657,48 @@ func dshModelToRaw(card ModelCard, _ string) map[string]interface{} {
 		m["reasoningEfforts"] = false
 	case enabled:
 		delete(m, "reasoningEffort")
+		// A-6 修复：白名单放开到 DSH 全部 7 档。只写用户集合里的档位，
+		// 值取档位同名拼法；off 档写 null（DSH 只允许 off 为 null）。
+		//
+		// 阶段 C：放宽开关打开时，非 off 的未知档位名（如 very-high）也保留写进
+		// reasoningEfforts；off 的语义不受放宽影响（off 一律写 null）。
 		re := map[string]interface{}{}
 		for _, v := range card.Variants {
-			v = canonicalVariant(v)
-			if v != "off" && v != "low" && v != "high" && v != "max" {
+			lv, ok := dshEffortForWrite(v)
+			if !ok {
 				continue
 			}
-			if v == "off" {
-				re[v] = nil
+			if lv == "off" {
+				re["off"] = nil
 			} else {
-				re[v] = v
+				re[lv] = lv
 			}
 		}
 		if len(re) == 0 {
+			// 卡片声明开启思考但没有可选档位：补 DSH 的合理默认三档。
 			re = map[string]interface{}{"off": nil, "high": "high", "max": "max"}
+		}
+		if !dshHasNonOffEffort(re) {
+			// DSH 的 zod 约束要求非空字典必须声明至少一个非 off 档位。
+			// 只含 off 的集合无法用字典表达，也不能凭空发明档位，
+			// 于是退化为 DSH 的非推理标记——这与 dshApplyExplicitReasoningOff
+			// 的出口（reasoningEfforts: false）一致。
+			m["reasoningEfforts"] = false
+			break
 		}
 		m["reasoningEfforts"] = re
 		// DeepSeek represents the selected default effort in a separate native
 		// field. Keep it when the source card has one, including an explicit off.
-		defaultVariant := canonicalVariant(card.DefaultVariant)
-		if value, ok := re[defaultVariant]; ok {
-			if defaultVariant == "off" {
-				m["reasoningEffort"] = "off"
+		// 放宽开关打开时，自定义默认档位同样落回它自身。
+		if dv, ok := dshEffortForWrite(card.DefaultVariant); ok {
+			if value, exists := re[dv]; exists {
+				if dv == "off" {
+					m["reasoningEffort"] = "off"
+				} else {
+					m["reasoningEffort"] = value
+				}
 			} else {
-				m["reasoningEffort"] = value
+				delete(m, "reasoningEffort")
 			}
 		} else {
 			delete(m, "reasoningEffort")

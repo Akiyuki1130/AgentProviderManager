@@ -119,7 +119,14 @@ func (zcodeLegacyStore) Upsert(doc Doc, providerID string, p ProviderPayload, op
 			doc["provider"].(map[string]interface{})[newID] = map[string]interface{}{}
 		}
 	}
-	return MergeProviderIntoConfig(doc, newID, providerCfg, opt.MergeModels)
+	merged, err := MergeProviderIntoConfig(doc, newID, providerCfg, opt.MergeModels)
+	if err != nil {
+		return nil, err
+	}
+	// M2：legacy 路径不经 FromLegacy，也没有 guardZCodeV2Doc 兜底，必须在写盘出口剥离
+	// APM 内部键（reasoning.offAlias 等），否则会把内部标记落进用户 config.json。
+	stripAPMInternalModelKeys(merged)
+	return merged, nil
 }
 
 // Delete 照搬 app.go DeleteProvider 中 ZCode 分支的文档变换部分。

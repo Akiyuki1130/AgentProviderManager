@@ -14,6 +14,7 @@ const AGENT_KEY = 'apm:agent'
 const HTTP_KEY = 'apm:http'
 const PRIVATE_HOSTS_KEY = 'apm:privateHosts'
 const AUTOFILL_KEY = 'apm:autofill'
+const CUSTOM_VARIANTS_KEY = 'apm:customVariants'
 const REASONING_ALL_KEY = 'apm:reasoningAll'
 const AUTO_UPDATE_KEY = 'apm:autoUpdate'
 const AUTO_SAVE_KEY = 'apm:autoSave'
@@ -67,10 +68,17 @@ export const useSettingStore = defineStore('setting', () => {
   const lang = ref<Lang>(loadLang())
   const accentColor = ref<string>(loadAccent())
   const agent = ref<AgentID>(loadAgent())
+  // M7：agent 由 App.vue 在挂载时经后端回读，`loadAgent()` 的首帧默认值是本地缓存的
+  // 兜底（可能是 'zcode' 而实际为 'deepseek'）。此标记在回读尝试结束后置真，
+  // 供依赖 agent 的提示（如「仅对 DSH 生效」）在首帧按“未知”处理、避免闪现后消失。
+  const agentResolved = ref<boolean>(false)
   const httpEnabled = ref<boolean>(loadBool(HTTP_KEY, false))
   const privateHostsAllowed = ref<boolean>(loadBool(PRIVATE_HOSTS_KEY, false))
   const autoFillLimits = ref<boolean>(loadBool(AUTOFILL_KEY, true))
   const reasoningAllIntensities = ref<boolean>(loadBool(REASONING_ALL_KEY, false))
+  // C2：允许自填推理档位。与 reasoningAllIntensities 不同——这个开关后端要据此放宽校验，
+  // 因此走 trackSetter 持久化到后端，localStorage 仅作冷启动兜底（默认关闭）。
+  const customVariants = ref<boolean>(loadBool(CUSTOM_VARIANTS_KEY, false))
   const autoSave = ref<boolean>(loadBool(AUTO_SAVE_KEY, true))
   const autoUpdate = ref<boolean>(loadBool(AUTO_UPDATE_KEY, false))
   const systemDark = ref<boolean>(window.matchMedia('(prefers-color-scheme: dark)').matches)
@@ -152,6 +160,14 @@ export const useSettingStore = defineStore('setting', () => {
     reasoningAllIntensities.value = v
     try { localStorage.setItem(REASONING_ALL_KEY, String(v)) } catch { /* ignore */ }
   }
+  // C2：用户主动切换与启动回填共用同一入口——App.vue 启动回读 GetOptions() 时也调用它。
+  // 做法与 setAutoFillLimits 完全一致（该 setter 在回填时同样会落后端），保持一致、不另造回读机制。
+  function setCustomVariants(v: boolean) {
+    const prev = customVariants.value
+    customVariants.value = v
+    persist(CUSTOM_VARIANTS_KEY, String(v))
+    return trackSetter(() => api.SetCustomVariantsEnabled(v), () => { customVariants.value = prev; persist(CUSTOM_VARIANTS_KEY, String(prev)) }, '自填档位选项保存失败')
+  }
   // 纯客户端偏好：无后端调用，只写 localStorage
   function setAutoSave(v: boolean) {
     autoSave.value = v
@@ -165,8 +181,11 @@ export const useSettingStore = defineStore('setting', () => {
     agent.value = a
     try { localStorage.setItem(AGENT_KEY, a) } catch { /* ignore */ }
   }
+  // App.vue 的 agent 回读（GetCurrentAgent / GetTargetConfig）结束后调用：无论成功与否，
+  // 都标记 agent 已解析，让依赖 agent 的提示退出“首帧未知”态。
+  function markAgentResolved() { agentResolved.value = true }
   return {
-    theme, lang, accentColor, agent, httpEnabled, privateHostsAllowed, autoFillLimits, reasoningAllIntensities, autoSave, autoUpdate, systemDark, resolvedLang,
-    initTheme, setTheme, setLang, setAccentColor, setHttpEnabled, setPrivateHostsAllowed, setAutoFillLimits, setReasoningAllIntensities, setAutoSave, setAutoUpdate, setAgent,
+    theme, lang, accentColor, agent, agentResolved, httpEnabled, privateHostsAllowed, autoFillLimits, reasoningAllIntensities, customVariants, autoSave, autoUpdate, systemDark, resolvedLang,
+    initTheme, setTheme, setLang, setAccentColor, setHttpEnabled, setPrivateHostsAllowed, setAutoFillLimits, setReasoningAllIntensities, setCustomVariants, setAutoSave, setAutoUpdate, setAgent, markAgentResolved,
   }
 })

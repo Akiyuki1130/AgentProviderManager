@@ -121,6 +121,22 @@
               <h3>模型列表</h3>
               <div style="display:flex; gap:12px; align-items:center">
                 <n-input v-model:value="manageQuery" placeholder="搜索模型 ID / 名称..." aria-label="搜索模型" clearable style="width: 220px" size="small" @keyup.esc="manageQuery = ''" />
+                <!-- 阶段 D：厂商多选筛选（选项由当前模型集动态生成），与搜索叠加生效 -->
+                <n-select
+                  v-model:value="vendorFilter"
+                  :options="vendorOptions"
+                  :placeholder="t('vendor.filterPlaceholder', lang)"
+                  aria-label="按厂商筛选"
+                  multiple
+                  clearable
+                  :max-tag-count="1"
+                  style="width: 200px"
+                  size="small"
+                />
+                <label class="vendor-group-toggle">
+                  <span>{{ t('vendor.groupToggle', lang) }}</span>
+                  <button class="switch" :class="{ on: vendorGroupOn }" role="switch" :aria-checked="vendorGroupOn" :aria-label="t('vendor.groupToggle', lang)" @click="vendorGroupOn = !vendorGroupOn" />
+                </label>
                 <span class="count-label">{{ filteredCards.length }} / {{ editForm.cards.length }}</span>
                 <n-button size="small" @click="onAddModel"><template #icon><n-icon :component="AddOutline" /></template>手动添加模型</n-button>
               </div>
@@ -136,9 +152,13 @@
               <div class="batch-row batch-row--wrap">
                 <label class="batch-item">思考 <button class="switch" :class="{ on: batchReasoningOn }" role="switch" :aria-checked="batchReasoningOn" aria-label="批量切换思考" @click="batchToggleReasoning" /></label>
                 <span class="batch-group-label">推理档位</span>
-                <span v-for="v in variantOpts" :key="v" class="batch-pill" role="button" tabindex="0" @click="batchToggleVariant(v)" @keydown.enter.prevent="batchToggleVariant(v)" @keydown.space.prevent="batchToggleVariant(v)">{{ v }}</span>
+                <span v-for="v in variantOpts" :key="v" class="batch-pill" :class="{ unsupported: tierAllUnsupported(v) }" role="button" tabindex="0" @click="batchToggleVariant(v)" @keydown.enter.prevent="batchToggleVariant(v)" @keydown.space.prevent="batchToggleVariant(v)">{{ v }}</span>
                 <span class="batch-group-label">默认档位</span>
                 <n-select v-model:value="batchDefault" :options="variantSelectOpts" placeholder="—" style="width: 100px" size="small" clearable @update:value="batchSetDefault" />
+              </div>
+              <!-- C3：说明批量作用域与灰色档位含义；套用不受支持档位时会先确认，不静默写入 -->
+              <div class="batch-row batch-row--wrap">
+                <span class="batch-hint">{{ t('reasoning.batchHint', lang) }}</span>
               </div>
               <div class="batch-row batch-row--wrap">
                 <span class="batch-group-label">上下文长度</span>
@@ -155,7 +175,20 @@
                 <div class="empty-title">尚无模型</div>
                 <n-button size="small" type="primary" ghost :loading="autoRefreshing" @click="onAutoRefresh">从 API 获取模型</n-button>
               </div>
-              <ModelCard v-for="card in filteredCards" :key="card.model_id" :card="card" :agent="settingStore.agent" :query="manageQuery" :show-select="true" @delete="removeCard(card)" @update="onCardUpdate" />
+              <!-- 阶段 D：分组开启时按厂商分段渲染；分组头用 key 参与最外层 TransitionGroup，
+                   卡片仍复用同一 ModelCard 组件。分组只改展示顺序/结构，批量作用域不变。 -->
+              <template v-else-if="vendorGroupOn">
+                <div v-for="g in groupedCards" :key="'grp-' + g.vendor" class="vendor-group">
+                  <div class="vendor-group-head">
+                    <span class="vendor-group-name">{{ vendorLabel(g.vendor) }}</span>
+                    <span class="vendor-group-count">{{ t('vendor.groupCount', lang).replace('{n}', String(g.cards.length)) }}</span>
+                  </div>
+                  <ModelCard v-for="card in g.cards" :key="card.model_id" :card="card" :agent="settingStore.agent" :query="manageQuery" :show-select="true" @delete="removeCard(card)" @update="onCardUpdate" />
+                </div>
+              </template>
+              <template v-else>
+                <ModelCard v-for="card in filteredCards" :key="card.model_id" :card="card" :agent="settingStore.agent" :query="manageQuery" :show-select="true" @delete="removeCard(card)" @update="onCardUpdate" />
+              </template>
             </TransitionGroup>
           </div>
 
@@ -240,6 +273,7 @@ import ModelCard from '../components/ModelCard.vue'
 import KeychainPicker from '../components/KeychainPicker.vue'
 import StickySaveBar from '../components/ui/StickySaveBar.vue'
 import type { ProviderSummary, ModelCard as Card, ProviderEdit, KeychainEntry, ProbeResult } from '../types'
+import { REASONING_VARIANTS, REASONING_VARIANTS_BASIC, pickDefaultVariant } from '../constants/variants'
 import { t } from '../i18n'
 import * as api from '../api'
 
@@ -260,7 +294,7 @@ const isPersisted = ref(false)
 // 最近一次保存失败的后端原文，供自动保存状态行显示
 const lastSaveError = ref('')
 const hideBuiltinNoKey = ref(localStorage.getItem('zcpm.hideBuiltinNoKey') !== '0')
-const variantOpts = computed(() => settingStore.agent === 'deepseek' ? ['off', 'low', 'high', 'max'] : ['off', 'low', 'medium', 'high', 'xhigh', 'max'])
+const variantOpts = REASONING_VARIANTS
 const batchDefault = ref('')
 const batchContext = ref('')
 const batchOutput = ref('')
@@ -303,7 +337,7 @@ const kindOptions = [
   { label: 'Anthropic 兼容 (anthropic)', value: 'anthropic' },
   { label: 'Responses 兼容 (responses)', value: 'responses' },
 ]
-const variantSelectOpts = computed(() => variantOpts.value.map((v) => ({ label: v, value: v })))
+const variantSelectOpts = computed(() => variantOpts.map((v) => ({ label: v, value: v })))
 
 const filteredProviders = computed(() => {
   let list = providers.value
@@ -314,10 +348,48 @@ const filteredProviders = computed(() => {
   if (providerSort.value === 'models') return [...list].sort((a, b) => b.model_count - a.model_count)
   return list
 })
+// 阶段 D：厂商分组视图（纯 APM 内部展示，绝不写盘）。
+// 分组只影响渲染结构；filteredCards 仍是扁平数组，供既有批量逻辑复用。
+// 厂商筛选属于「可见性」的一部分，因此参与 filteredCards（被筛掉的厂商不算可见）。
+const vendorGroupOn = ref(localStorage.getItem('zcpm.vendorGroup') === '1')
+watch(vendorGroupOn, (v) => localStorage.setItem('zcpm.vendorGroup', v ? '1' : '0'))
+const vendorFilter = ref<string[]>([])
+// 卡片所属厂商：_vendor 缺失或为空时归入 unknown。
+function vendorOf(c: Card): string {
+  const v = (c._vendor || '').trim().toLowerCase()
+  return v || 'unknown'
+}
+function vendorLabel(v: string): string {
+  return t(`vendor.${v}`, lang.value)
+}
 const filteredCards = computed(() => {
   const q = manageQuery.value.trim().toLowerCase()
-  if (!q) return editForm.value.cards
-  return editForm.value.cards.filter((c) => ((c.model_id || '') as string).toLowerCase().includes(q) || ((c.name || '') as string).toLowerCase().includes(q))
+  const byVendor = (c: Card) => !vendorFilter.value.length || vendorFilter.value.includes(vendorOf(c))
+  if (!q) return editForm.value.cards.filter(byVendor)
+  return editForm.value.cards.filter((c) => (((c.model_id || '') as string).toLowerCase().includes(q) || ((c.name || '') as string).toLowerCase().includes(q)) && byVendor(c))
+})
+// 当前模型集合里实际出现的厂商（供筛选下拉动态生成），带计数。
+const vendorOptions = computed(() => {
+  const seen = new Map<string, number>()
+  for (const c of editForm.value.cards) {
+    const v = vendorOf(c)
+    seen.set(v, (seen.get(v) || 0) + 1)
+  }
+  return [...seen.entries()]
+    .sort((a, b) => (a[0] === 'unknown' ? 1 : b[0] === 'unknown' ? -1 : a[0].localeCompare(b[0])))
+    .map(([v, n]) => ({ label: `${vendorLabel(v)} (${n})`, value: v }))
+})
+// 按厂商分组后的渲染结构（保留组内既有顺序）。unknown 组始终排最后。
+const groupedCards = computed(() => {
+  const groups = new Map<string, Card[]>()
+  for (const c of filteredCards.value) {
+    const v = vendorOf(c)
+    if (!groups.has(v)) groups.set(v, [])
+    groups.get(v)!.push(c)
+  }
+  return [...groups.entries()]
+    .sort((a, b) => (a[0] === 'unknown' ? 1 : b[0] === 'unknown' ? -1 : a[0].localeCompare(b[0])))
+    .map(([vendor, cards]) => ({ vendor, cards }))
 })
 const allSelected = computed(() => filteredCards.value.length > 0 && filteredCards.value.every((c) => c.select))
 const hasSelected = computed(() => filteredCards.value.some((c) => c.select))
@@ -589,13 +661,61 @@ function removeCard(card: Card) {
 
 function onCardUpdate() { /* reactive */ }
 
+// C3：当前可见模型是否「全部」不支持某档位（列表非空时才判定，避免空列表误标灰）
+function tierAllUnsupported(tier: string): boolean {
+  const list = filteredCards.value
+  return list.length > 0 && list.every((c) => !cardSupportsTier(c, tier))
+}
 function batchSelectAll(v: boolean) { for (const c of filteredCards.value) c.select = v }
 function batchToggleReasoning() {
   const next = !batchReasoningOn.value
-  const onVariants = settingStore.reasoningAllIntensities ? [...variantOpts.value] : ['off', 'high', 'max']
-  for (const c of filteredCards.value) { c.reasoning = next; c._raw_reasoning_enabled = next; if (next && (!c.variants || c.variants.length === 0)) { c.variants = [...onVariants]; c.default_variant = 'high' } else if (!next) { c.variants = []; c.default_variant = '' } }
+  if (next) {
+    const onVariants = settingStore.reasoningAllIntensities ? [...REASONING_VARIANTS] : [...REASONING_VARIANTS_BASIC]
+    for (const c of filteredCards.value) {
+      c.reasoning = true
+      c._raw_reasoning_enabled = true
+      // 集合不含非 off 档位（空或仅 off）时补全档位；否则保持用户已有集合
+      const cur = c.variants || []
+      if (!cur.some((v) => v !== 'off')) {
+        c.variants = [...onVariants]
+        // 默认档位按集合内容挑选（不写死 high），避免集合不含 high 时制造矛盾数据
+        c.default_variant = pickDefaultVariant(c.variants)
+      }
+    }
+    return
+  }
+  // S1：关闭思考 = 档位集合收敛为 ["off"]；集合不含 off 词的模型无法表达关闭，跳过并计数提示。
+  let skipped = 0
+  for (const c of filteredCards.value) {
+    const cur = c.variants || []
+    if (cur.length > 0 && !cur.includes('off')) { skipped++; continue }
+    c.reasoning = false
+    c._raw_reasoning_enabled = false
+    c.variants = ['off']
+  }
+  if (skipped > 0) toast('info', t('reasoning.batchSkipTitle', lang.value), t('reasoning.batchSkipBody', lang.value).replace('{n}', String(skipped)))
 }
-function batchToggleVariant(v: string) {
+// C3：某档位对某模型是否「被支持」＝_supported_levels 存在（非空）且包含它；
+// 未推断到的模型（空/未定义）一律按支持处理，避免误报。自填档位不在内建域内也按支持处理。
+function cardSupportsTier(c: Card, tier: string): boolean {
+  const lv = c._supported_levels
+  if (!lv || lv.length === 0) return true
+  if (!(REASONING_VARIANTS as readonly string[]).includes(tier)) return true
+  return lv.includes(tier)
+}
+// C3：批量套用某档位前，统计当前可见模型中不支持它的数量；有则先确认（不静默写入）。
+async function confirmUnsupportedTier(tier: string): Promise<boolean> {
+  const unsupported = filteredCards.value.filter((c) => !cardSupportsTier(c, tier)).length
+  if (unsupported === 0) return true
+  return await uiConfirm({
+    content: t('reasoning.batchUnsupported', lang.value).replace('{n}', String(unsupported)).replace('{tier}', tier),
+    positiveText: t('common.ok', lang.value),
+  })
+}
+async function batchToggleVariant(v: string) {
+  // 仅「新增档位」需要确认；移除已选档位不涉及写入不支持项，直接执行。
+  const willAdd = filteredCards.value.some((c) => !(c.variants || []).includes(v))
+  if (willAdd && !(await confirmUnsupportedTier(v))) return
   for (const c of filteredCards.value) {
     const arr = c.variants || []
     const idx = arr.indexOf(v)
@@ -605,8 +725,9 @@ function batchToggleVariant(v: string) {
     if (c.default_variant && !arr.includes(c.default_variant)) c.default_variant = arr[0] || ''
   }
 }
-function batchSetDefault(v: string) {
+async function batchSetDefault(v: string) {
   if (!v) return
+  if (!(await confirmUnsupportedTier(v))) return
   for (const c of filteredCards.value) {
     c.reasoning = true
     c._raw_reasoning_enabled = true
@@ -1003,6 +1124,13 @@ onUnmounted(() => {
 .list-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
 .list-header h3 { font-size: 14px; font-weight: 600; }
 .count-label { font-size: 12px; color: var(--fluent-text-soft); }
+/* 阶段 D：厂商分组开关（复用全局 .switch，这里只排布标签与开关） */
+.vendor-group-toggle { display: inline-flex; gap: 6px; align-items: center; font-size: 12px; color: var(--fluent-text); cursor: pointer; }
+/* 分组容器与分组头：沿用既有 token，不引入新配色 */
+.vendor-group { display: flex; flex-direction: column; }
+.vendor-group-head { display: flex; align-items: center; gap: 8px; padding: 6px 4px; margin: 4px 0; border-bottom: 1px solid var(--fluent-border); position: sticky; top: 0; background: var(--fluent-card-bg); z-index: 1; }
+.vendor-group-name { font-size: 12px; font-weight: 600; }
+.vendor-group-count { font-size: 11px; color: var(--fluent-text-soft); }
 .batch-bar { display: flex; flex-direction: column; gap: 8px; padding: 8px 12px; background: var(--fluent-bg); border: 1px solid var(--fluent-border); border-radius: 8px; }
 .batch-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .batch-row--wrap { align-items: center; }
@@ -1013,6 +1141,9 @@ onUnmounted(() => {
 .batch-hint { font-size: 10px; color: var(--fluent-text-soft); opacity: 0.75; }
 .batch-pill { font-size: 11px; border: 1px solid var(--fluent-border); border-radius: 999px; padding: 2px 8px; cursor: pointer; }
 .batch-pill:hover { border-color: var(--accent); }
+/* C3：当前可见模型均不支持的档位弱化（虚框 + 低饱和），与 ModelCard 的 .pill.unsupported 同语义 */
+.batch-pill.unsupported { border-style: dashed; color: var(--fluent-text-soft); opacity: 0.7; }
+.batch-pill.unsupported:hover { opacity: 1; }
 .list-scroll { display: flex; flex-direction: column; min-height: 0; position: relative; }
 @media (max-width: 1099px) { .manage-layout { grid-template-columns: 1fr; } .provider-sidebar { height: auto; max-height: 32vh; } }
 .empty-state { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 24px; color: var(--fluent-text-soft); text-align: center; }

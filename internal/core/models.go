@@ -12,6 +12,12 @@ type ModelCard struct {
 	Output              interface{}            `json:"output"`
 	Select              bool                   `json:"select"`
 	RawReasoningEnabled *bool                  `json:"_raw_reasoning_enabled,omitempty"`
+	// OffAlias 记录配置里 off 档位的原始拼法（disabled / none / nothink）。
+	// ZCode 的档位集合里 off 词随家族变化，写回时必须用原拼法，否则模型 map 表达式匹配不到。
+	OffAlias            string                 `json:"_off_alias,omitempty"`
+	// _vendor / _supported_levels 是 APM 依据内建能力表推断的内部字段，绝不写回配置。
+	Vendor              string                 `json:"_vendor,omitempty"`
+	SupportedLevels     []string               `json:"_supported_levels,omitempty"`
 	Attachment          bool                   `json:"attachment,omitempty"`
 	Modalities          map[string]interface{} `json:"modalities,omitempty"`
 	Headers             map[string]string      `json:"headers,omitempty"`

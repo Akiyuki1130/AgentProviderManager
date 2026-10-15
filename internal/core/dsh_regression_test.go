@@ -175,21 +175,31 @@ func TestDeepSeekCredentialsWriteUpgradesLegacyFormat(t *testing.T) {
 	}
 }
 
-func TestDshReasoningEffortsFilterUnsupportedVariants(t *testing.T) {
-	card := ModelCard{ModelID: "demo", Reasoning: true, Variants: []string{"off", "low", "medium", "high", "xhigh", "max"}, RawCfg: map[string]interface{}{"_dsh_raw": map[string]interface{}{}}}
+// 阶段 A 的 A-6 修复：DSH 档位放开到固定 7 档，medium/xhigh 不再被丢弃，
+// minimal 不再被折成 low。本测试原断言「只 4 档、medium/xhigh 被丢」的旧行为，
+// 已按新行为更新。
+func TestDshReasoningEffortsPreservesAllSevenVariants(t *testing.T) {
+	card := ModelCard{ModelID: "demo", Reasoning: true, Variants: []string{"off", "minimal", "low", "medium", "high", "xhigh", "max"}, RawCfg: map[string]interface{}{"_dsh_raw": map[string]interface{}{}}}
 	raw := dshModelToRaw(card, "openai-compatible")
 	efforts, ok := raw["reasoningEfforts"].(map[string]interface{})
 	if !ok {
 		t.Fatalf("reasoningEfforts=%#v", raw["reasoningEfforts"])
 	}
-	for _, bad := range []string{"medium", "xhigh"} {
-		if _, exists := efforts[bad]; exists {
-			t.Fatalf("unsupported effort %q was written", bad)
+	if len(efforts) != 7 {
+		t.Fatalf("expected all 7 efforts, got %#v", efforts)
+	}
+	for _, want := range []string{"off", "minimal", "low", "medium", "high", "xhigh", "max"} {
+		if _, exists := efforts[want]; !exists {
+			t.Fatalf("effort %q missing: %#v", want, efforts)
 		}
 	}
-	for _, good := range []string{"off", "low", "high", "max"} {
-		if _, exists := efforts[good]; !exists {
-			t.Fatalf("supported effort %q missing", good)
+	// off 必须写 null；非 off 档位置为同名拼法。
+	if efforts["off"] != nil {
+		t.Fatalf("off must map to null, got %#v", efforts["off"])
+	}
+	for _, level := range []string{"minimal", "low", "medium", "high", "xhigh", "max"} {
+		if efforts[level] != level {
+			t.Fatalf("effort %q must equal itself, got %#v", level, efforts[level])
 		}
 	}
 }
@@ -211,15 +221,14 @@ func TestDshReasoningEffortsPreservedFromZCodeCard(t *testing.T) {
 	if !ok {
 		t.Fatalf("reasoningEfforts missing for non-native source: %#v", raw)
 	}
-	for _, good := range []string{"off", "low", "high", "max"} {
+	// A-6 修复后 medium/xhigh 也必须保留。
+	for _, good := range []string{"off", "low", "medium", "high", "xhigh", "max"} {
 		if _, exists := efforts[good]; !exists {
-			t.Fatalf("supported effort %q missing", efforts)
+			t.Fatalf("effort %q missing: %#v", good, efforts)
 		}
 	}
-	for _, bad := range []string{"medium", "xhigh"} {
-		if _, exists := efforts[bad]; exists {
-			t.Fatalf("unsupported effort %q was written", bad)
-		}
+	if raw["reasoningEffort"] != "high" {
+		t.Fatalf("default effort not preserved: %#v", raw["reasoningEffort"])
 	}
 }
 
@@ -303,14 +312,9 @@ func TestZCodeToDeepSeekPreservesReasoningState(t *testing.T) {
 	}
 	model, _ := models[0].(map[string]interface{})
 	efforts, _ := model["reasoningEfforts"].(map[string]interface{})
-	if len(efforts) != 4 || efforts["low"] != "low" || efforts["high"] != "high" || efforts["max"] != "max" {
+	// A-6 修复后 6 档全部保留（源集合没有 minimal）。
+	if len(efforts) != 6 || efforts["off"] != nil || efforts["low"] != "low" || efforts["medium"] != "medium" || efforts["high"] != "high" || efforts["xhigh"] != "xhigh" || efforts["max"] != "max" {
 		t.Fatalf("reasoning efforts were not preserved: %#v", model["reasoningEfforts"])
-	}
-	if _, ok := efforts["medium"]; ok {
-		t.Fatal("unsupported medium effort was written")
-	}
-	if _, ok := efforts["xhigh"]; ok {
-		t.Fatal("unsupported xhigh effort was written")
 	}
 	if model["reasoningEffort"] != "high" {
 		t.Fatalf("default reasoning effort was not preserved: %#v", model["reasoningEffort"])

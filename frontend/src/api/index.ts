@@ -106,6 +106,14 @@ export async function GetAutoFillLimits(): Promise<boolean> {
 export async function SetAutoFillLimits(v: boolean): Promise<Record<string, unknown>> {
   return call('SetAutoFillLimits', v)
 }
+// C2：「允许自填推理档位」开关有后端持久化（后端据此放宽档位名校验），
+// 与纯客户端的 reasoningAllIntensities 不同，故照抄 autoFillLimits 的写法与错误归一。
+export async function GetCustomVariantsEnabled(): Promise<boolean> {
+  try { return (await call('GetCustomVariantsEnabled')) as boolean } catch { return false }
+}
+export async function SetCustomVariantsEnabled(v: boolean): Promise<Record<string, unknown>> {
+  return call('SetCustomVariantsEnabled', v)
+}
 export async function ListAgents(): Promise<Record<string, unknown>> {
   return call('ListAgents')
 }

@@ -104,9 +104,13 @@
         <div class="batch-row batch-row--wrap">
           <label class="batch-item">{{ t('import.reasoning', lang) }} <button class="switch" :class="{ on: batchReasoning }" role="switch" :aria-checked="batchReasoning" :aria-label="t('import.reasoningAria', lang)" @click="batchToggleReasoning" /></label>
           <span class="batch-group-label">{{ t('import.variantTiers', lang) }}</span>
-          <span v-for="v in variantOpts" :key="v" class="pill" role="button" tabindex="0" @click="batchToggleVariant(v)" @keydown.enter.prevent="batchToggleVariant(v)" @keydown.space.prevent="batchToggleVariant(v)">{{ v }}</span>
+          <span v-for="v in variantOpts" :key="v" class="pill" :class="{ unsupported: tierAllUnsupported(v) }" role="button" tabindex="0" @click="batchToggleVariant(v)" @keydown.enter.prevent="batchToggleVariant(v)" @keydown.space.prevent="batchToggleVariant(v)">{{ v }}</span>
           <span class="batch-group-label">{{ t('import.defaultTier', lang) }}</span>
           <n-select v-model:value="batchDefault" :options="variantSelectOpts" placeholder="—" style="width: 100px" size="small" clearable @update:value="batchSetDefault" />
+        </div>
+        <!-- C3：说明批量作用域与灰色档位含义；套用不受支持档位时会先确认，不静默写入 -->
+        <div class="batch-row batch-row--wrap">
+          <span class="batch-hint">{{ t('reasoning.batchHint', lang) }}</span>
         </div>
         <div class="batch-row batch-row--wrap">
           <span class="batch-group-label">{{ t('import.contextLength', lang) }}</span>
@@ -175,6 +179,7 @@ import KeychainPicker from '../components/KeychainPicker.vue'
 import PageHeader from '../components/ui/PageHeader.vue'
 import { staggerMs } from '../composables/useStagger'
 import type { ModelCard as Card, KeychainEntry, ProbeResult } from '../types'
+import { REASONING_VARIANTS, REASONING_VARIANTS_BASIC, pickDefaultVariant } from '../constants/variants'
 import { t } from '../i18n'
 import * as api from '../api'
 
@@ -197,7 +202,7 @@ const importing = ref(false)
 const mergeChk = ref(true)
 const showKeychainPicker = ref(false)
 const manualRefreshInfo = ref<{ id: string; name: string } | null>(null)
-const variantOpts = computed(() => settingStore.agent === 'deepseek' ? ['off', 'low', 'high', 'max'] : ['off', 'low', 'medium', 'high', 'xhigh', 'max'])
+const variantOpts = REASONING_VARIANTS
 const batchDefault = ref('')
 const batchContext = ref('')
 const batchOutput = ref('')
@@ -212,7 +217,7 @@ const kindOptions = computed(() => [
   { label: t('import.kindAnthropic', lang.value), value: 'anthropic' },
   { label: t('import.kindResponses', lang.value), value: 'responses' },
 ])
-const variantSelectOpts = computed(() => variantOpts.value.map((v) => ({ label: v, value: v })))
+const variantSelectOpts = computed(() => variantOpts.map((v) => ({ label: v, value: v })))
 const filteredCards = computed(() => {
   const q = searchQuery.value.trim().toLowerCase()
   if (!q) return cards.value
@@ -341,14 +346,63 @@ async function doImport() {
 function batchSelectAll(v: boolean) { for (const c of filteredCards.value) c.select = v }
 function batchToggleReasoning() {
   const next = !batchReasoning.value
-  const onVariants = settingStore.reasoningAllIntensities ? [...variantOpts.value] : ['off', 'high', 'max']
-  for (const c of filteredCards.value) { c.reasoning = next; c._raw_reasoning_enabled = next; if (next && (!c.variants || c.variants.length === 0)) { c.variants = [...onVariants]; c.default_variant = 'high' } else if (!next) { c.variants = []; c.default_variant = '' } }
+  if (next) {
+    const onVariants = settingStore.reasoningAllIntensities ? [...REASONING_VARIANTS] : [...REASONING_VARIANTS_BASIC]
+    for (const c of filteredCards.value) {
+      c.reasoning = true
+      c._raw_reasoning_enabled = true
+      // 集合不含非 off 档位（空或仅 off）时补全档位；否则保持用户已有集合
+      const cur = c.variants || []
+      if (!cur.some((v) => v !== 'off')) {
+        c.variants = [...onVariants]
+        // 默认档位按集合内容挑选（不写死 high），避免集合不含 high 时制造矛盾数据
+        c.default_variant = pickDefaultVariant(c.variants)
+      }
+    }
+    return
+  }
+  // S1：关闭思考 = 档位集合收敛为 ["off"]；集合不含 off 词的模型无法表达关闭，跳过并计数提示。
+  let skipped = 0
+  for (const c of filteredCards.value) {
+    const cur = c.variants || []
+    if (cur.length > 0 && !cur.includes('off')) { skipped++; continue }
+    c.reasoning = false
+    c._raw_reasoning_enabled = false
+    c.variants = ['off']
+  }
+  if (skipped > 0) toast('info', t('reasoning.batchSkipTitle', lang.value), t('reasoning.batchSkipBody', lang.value).replace('{n}', String(skipped)))
 }
-function batchToggleVariant(v: string) {
+// C3：某档位对某模型是否「被支持」＝_supported_levels 存在（非空）且包含它；
+// 未推断到的模型（空/未定义）一律按支持处理。自填档位不在内建域内也按支持处理。
+function cardSupportsTier(c: Card, tier: string): boolean {
+  const lv = c._supported_levels
+  if (!lv || lv.length === 0) return true
+  if (!(REASONING_VARIANTS as readonly string[]).includes(tier)) return true
+  return lv.includes(tier)
+}
+// C3：当前可见模型是否「全部」不支持某档位（列表非空时才判定，避免空列表误标灰）
+function tierAllUnsupported(tier: string): boolean {
+  const list = filteredCards.value
+  return list.length > 0 && list.every((c) => !cardSupportsTier(c, tier))
+}
+// C3：批量套用某档位前，统计当前可见模型中不支持它的数量；有则先确认（不静默写入）。
+async function confirmUnsupportedTier(tier: string): Promise<boolean> {
+  const unsupported = filteredCards.value.filter((c) => !cardSupportsTier(c, tier)).length
+  if (unsupported === 0) return true
+  return await uiConfirm({
+    content: t('reasoning.batchUnsupported', lang.value).replace('{n}', String(unsupported)).replace('{tier}', tier),
+    positiveText: t('common.ok', lang.value),
+  })
+}
+async function batchToggleVariant(v: string) {
+  // 仅「新增档位」需要确认；移除已选档位不涉及写入不支持项，直接执行。
+  const willAdd = filteredCards.value.some((c) => !(c.variants || []).includes(v))
+  if (willAdd && !(await confirmUnsupportedTier(v))) return
   for (const c of filteredCards.value) { const arr = c.variants || []; const idx = arr.indexOf(v); if (idx >= 0) arr.splice(idx, 1); else { arr.push(v); c.reasoning = true; c._raw_reasoning_enabled = true }; c.variants = [...arr]; if (c.default_variant && !arr.includes(c.default_variant)) c.default_variant = arr[0] || '' }
 }
-function batchSetDefault(v: string) {
+async function batchSetDefault(v: string) {
   if (!v) return
+  if (!(await confirmUnsupportedTier(v))) return
   for (const c of filteredCards.value) {
     c.reasoning = true
     c._raw_reasoning_enabled = true

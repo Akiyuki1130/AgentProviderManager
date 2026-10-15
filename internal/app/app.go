@@ -73,6 +73,7 @@ func (a *App) Startup(ctx context.Context) {
 	a.loadAgentState()
 	core.SetHTTPAllowed(a.httpEnabled())
 	core.SetPrivateHostsAllowed(a.privateHostsAllowed())
+	core.SetCustomVariantsAllowed(a.customVariantsEnabled())
 }
 
 func (a *App) Shutdown(_ context.Context) {}
@@ -776,6 +777,26 @@ func (a *App) SetAutoFillLimits(v bool) map[string]interface{} {
 	return map[string]interface{}{"success": true}
 }
 
+// GetCustomVariantsEnabled 读取“允许自定义推理档位”策略（默认关闭）。
+func (a *App) GetCustomVariantsEnabled() interface{} {
+	on, _ := a.loadSettings()["custom_variants_enabled"].(bool)
+	return on
+}
+
+// SetCustomVariantsEnabled 保存“允许自定义推理档位”策略，并同步进 core。
+// 与 SetPrivateHostsAllowed 同一写法：先落盘，成功后把策略推给 core（含 a.mu 保护）。
+func (a *App) SetCustomVariantsEnabled(v bool) map[string]interface{} {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	settings := a.loadSettings()
+	settings["custom_variants_enabled"] = v
+	if !a.saveSettings(settings) {
+		return map[string]interface{}{"success": false, "error": "自定义档位设置保存失败"}
+	}
+	core.SetCustomVariantsAllowed(v)
+	return map[string]interface{}{"success": true}
+}
+
 // GetOptions returns every persisted user option in one call.
 func (a *App) GetOptions() map[string]interface{} {
 	s := a.loadSettings()
@@ -788,13 +809,18 @@ func (a *App) GetOptions() map[string]interface{} {
 	if v, ok := s["auto_fill_limits"].(bool); ok {
 		autoFill = v
 	}
+	customVariants, _ := s["custom_variants_enabled"].(bool)
+	// GetOptions 是前台启动后必调的第一个聚合读接口，在此把策略同步进 core，
+	// 保证“界面已读到该开关”时 core 的放宽策略也一定就绪（默认 false）。
+	core.SetCustomVariantsAllowed(customVariants)
 	return map[string]interface{}{
-		"theme":                 theme,
-		"language":              lang,
-		"accent":                accent,
-		"http_enabled":          httpOn,
-		"private_hosts_enabled": privateOn,
-		"auto_fill_limits":      autoFill,
+		"theme":                   theme,
+		"language":                lang,
+		"accent":                  accent,
+		"http_enabled":            httpOn,
+		"private_hosts_enabled":   privateOn,
+		"auto_fill_limits":        autoFill,
+		"custom_variants_enabled": customVariants,
 	}
 }
 
@@ -818,6 +844,12 @@ func (a *App) autoFillLimits() bool {
 		return v
 	}
 	return true
+}
+
+// customVariantsEnabled reports the persisted custom-variant policy (default off).
+func (a *App) customVariantsEnabled() bool {
+	on, _ := a.loadSettings()["custom_variants_enabled"].(bool)
+	return on
 }
 
 func (a *App) GuessProviderID(baseURL string) interface{} {

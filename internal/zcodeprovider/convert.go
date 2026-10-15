@@ -53,6 +53,9 @@ var legacyLimitKnownKeys = map[string]bool{
 
 var legacyReasoningKnownKeys = map[string]bool{
 	"variants": true,
+	// offAlias 是 APM 在“卡片 -> legacy 中间形态”往返时写入的内部字段，
+	// 记录 off 词的原始拼法；它不是用户手写的 legacy 字段，列入已知键避免被误报为丢失。
+	"offAlias": true,
 }
 
 var legacyModalitiesKnownKeys = map[string]bool{
@@ -221,14 +224,24 @@ func modelRuleFromLegacy(pid, mid string, mraw map[string]interface{}) map[strin
 	if len(optionSpecs) > 0 {
 		mcfg["optionSpecs"] = optionSpecs
 	}
+	// 注意：这里绝不写 mcfg["enabled"]。v2 modelRule 的 config.enabled 是「该模型是否
+	// 启用」的启用位（内建数据里只出现在 templateModelRules/builtinProviderModelRules），
+	// 与「是否开启思考」无关。legacy 中间形态的 reasoning.enabled 只服务于卡片/DSH 语义，
+	// 写进 config.enabled 会把模型在列表里误关。
 	return rule
 }
 
 // legacyReasoningVariants 把 legacy 的 reasoning.variants 映射为 reasoningLevel.values。
 //
 // ZCode 代码里的 resolveLegacyReasoningLevel 会把新值 "disabled" 映射回旧的 level，
-// 且内建数据的取值集合是 ["disabled","enabled"] / ["low","high","max"]，
-// 因此这里必须把旧值 "off" 改名为 "disabled"。
+// 且内建数据的取值集合是 ["disabled","enabled"] / ["low","high","max"]，因此规范 off 值
+// "off" 需要改名为 "disabled"。
+//
+// off 词的具体拼法必须保真（修 A-1）：values 里的 off 词要落在该模型原始集合内——
+// 用户配置里原本是什么就写回什么。规则：
+//   - reasoning["offAlias"]（APM 卡片往返时记下的原拼法）存在时，用它统一替换 off 词；
+//   - 缺失时，仅把规范拼法 "off" 兜底改名成 ZCode 侧规范拼法 "disabled"，
+//     而 none / nothink / disabled 这类原拼法原样保留（它们就是用户配置里的拼法）。
 func legacyReasoningVariants(mraw map[string]interface{}) []string {
 	reasoning, _ := mraw["reasoning"].(map[string]interface{})
 	if reasoning == nil {
@@ -238,12 +251,27 @@ func legacyReasoningVariants(mraw map[string]interface{}) []string {
 	if len(raw) == 0 {
 		return nil
 	}
+	offAlias := ""
+	switch strings.ToLower(strings.TrimSpace(stringValue(reasoning["offAlias"]))) {
+	case "disabled", "none", "nothink":
+		offAlias = strings.ToLower(strings.TrimSpace(stringValue(reasoning["offAlias"])))
+	}
 	out := make([]string, 0, len(raw))
 	seen := map[string]bool{}
 	for _, v := range raw {
 		v = strings.ToLower(strings.TrimSpace(v))
-		if v == "off" {
-			v = "disabled"
+		switch v {
+		case "off":
+			if offAlias != "" {
+				v = offAlias
+			} else {
+				v = "disabled"
+			}
+		case "none", "disabled", "nothink":
+			if offAlias != "" {
+				v = offAlias
+			}
+			// 无 offAlias 时保留用户原拼法，不强行改写。
 		}
 		if v == "" || seen[v] {
 			continue

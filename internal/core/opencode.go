@@ -27,10 +27,10 @@ func ConvertOpencodeModel(mid string, modelCfg map[string]interface{}, kind stri
 			if item, ok := value.(map[string]interface{}); ok && item["disabled"] == true {
 				continue
 			}
+			// OpenCode 的档位拼法直接经 canonicalVariant 归一：none/disabled/nothink
+			// 折成 "off"，其余（含 minimal）原样保留。旧的 OpencodeEffortToVariant
+			// 查表已删除——它的键在归一后恒 miss，属死代码。
 			v := canonicalVariant(key)
-			if mapped, ok := OpencodeEffortToVariant[v]; ok {
-				v = mapped
-			}
 			if !ZCodeVariantSet[v] {
 				continue
 			}

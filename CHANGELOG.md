@@ -9,6 +9,9 @@
 - **钥匙串 ↔ 提供商联动。** API Key 字段新增 `从钥匙串`（对受 DPAPI 保护的条目做可搜索的拾取弹窗并填入字段）与 `存入钥匙串`（把当前密钥存为具名条目）。所选关联记录在应用侧 `settings.json`（`keychain_links`，`agent|providerID` → 条目 id——ZCode 严格的 v2 schema 禁止在 `provider_config.json` 内做间接引用，因此 harness 配置仍保留解析后的真实值），在字段下方以同步 chip 呈现（覆盖 / 更新钥匙串 / 解除），钥匙串行上显示 `N 提供商` 徽标。绑定：`GetKeychainLinks`、`SetKeychainLink`、`RemoveKeychainLink`。
 - **可移植备份导出 / 导入（`apm-backup v1`）。** 还原点页现在把当前 Agent 的提供商（全部或指定）导出为 JSON 信封，并经既有 `ImportProvider` 路径导回，因此每个导入的提供商都会自动获得自己的备份 + 还原点。是否含密钥与加密方式是两个正交选项：不含密钥（默认，可安全分享——`StripBackupKeys` 清除 `APIKey`、`options_json` 内的 `apiKey` 以及原始行）或含密钥；载荷可封为明文（plain——含密钥导出需要一次显式的“仍然导出”确认弹窗）、默认加密（sealed：以程序内置种子的 SHA-256 为密钥的 AES-256-GCM，任意设备上的本程序均可解密，能防止被直接当作明文读取，但不防有人提取该种子）或密码加密（标准库 `crypto/pbkdf2` SHA-256，60 万次迭代 + AES-256-GCM；元数据在解锁前保持锁定——`InspectBackup` 返回 `needs_password`，错误密码会在 GCM tag 上失败）。用不含密钥的备份覆盖已有提供商时会保留其本地 API Key（与 `MergeConfig` 的保护一致），自定义 headers 等非敏感 `options_json` 能经导入往返。文件以 0600 写入；密码绝不落盘。
 - 管理页的提供商侧栏过滤与排序：一个匹配名称/id 的搜索框加一个排序下拉（默认顺序 / 名称 / 模型数），表头计数切换为 `filtered / total`。
+- **模型能力表与自动补全（阶段 B）。** 新增 `scripts/sync-model-catalog.mjs`：从 ZCode 自带资源 `zcode-builtin.json` 抽取 `modelConfigRules.modelRules` 的 84 条家族规则，生成预编译 Go 表 `internal/core/model_catalog_gen.go`（`(?i)^(?:…)$` 全串锚定 + 大小写不敏感，与 ZCode 内部分配器一致；`--check` 幂等校验，可作为提交前手工闸门）。`internal/core/capability.go` 的 `LookupModelCapability` 按「APM 自维护覆盖层（`internal/core/model_overrides.go`）> 内建规则逐字段覆盖 > `presets.go` 兜底」取值，并同时给出厂商归属（19 个家族正则）。有意跳过 `.*` 纯兜底规则，未知模型保持「留空」契约。此前因前缀匹配断裂而匹配不到的 `deepseek-v4.1-flash` 等模型现在能自动补全上下文（1000000）、输出（384000）与档位（off/low/high/max）；`GuessReasoning` 改由能力表驱动（32 个代表模型比对：零 `true→false` 回归、8 个 `false→true` 修正）。
+- **思考档位自适应 + 「允许自填推理档位」高级开关（阶段 C）。** 模型卡片按能力表弱化显示该模型不支持的档位（虚线胶囊，仍可手动点选），开启思考时以支持集合作为种子。选项页新增高级开关（写入 `settings.json`，默认关闭）：打开后档位名跳过白名单（仍去重、归一别名、限长 64 字符并拒绝控制字符），前后端同一上限；DSH 读写两端对称放行，自填档位不再「写进去、重读即消失」。
+- **厂商分组视图（阶段 D，仅 APM 内部）。** 模型列表新增「按厂商分组」开关（`localStorage` 记忆）与厂商多选筛选（选项按当前模型集动态生成、带计数、unknown 排最后）。分组只在渲染层，批量操作作用域不变（仍为当前筛选出的可见模型），分类结果绝不写入配置文件。
 
 ### 变更（UI）
 
@@ -22,9 +25,11 @@
 - **行为修正（仅前端）。** 选项页的开关现在返回后端结果并在失败时用错误 toast 回滚，而不再先弹成功 toast 再吞掉错误；钥匙串页与导入页显示区分开的 loading 与错误态，不再把失败伪装成“暂无条目”；批量上下文/输出输入框改文案为“输入后回车应用”并在回车时校验；钥匙串的显示标签与实际的全局显示状态一致。
 - **其余页面的 i18n 补齐。** `KeychainPage` 与 `MigratePage` 完全接入 `t()`，导入页的硬编码字符串移入字典，`main.ts` 里的全局错误 toast 也已本地化；三套字典（zh / en / ja）保持同步，字符串本身的 emoji 前缀已移除（图标留在模板层）。
 - **按 Agent 门控的 ZCode 区块。** ZCode 配置格式卡与旧版导入卡是 ZCode 独有的概念，在 DeepSeek Harness 下不再渲染（也不探测）；后续区块相应前移其错峰入场序号，避免出现动画空档。
+- **模型卡档位交互。** 不支持的档位改为虚线弱化胶囊（仍可点开），支持集合来自能力表；档位集合不含 off 词的模型（如 `glm-5.3`、`kimi-k2.7-code`）思考开关禁用并给出原因；ZCode 侧的「默认档位」控件加「仅对 DSH 生效」提示；批量档位操作提示文案与实际作用域（当前筛选出的可见模型）一致。
 
 ### 修复
 
+- **档位往返与「关闭思考」的一批缺陷（阶段 A）。** off 档位的原始拼法（`disabled` / `none` / `nothink`）经卡片内部字段 `_off_alias` 原样保真，不再被统一改写导致 ZCode 的 `map` 表达式匹配不到；ZCode v2 的「关闭思考」现在真正持久化——按其真实语义把档位集合收敛为单元素 off 词（此前关闭后重读会翻回开启），并删除 `config.enabled → reasoning.enabled` 的错误映射（`config.enabled` 是模型启用位、与思考无关，仍原样保留不丢数据）；默认档位改为按集合回落（优先 high，否则集合内首个非 off 档），不再因集合不含 `high` 而拒绝保存；DSH 档位放开到全部 7 档，`medium` / `xhigh` 不再在读写中被丢弃，`minimal` 不再被折叠成 `low`；legacy 写盘出口剥离 APM 内部键（`offAlias` 等下划线前缀 meta），不再把它们落进用户 `config.json`。顺带删除死代码 `OpencodeEffortOrder` / `OpencodeEffortToVariant`，前端三处硬编码档位表收敛为单一真源 `frontend/src/constants/variants.ts`。
 - `go test` 不再污染真实还原点目录：`internal/core` 里的 `TestZCodeToDeepSeek...`、`TestDeepSeekToZCode...` 与三个 `ApplyLegacyImport` 测试此前只沙箱化了 `DSH_HOME`，把迁移/导入快照写进了 `%LOCALAPPDATA%\AgentProviderManager\restorepoints`。现在它们把 `LOCALAPPDATA`（以及 `USERPROFILE`，并为反向迁移的目标存储列表清空 `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE`）固定到 `t.TempDir()`，与 `setupMigrateTest` 一致。
 
 ## 2.0.8 — 2026-10-13

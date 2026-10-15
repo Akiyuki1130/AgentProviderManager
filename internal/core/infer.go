@@ -14,7 +14,28 @@ func ProviderIDValid(id string) bool {
 	return providerIDRe.MatchString(strings.TrimSpace(id))
 }
 
+// GuessReasoning 推断模型是否支持思考。优先看内建能力表：只要推断出的档位集合里
+// 存在非 off 档（含 zcode 特有的 "enabled"）即视为支持；能力表给不出档位时回落到
+// ReasoningKeywords 关键词表（保持阶段 A 之前的行为）。
+//
+// 保持无参签名供各处直接调用；批量路径（BuildModelCards）先用
+// guessReasoningFromCapability 复用已算好的能力条目，避免每个模型重跑一遍能力表正则。
 func GuessReasoning(modelID string) bool {
+	cap, _ := LookupModelCapability(modelID)
+	return guessReasoningFromCapability(modelID, cap)
+}
+
+// guessReasoningFromCapability 用已经算好的能力条目判定「是否支持思考」。
+// 档位集合非空时以「存在非 off 档位」为准；否则回落关键词表。
+func guessReasoningFromCapability(modelID string, cap ModelCapability) bool {
+	if len(cap.ReasoningLevels) > 0 {
+		for _, v := range cap.ReasoningLevels {
+			if v != "off" {
+				return true
+			}
+		}
+		return false
+	}
 	low := strings.ToLower(modelID)
 	for _, kw := range ReasoningKeywords {
 		if strings.Contains(low, kw) {

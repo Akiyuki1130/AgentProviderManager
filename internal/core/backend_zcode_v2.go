@@ -327,16 +327,28 @@ func v2ModelCard(modelID string, mr map[string]interface{}) ModelCard {
 	}
 	if values := zcodeprovider.ModelReasoningLevelValues(mcfg); len(values) > 0 {
 		variants := make([]interface{}, 0, len(values))
+		offAlias := ""
 		for _, v := range values {
-			if v == "disabled" {
-				v = "off"
-			}
+			// 契约要求：原始串原样放进 variants（不在这里改拼法），并记下 off 词的
+			// 原拼法。规范化和 off→off 折叠由 CfgToCard/NormalizeVariants 负责，
+			// 这样原始拼法才能一路带到写回侧（修 A-1/A-8）。
 			variants = append(variants, v)
+			if offAlias == "" {
+				switch strings.ToLower(strings.TrimSpace(v)) {
+				case "disabled", "none", "nothink":
+					offAlias = strings.ToLower(strings.TrimSpace(v))
+				}
+			}
 		}
 		reasoning := map[string]interface{}{"variants": variants}
-		if enabled, ok := zcodeprovider.ModelEnabled(mcfg); ok {
-			reasoning["enabled"] = enabled
+		if offAlias != "" {
+			reasoning["offAlias"] = offAlias
 		}
+		// 注意：绝不把 config.enabled 映射进 reasoning["enabled"]。内建数据实证
+		// config.enabled 是「模型是否在模板/列表里默认启用」的启用位，与「是否开启思考」
+		// 无关（详见 mergeV2ModelRuleConfig 注释）。映射进去会让 CfgToCard 采信这个布尔
+		// 而跳过由 values 反推，导致关闭思考（values=["disabled"]）读回仍是开启，S1 无法
+		// 持久化。config.enabled 由 mergeV2ModelRuleConfig 原样保留，不在此处消费。
 		legacy["reasoning"] = reasoning
 	}
 	if format := zcodeprovider.ModelInputFormat(mcfg); format != nil {
@@ -398,8 +410,14 @@ func mergeV2Child(dst map[string]interface{}, key string, src map[string]interfa
 	}
 }
 
-// mergeV2ModelRuleConfig 保留已有模型规则里本包未建模的合法字段：
+// mergeV2ModelRuleConfig 保留已有模型规则里本包未建模、或本次提交无从表达的合法字段：
 // config.enabled，以及 optionSpecs 下各选项的 map（取值映射，不能丢）。
+//
+// 语义提醒（A-7）：config.enabled 是「该模型是否在模板/列表里默认启用」的启用位，
+// 与「是否开启思考」无关——内建数据里它只出现在 templateModelRules/builtinProviderModelRules，
+// modelRules/modelApiRules 里一处都没有。ZCode 的「关闭思考」只通过
+// optionSpecs.reasoningLevel（选中 off 词）表达。因此这里对 enabled 只做
+// “prev 有、incoming 未写则保留”的兜底，绝不把它与卡片 Reasoning 语义关联。
 func mergeV2ModelRuleConfig(incoming, prev map[string]interface{}) {
 	if v, ok := prev["enabled"]; ok {
 		if _, exists := incoming["enabled"]; !exists {
@@ -408,6 +426,15 @@ func mergeV2ModelRuleConfig(incoming, prev map[string]interface{}) {
 	}
 	prevSpecs := zcodeprovider.ModelOptionSpecs(prev)
 	if len(prevSpecs) == 0 {
+		return
+	}
+	incomingSpecs := zcodeprovider.ModelOptionSpecs(incoming)
+	if incomingSpecs == nil {
+		// incoming 完全没写 optionSpecs（例如关闭思考且卡片档位为空）：把 prev 的
+		// optionSpecs 整体带过来。这是 A-8 的关键修复——单元素 off 集合（["disabled"]）
+		// 读回卡片后可能不再写出任何 optionSpecs，若此处 continue 会让档位与 map
+		// 一并被静默丢弃。整体保留即可同时保住 values 与 map。
+		incoming["optionSpecs"] = deepCopyMap(prevSpecs)
 		return
 	}
 	for _, key := range []string{"reasoningLevel", "maxOutputTokens"} {
@@ -419,12 +446,23 @@ func mergeV2ModelRuleConfig(incoming, prev map[string]interface{}) {
 		if !ok {
 			continue
 		}
-		specs := zcodeprovider.ModelOptionSpecs(incoming)
-		if specs == nil {
-			continue
-		}
-		if cur, _ := specs[key].(map[string]interface{}); cur != nil {
+		if cur, _ := incomingSpecs[key].(map[string]interface{}); cur != nil {
 			cur["map"] = raw
+		}
+	}
+	// reasoningLevel 特例：incoming 有 optionSpecs 但没有 reasoningLevel 键时
+	// （例如本次只写了 maxOutputTokens），把 prev 的 reasoningLevel 整项带过来。
+	// 抉择理由：APM 唯一能表达档位的载体就是 values；incoming 未写它说明本次提交
+	// 没有要表达的档位，保留 prev 的 values+map 比清空更符合“不丢数据”的既定不变量，
+	// 也正是 A-8「单元素 off 集合丢档位」要修的场景。
+	//
+	// 刻意取舍（M5）：由此一来，当 prev 已有 reasoningLevel 时，本次提交无法通过
+	// “不写档位”来显式清空它（清空会被这里还原）。这是有意为之——保留 map/档位
+	// 优先于“可清空”。真正要关闭思考走的是 S1：把集合收敛为 ["off"] 显式写出，
+	// 而不是提交空集合。
+	if _, ok := incomingSpecs["reasoningLevel"]; !ok {
+		if prevRL, ok := prevSpecs["reasoningLevel"]; ok {
+			incomingSpecs["reasoningLevel"] = deepCopyValue(prevRL)
 		}
 	}
 }

@@ -9,6 +9,17 @@ export interface ModelCard {
   output: string | number
   select: boolean
 	_raw_reasoning_enabled?: boolean | null
+	/** 配置里 off 档位的原始拼法（disabled / none / nothink），前端原样透传、不解释语义。 */
+	_off_alias?: string
+	/**
+	 * APM 依据内建模型能力表推断的厂商（小写标识，未知为 unknown）。纯展示、不写盘。
+	 */
+	_vendor?: string
+	/**
+	 * APM 推断的该模型支持档位集合（规范化后的 off/强度档）。用于 UI 自适应启用；
+	 * 为空表示未推断到（展示全集不高亮）。绝不写回配置。
+	 */
+	_supported_levels?: string[]
 	attachment?: boolean
 	modalities?: Record<string, unknown>
 	headers?: Record<string, string>
