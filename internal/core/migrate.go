@@ -52,7 +52,15 @@ func ensureDeepSeekDefaultModel(cfg map[string]interface{}) {
 	}
 }
 
+// readRawText 读取配置文件原文用于迁移预览。返回的文本一律脱敏：预览会渲染进界面，
+// 明文密钥没有必要出现在那里（用户核对的是结构，不是密钥本身），
+// 真正的写入路径照旧使用完整配置。
 func readRawText(path string) (string, string) {
+	text, format := readRawConfigText(path)
+	return RedactSensitive(text, nil), format
+}
+
+func readRawConfigText(path string) (string, string) {
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return "", ""
 	}

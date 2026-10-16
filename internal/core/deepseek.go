@@ -385,10 +385,12 @@ func ConvertDeepSeekModel(mid string, modelCfg map[string]interface{}, kind stri
 // （见 MODEL-MANAGEMENT-PLAN.md 10.1.3：MODALITIES = {text, image}）。
 var dshModalityOrder = []string{"text", "image"}
 
-// dshCapabilityModalities 取输入模态与 DSH 合法词表 {text,image} 的交集，按规范序去重。
-// 交集为空时返回 nil：调用方据此整键省略——DSH 的 schema 既拒收空数组，也拒收
-// text/image 之外的词（video/pdf/audio）。
-func dshCapabilityModalities(words []string) []string {
+// dshKnownModalities 把任意来源的词表收敛到 DSH 的合法取值 {text,image}：按 dshModalityOrder
+// 排序去重，非法词（video/pdf/audio 等 DSH schema 会拒收的词）一律丢弃；交集为空返回 nil
+// （调用方据此整键省略——DSH 的 schema 既拒收空数组，也拒收 text/image 之外的词）。
+//
+// 它只管「收敛」，不管 text 的补齐：那是读端与写端**刻意不同**的地方，见下面两个函数。
+func dshKnownModalities(words []string) []string {
 	known := map[string]bool{}
 	for _, word := range NormalizeInputModalities(words) {
 		known[word] = true
@@ -399,7 +401,51 @@ func dshCapabilityModalities(words []string) []string {
 			out = append(out, word)
 		}
 	}
+	if len(out) == 0 {
+		return nil
+	}
 	return out
+}
+
+// dshCapabilityModalities 是**写端**（dshModelToRaw）用的收敛：交集非空时结果必含 text。
+//
+// 为什么要强制含 text：DSH 模型级的 `input` 是**完整集合**语义——写了 `["image"]` 就等于
+// 声明「这个模型不接受文本输入」（路由级 defaultInput 默认 `["text"]`，一旦显式写出就整段
+// 取代它）。而中立层的能力位一律三态、只承载「已知为真」的正向事实：它**从来没有「text 为
+// 假」的证据**，缺 text 只说明上游这条数据没给出这个事实（例如能力位表里某条只记了
+// supportsImage）。把「缺证据」翻译成「不支持文本」正是本层要挡住的错误——APM 绝不写出一个
+// 声明「不支持文本」的集合。
+//
+// 注意与读端的**刻意不对称**（见 dshReadInputModalities）：读端忠实照读配置里显式写出的
+// `input`，写端则保证「非空集合必含 text」。代价是：一条手写的 `input: ["image"]` 条目在被
+// APM 保存后会变成 `["text","image"]`——这是**放宽而非收窄**、用户可见的变化，也是有意为之
+// （宁可把「不接受文本」这种可疑声明放宽，也不让 APM 的写入路径产生它）。
+func dshCapabilityModalities(words []string) []string {
+	out := dshKnownModalities(words)
+	if len(out) == 0 {
+		return nil
+	}
+	// text 是 dshModalityOrder 的首位，因此命中时它必然已经在 out[0]；未命中则前插。
+	if out[0] != "text" {
+		out = append([]string{"text"}, out...)
+	}
+	return out
+}
+
+// dshReadInputModalities 是**读端**对 DSH 模型节点 `input` 的忠实读取（与写端不对称，见
+// dshCapabilityModalities）：
+//   - `input` 键**存在**：按原样读——只做合法词过滤与去重（dshKnownModalities），**不补 text**。
+//     DSH 的 input 是完整集合语义，显式写出 `["image"]` 就是用户的明确声明，读回时强补 text
+//     等于把声明改宽；键存在但读不出任何合法词（null / 空数组 / 全非法词）时不记任何模态
+//     （fail-closed，不凭空补 text）；
+//   - `input` 键**缺失**：DSH 走路由级 `defaultInput = ["text"]`，即「文本始终可用」是 DSH
+//     侧的既定语义，因此按 [text] 记。
+func dshReadInputModalities(modelCfg map[string]interface{}) []string {
+	raw, present := modelCfg["input"]
+	if !present {
+		return []string{"text"}
+	}
+	return dshKnownModalities(apmModalityWords(raw))
 }
 
 // dshInputModalities 读卡片已知的输入模态候选，优先级：
@@ -429,7 +475,8 @@ var dshCompatCapabilityKeys = []apmCapabilityKeyMap{
 }
 
 // dshCapabilitiesFromModel 从 DSH 模型节点反向读出已知为真的能力位：
-//   - input（DSH 只接受 text/image）→ input_modalities；
+//   - input（DSH 只接受 text/image）→ input_modalities，走读端口径 dshReadInputModalities：
+//     键存在时**忠实照读**（不补 text），键缺失时按 DSH 的 defaultInput=["text"] 记 [text]；
 //   - compat.supportsStrictMode → structured_output；
 //   - compat.supportsTemperature → temperature。
 //
@@ -439,7 +486,7 @@ func dshCapabilitiesFromModel(modelCfg map[string]interface{}) map[string]interf
 	compat, _ := modelCfg["compat"].(map[string]interface{})
 	flags := apmTrueCapabilityFlags(compat, dshCompatCapabilityKeys)
 	return apmCapabilitiesPayload(
-		dshCapabilityModalities(apmModalityWords(modelCfg["input"])),
+		dshReadInputModalities(modelCfg),
 		nil,
 		flags...,
 	)
@@ -707,9 +754,10 @@ func dshModelToRaw(card ModelCard, _ string) map[string]interface{} {
 	delete(m, "source")
 	delete(m, "kind")
 	// DSH 的模型级 input 只接受 text/image（MODALITIES = {text, image}，见 10.1.3）。
-	// 这里把卡片已知的输入模态收敛到两者的交集：早先的实现把 `modalities.input`
-	// 原样不过滤地搬进 `input`，一旦含 video/pdf/audio 就会被 DSH 的 schema 拒收，
-	// 连整份配置都会失效。
+	// 这里把卡片已知的输入模态收敛到两者的交集（dshCapabilityModalities：非空交集必含
+	// text，理由与「读端忠实、写端保证」这一有意不对称的代价见该函数注释）：早先的实现把
+	// `modalities.input` 原样不过滤地搬进 `input`，一旦含 video/pdf/audio 就会被 DSH 的
+	// schema 拒收，连整份配置都会失效。
 	// 交集为空则**整键省略**（既不写空数组，也不写 false/null）——不能给 DSH 塞一个
 	// 它无法表达的输入模态集合。
 	if inputs := dshCapabilityModalities(dshInputModalities(card)); len(inputs) > 0 {

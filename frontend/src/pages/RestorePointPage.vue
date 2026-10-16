@@ -217,6 +217,7 @@
             <div v-for="p in inspect.providers || []" :key="p.id" class="bk-provider">
               <span class="bk-pname">{{ p.name || p.id }}</span>
               <span class="bk-psub">{{ p.id }} · {{ t('restorePoints.bkModels', lang).replace('{n}', String(p.model_count)) }} · {{ p.has_api_key ? t('restorePoints.bkHasKey', lang) : t('restorePoints.bkNoKey', lang) }}</span>
+              <span v-if="p.base_url" class="bk-purl" :title="p.base_url">{{ t('restorePoints.bkBaseUrl', lang) }}{{ p.base_url }}</span>
             </div>
           </div>
           <label class="bk-label">{{ t('restorePoints.bkConflict', lang) }}</label>
@@ -646,9 +647,21 @@ async function onImportBackup() {
       return
     }
     toast('success', t('restorePoints.importTitle', lang.value),
-      t('restorePoints.importResult', lang.value).replace('{imported}', String((res.imported || []).length)).replace('{skipped}', String((res.skipped || []).length)))
+      // 「跳过」的计数要与实际跳过口径一致：命中 key_conflict 的 provider 因「Key 与备份里的
+      // base_url 不同源」被后端整条 continue，既不在 imported 也不在 skipped 里，只出现在独立的
+      // key_conflict 键；漏算它会让成功提示少报。冲突清单本身仍在下方 .bk-error 块里展示。
+      t('restorePoints.importResult', lang.value)
+        .replace('{imported}', String((res.imported || []).length))
+        .replace('{skipped}', String((res.skipped || []).length + (res.key_conflict || []).length)))
     const failed = res.failed || []
-    if (failed.length > 0) importError.value = t('restorePoints.importPartial', lang.value) + '\n' + failed.map((f) => `· ${f.id}：${f.error}`).join('\n')
+    const conflicts = res.key_conflict || []
+    const blocks: string[] = []
+    if (failed.length > 0) blocks.push(t('restorePoints.importPartial', lang.value) + '\n' + failed.map((f) => `· ${f.id}：${f.error}`).join('\n'))
+    if (conflicts.length > 0) {
+      blocks.push(t('restorePoints.importKeyConflict', lang.value) + '\n' + conflicts
+        .map((c) => `· ${c.id}（${c.local_base_url || '—'} → ${c.backup_base_url || '—'}）`).join('\n'))
+    }
+    if (blocks.length > 0) importError.value = blocks.join('\n\n')
     else showImport.value = false
     // 导入会创建新的还原点，刷新列表
     await loadPoints()
@@ -727,9 +740,10 @@ onMounted(async () => {
 .bk-radios :deep(.n-radio-group) { display: flex; flex-direction: column; gap: 4px; }
 .bk-list-box { display: flex; flex-direction: column; gap: 6px; max-height: 180px; overflow-y: auto; border: 1px solid var(--fluent-border); border-radius: 8px; padding: 8px 10px; background: var(--fluent-bg); }
 .bk-check { display: flex; gap: 8px; align-items: center; cursor: pointer; min-width: 0; }
-.bk-provider { display: flex; gap: 12px; align-items: baseline; justify-content: space-between; min-width: 0; }
+.bk-provider { display: flex; gap: 12px; align-items: baseline; justify-content: space-between; min-width: 0; flex-wrap: wrap; }
 .bk-pname { font-size: 12px; font-weight: 600; word-break: break-all; }
 .bk-psub { font-size: 11px; color: var(--fluent-text-soft); word-break: break-all; text-align: right; }
+.bk-purl { flex-basis: 100%; font-size: 11px; color: var(--fluent-text-soft); word-break: break-all; text-align: right; }
 .bk-info { display: flex; flex-direction: column; gap: 4px; border: 1px solid var(--fluent-border); border-radius: 8px; padding: 8px 12px; background: var(--fluent-bg); }
 .bk-info-row { display: flex; gap: 12px; align-items: center; justify-content: space-between; }
 .bk-info-row > span:first-child { font-size: 11px; color: var(--fluent-text-soft); white-space: nowrap; }

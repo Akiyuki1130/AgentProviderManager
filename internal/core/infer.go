@@ -29,16 +29,27 @@ func GuessReasoning(modelID string) bool {
 // 档位集合非空时以「存在非 off 档位」为准；否则回落关键词表。
 func guessReasoningFromCapability(modelID string, cap ModelCapability) bool {
 	if len(cap.ReasoningLevels) > 0 {
-		for _, v := range cap.ReasoningLevels {
-			if v != "off" {
-				return true
-			}
-		}
-		return false
+		return hasNonOffLevel(cap.ReasoningLevels)
 	}
 	low := strings.ToLower(modelID)
 	for _, kw := range ReasoningKeywords {
 		if strings.Contains(low, kw) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasNonOffLevel 判断档位集合里是否存在非 off 档（含 zcode 特有的 "enabled"）。
+// 「有档位枚举但只有 off」是合法输入（表示只能关闭思考），这种集合一律判为不支持思考。
+//
+// 抽成函数是为了让同一口径同时服务两处：按能力表推断思考支持
+// （guessReasoningFromCapability），以及按 **provider 自报的档位** 推断思考支持
+// （BuildModelCardsForSite 里 `_supported_levels` 非空且含非 off 档的情形）——后者是
+// API 事实，必须与能力表推断同口径，否则会出现「卡片列出了档位却说它不支持思考」。
+func hasNonOffLevel(levels []string) bool {
+	for _, v := range levels {
+		if v != "off" {
 			return true
 		}
 	}

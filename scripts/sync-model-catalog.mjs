@@ -70,7 +70,9 @@ const intOf = (v) => (typeof v === 'number' && Number.isFinite(v) ? Math.trunc(v
 //
 // 只把 `true` 编成 '1'：显式 `false` 与键缺失在编码上都落成 '-'。为什么把 false 也当 '-'？
 // 因为本表只承载「已知为真」的正向事实，解析端 '0' 与 '-' 等价（都表示未知、不落盘），
-// 多记一个 '0' 只会让生成物变长而没有任何消费方。
+// 多记一个 '0' 只会让生成物变长而没有任何消费方。模态两段的取词规则见下面 IMPLIED_TRUE_KEYS：
+// **输入段才有「text 缺键即真」这一个例外，而且以 inputFormat 整段存在为前提**（段缺失 =
+// 这一层不参与输入面，保持空段）；输出段没有例外（这个不对称是刻意的，理由见该常量注释）。
 const FEATURE_FLAG_ORDER = 'tjwmaT'
 const INPUT_MODALITY_FIELDS = [
   ['text', 'supportsText'],
@@ -82,6 +84,46 @@ const INPUT_MODALITY_FIELDS = [
 // ZCode v2 的输出面只有 outputFormat.supportsText 一位。
 const OUTPUT_MODALITY_FIELDS = [['text', 'supportsText']]
 
+// IMPLIED_TRUE_KEYS 是「**缺键即默认支持**」的能力键，且**只在输入方向、且只在输入段存在时生效**。
+//
+// 输入侧用它的依据是内建资源自身的写法：ZCode 的输入面能表达全部 5 种模态，语义是「text 是
+// 默认项，其余模态都是在 text 之上追加的增量」——modelRules 84 条里唯一写了
+// inputFormat.supportsText 的正是兜底规则 `modelMatch: ".*"`，而且它写的是 true；其余 83 条
+// 只写 supportsImage/Video/Audio/Pdf。也就是说 ZCode 只把**非默认项**写出来，缺键表示「沿用
+// 默认」，不是「未知、更不是不支持」。providerSiteRules 是同一套写法。若照搬严格的 === true，
+// 抽出来的输入模态会丢掉 text（例如只有 supportsImage: true 的规则会得到 `image`），而下游
+// 中立层对模态是整字段「前层胜出」，这个残缺集合会把离线目录（models.dev）给出的完整集合整段
+// 挡住，最终让 DSH 写出 `input: [image]`——那在 DSH 里是「不接受文本输入」的完整集合语义。
+//
+// **但「缺 text 键」与「缺整个 inputFormat 段」是两回事，必须分开**：
+//   - `inputFormat` 是对象 ⇒ 这一层声明了输入面，里面缺 supportsText 才等于「沿用默认 true」；
+//   - `inputFormat` 整段缺失（含 null / 非对象）⇒ 这一层**完全不碰输入面**，没有任何输入模态可抽。
+// 依据是 ZCode 的 overlay 是**逐键**语义（ModelInputFormatConfig.overlay 对
+// supportsText/Image/Video/Audio/Pdf 逐个 overlayValue：`n === void 0 ? keep : n`）——省略某
+// 个键 = 不覆盖该键，整段缺失 = 五个键一个都不参与。整段缺失时若仍按 implied 产出
+// `text||…`，就是把「这一层没说话」翻译成「输入只有 text」，而它在分层求值里会按「前层胜出」
+// 收窄整条输入面（实测 `api.z.ai/api/anthropic` + anthropic-messages 这类协议变体条目会把
+// 目录里上千个 id 的输入收窄成 text）。这个口径与 v2 读端完全一致：zcodeprovider 的
+// InputFormatModalities 在 `format == nil` 时返回 nil，只有段存在时才按 implied 读 text。
+// 实测 providerSiteRules 54 条里 23 条整段没有 inputFormat（都是后置的协议变体条目，只带
+// 标志位），modelRules 里 2 条（`.*\[1m\]`、`.*(?:ox-alpha|glm-x-preview-f|x-preview-f-free).*`）。
+//
+// **输出侧刻意不对称，必须保持严格 `=== true`**：ZCode 的输出面只有
+// `outputFormat.supportsText` 这一位，它**根本无法表达 audio / image / video / pdf 输出**。
+// 「输出缺键即默认 text」一旦按整字段胜出，就会用「输出只有 text」抹掉下层对非文本输出模型的
+// 正确读数。实测两个受害者：`mimo-v2.5-tts` 被家族规则 `.*mimo-v2\.5(?:[.\-:/\[].*)?` 命中，
+// 而离线目录给的是 `text|audio`；`gpt-6-astra` 被家族规则 `.*gpt-6-astra(?:[.\-:/\[].*)?` 命中，
+// 目录给的是 `text,image,pdf|text,image`。这两条规则整段都没写 outputFormat，因为输出侧除了
+// text 它没有别的词可写——缺键只说明「这条规则没提输出」，不构成「输出只有 text」的证据。
+// 输入侧则相反：缺 text 时它完全有能力写别的模态，只是把默认项省略了。
+// 严格语义下输出段只会由显式写了 supportsText: true 的规则产生（内建兜底规则 `.*` 就是），
+// 因此「输出段非空必含 text」这条不变量依然成立。
+//
+// supportsImage/Video/Audio/Pdf 与四个能力位（supportsToolCall / JsonSchemaOutput /
+// NativeWebSearch / MidConversationSystem）一律维持严格的 === true：它们是叠加在 text 之上的
+// 增量，缺键只说明这条规则没提到它，把它当「支持」就是凭空猜测。
+const IMPLIED_TRUE_KEYS = new Set(['supportsText'])
+
 // extractFeatures 把一条规则 config.properties 里的能力位编成紧凑串。
 // 无任何已知为真的位时返回空串——**只有真的有能力位才写非空串**，这样生成物的每一行
 // 要么带真实信息、要么保持最小的空串，跨次重生成不会产生噪音 diff。
@@ -89,11 +131,20 @@ const OUTPUT_MODALITY_FIELDS = [['text', 'supportsText']]
 // 有意不抽：requiresMfjsToolSchema、optionSpecs.*.map、config.enabled（见文件头说明）。
 function extractFeatures(properties) {
   const props = properties && typeof properties === 'object' ? properties : {}
-  const inputFmt = props.inputFormat && typeof props.inputFormat === 'object' ? props.inputFormat : {}
+  // inputFormat 整段缺失（含 null / 非对象）时保留 null：这一层完全不碰输入面（见 IMPLIED_TRUE_KEYS）。
+  const inputFmt = props.inputFormat && typeof props.inputFormat === 'object' ? props.inputFormat : null
+  // 输出段没有 implied 键（严格 === true），因此「缺段」与「空段」结果相同，不需要这个区分。
   const outputFmt = props.outputFormat && typeof props.outputFormat === 'object' ? props.outputFormat : {}
-  const words = (fields, source) => fields.filter(([, key]) => source[key] === true).map(([word]) => word)
-  const input = words(INPUT_MODALITY_FIELDS, inputFmt)
-  const output = words(OUTPUT_MODALITY_FIELDS, outputFmt)
+  // 已知为真 = 显式 true，或（**仅当 implied=true 时**）「缺键即默认支持」的键
+  // （IMPLIED_TRUE_KEYS，目前只有 text 这位）且未被显式写成 false。
+  // 输入段传 implied=true、输出段传 false——这个不对称是刻意的，理由见 IMPLIED_TRUE_KEYS 注释。
+  // words 按字段表的规范序过滤，因此 text 补进来时仍在首位。
+  const known = (source, key, implied) =>
+    source[key] === true || (implied && IMPLIED_TRUE_KEYS.has(key) && source[key] !== false)
+  const words = (fields, source, implied) => fields.filter(([, key]) => known(source, key, implied)).map(([word]) => word)
+  // 输入段：段不存在（null）⇒ 空段；段存在 ⇒ 内部缺 supportsText 键按 implied 补 text。
+  const input = inputFmt === null ? [] : words(INPUT_MODALITY_FIELDS, inputFmt, true)
+  const output = words(OUTPUT_MODALITY_FIELDS, outputFmt, false)
   const flags = [
     props.supportsToolCall === true, // t
     props.supportsJsonSchemaOutput === true, // j
@@ -114,6 +165,49 @@ const featuresLit = (features) => JSON.stringify(features)
 // 只有真的抽到能力位的那几条规则才会多出 `, Features: "..."` 这一段，跨次重生成不会把
 // 全表行都刷一遍。
 const featuresField = (e) => (e.features === '' ? '' : `, Features: ${featuresLit(e.features)}`)
+
+// ---- 生成物自检 ----------------------------------------------------------------
+//
+// 两个计数器：整段没有 inputFormat 的规则条数（生成模式下会打出来），以及自检失败次数。
+let inputFormatMissingCount = 0
+let validationFailures = 0
+
+// checkMissingInputFormat 核对「源数据里 inputFormat 整段缺失的规则，产出里不能有输入模态段」
+// （依据见 IMPLIED_TRUE_KEYS 的整段缺失说明）。这里刻意**重新读源数据**判断，不复用
+// extractFeatures 的内部判定：抽取逻辑一旦被改回「整段缺失也 implied text」，这条闸门立刻报错。
+function checkMissingInputFormat(where, rule, features) {
+  const raw = rule && rule.config ? rule.config.properties : null
+  const segmentPresent = !!raw && typeof raw.inputFormat === 'object' && raw.inputFormat !== null
+  if (segmentPresent) return true
+  inputFormatMissingCount++
+  const inputSegment = features === '' ? '' : String(features).split('|')[0]
+  if (inputSegment !== '') {
+    console.error(
+      `${where}中有规则缺少 inputFormat 段（${JSON.stringify(rule?.modelMatch ?? rule?.baseUrlMatch ?? '')}），` +
+        `整段缺失表示这一层不参与输入面，却产出了输入模态 "${inputSegment}"：${features}`
+    )
+    return false
+  }
+  return true
+}
+
+// checkEncodingShape 校验产出的编码形状（与 internal/core/capability_features.go 的
+// parseFeatureEncoding 共享契约）：要么是空串（整条省略 Features 字段），要么恰好三段、flags
+// 恰好 6 位，且**至少有一个已知为真的位**——三段全空/全 '-' 的占位串没有任何信息，按契约必须
+// 整条省略，否则只会制造噪音 diff。
+function checkEncodingShape(where, features) {
+  if (features === '') return true
+  const segments = String(features).split('|')
+  if (segments.length !== 3 || segments[2].length !== FEATURE_FLAG_ORDER.length) {
+    console.error(`${where}的 Features 编码形状非法（应为 <输入>|<输出>|6 位 flags）：${features}`)
+    return false
+  }
+  if (segments[0] === '' && segments[1] === '' && !segments[2].includes('1')) {
+    console.error(`${where}的 Features 编码没有任何已知为真的位（应整条省略该字段）：${features}`)
+    return false
+  }
+  return true
+}
 
 // 内建的兜底规则 `modelMatch: ".*"`（表里第一条）带着满格能力位（supportsText /
 // supportsToolCall / outputFormat.supportsText 皆为 true）。本脚本**照常抽取**它——它确实
@@ -141,6 +235,9 @@ for (const rule of modelRules) {
   if (output !== 0) outputCount++
   if (levels !== null) levelsCount++
   if (features !== '') featuresCount++
+  // 生成物自检（见上方「生成物自检」一节）：整段缺 inputFormat 的规则不得带输入段，编码形状合法。
+  if (!checkMissingInputFormat('modelRules', rule, features)) validationFailures++
+  if (!checkEncodingShape('modelRules', features)) validationFailures++
 
   // Pattern 保留 ZCode 原始拼写；Re 需要与 ZCode 内部分配器行为一致：
   // 全串锚定（^(?:...)$）且大小写不敏感（(?i)）——provider 返回的模型名通常是小写。
@@ -273,7 +370,21 @@ for (const rule of siteRules) {
   const levels = Array.isArray(rawLevels) ? rawLevels.filter((s) => typeof s === 'string') : null
   const features = extractFeatures(rule?.config?.properties)
   if (features !== '') siteFeaturesCount++
+  // 生成物自检：与 modelRules 同一口径（providerSiteRules 里整段缺 inputFormat 的条目更多，
+  // 且它们现在排在家族正则之前，收窄输入的危害更大）。
+  if (!checkMissingInputFormat('providerSiteRules', rule, features)) validationFailures++
+  if (!checkEncodingShape('providerSiteRules', features)) validationFailures++
   siteEntries.push({ modelRe, baseRe, apiRe, context, output, levels, features })
+}
+
+// 生成物自检闸门：任何一条不过就直接退出，**不写出任何文件**（宁可保留旧生成物，也不写出
+// 会把输入面收窄的错误表）。
+if (validationFailures > 0) {
+  console.error(`生成物自检失败：共 ${validationFailures} 处（详见上方报错），未写出任何文件。`)
+  process.exit(2)
+}
+if (!checkOnly) {
+  console.log(`输入面自检通过：${inputFormatMissingCount} 条规则整段没有 inputFormat（这一层不参与输入面），其输入段均为空。`)
 }
 
 const siteEol = existsSync(join(root, siteTarget)) ? eolOf(readFileSync(join(root, siteTarget), 'utf8')) : '\r\n'

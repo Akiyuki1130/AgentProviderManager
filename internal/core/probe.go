@@ -125,12 +125,9 @@ func probeChat(root, model, apiKey, kind string) ProbeStep {
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
-	client := &http.Client{
-		Timeout: 15 * time.Second,
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
+	client := newGuardedClient(15*time.Second, func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	})
 	resp, err := client.Do(req)
 	if err != nil {
 		code := "CONN"

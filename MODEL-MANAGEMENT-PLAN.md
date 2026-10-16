@@ -683,7 +683,7 @@ toolCall、jsonSchemaOutput、nativeWebSearch、midConversationSystem）；仍**
   `temperature`。需在开发者机跑**一次** `--update-snapshot`（联网）重裁快照；此后 `--check` 仍完全离线幂等。
 - **编码决策**：新增**并列产物** `internal/core/capability_features_gen.go`（`map[string]string`，值形如
   `text,image|text|1-0--1`，flags 固定顺序 `t(oolCall) j(sonSchema) w(ebSearch) m(idConv) a(ttachment) T(emperature)`，
-  每字符 `1`/`0`/`-`），**不动**现有 2303 行 `ctx|out|levels` 与它「恰好三段、fail-closed」的解析器及测试。
+  每字符 `1`/`0`/`-`），**不动**现有 2305 行 `ctx|out|levels` 与它「恰好三段、fail-closed」的解析器及测试。
   理由：零风险、`--check` diff 最小、旧解析契约不破。只收录「有能力的 id」。
 
 **`internal/core/model_overrides.go`**：条目可选带 features 列，供手工纠偏。
@@ -794,6 +794,225 @@ toolCall、jsonSchemaOutput、nativeWebSearch、midConversationSystem）；仍**
     闸门 + 能力层不变量 + `useCapabilityFill`）、`UI-GUIDELINES.md`（composable 表、`.pill.inferred`、
     「能力位是三态」）、`README.md`（中英文功能清单与用户指南）、`SECURITY.md`（能力表随程序分发、
     运行时不向社区目录发请求）。
+
+### 10.9 复核轮（2026-10-15，两路只读审计 + 四条修复）
+
+**触发**：阶段 E 落地后用探针 `internal/core/zz_probe_test.go` 对用户两个网关的 90 个模型做覆盖率对账，发现 **34 个 id 的输入模态不含 text**（`claude-fable-5` 只有 `image,pdf`）。
+
+**根因（第一手实测）**：ZCode 内建 `modelRules` 84 条里 `inputFormat` 只有 1 条写 `supportsText`——正是有意跳过的兜底规则 `.*`（值 true）；`outputFormat` 83 条整键缺失。即 **text 是默认项、其余模态是叠加的增量**。生成脚本原来只收「显式为真」的位，抽出的输入集合因此残缺；又因层间对模态是**整字段「前层胜出」**，残缺集合把下层 models.dev 的完整集合整段挡住。可见后果：卡片不勾「文本」（连「推断支持」也不标）、DSH 落出 `input: [image]`（DSH 的 `input` 是完整集合语义，等于声明「不接受文本输入」，且自动补全默认开启）。
+
+**asar 证据（本次亲自复核）**：
+
+- 规则数组拼接顺序：`[...modelRules, ...modelApiRules, ...providerSiteRules, ...templateModelRules, ...builtinProviderModelRules]`（`parseZCodeBuiltinModelConfigRules`），个人精确规则追加在最后；`resolve()` 顺序遍历、命中即 `n=n.overlay(o.config)` ⇒ **后命中者胜，站点规则覆盖家族规则**。⇒ 这是 10.2.4 契约里层序的**修正依据**：APM 的求值链改为 `provider 自报 > override > site > zcode > presets > catalog`。
+- 逐键 overlay：`overlayValue(t,n){return n===void 0?t:n}`，`ModelInputFormatConfig.overlay` 对 supportsText/Image/Video/Audio/Pdf 逐个应用 ⇒ **省略键 = 不覆盖**，而 **整段缺失 = 本层不声明输入面**（两者必须区别对待）。
+- 个人规则写盘是**最小增量**：`fLn(e,t,n,r){n===r?delete e[t]:e[t]=n}`（与继承值相等就删键）；个人规则表单的默认值是 `{supportsText:n?.supportsText??!0, supportsImage/Video/Audio/Pdf:??!1}` ⇒ 个人规则里 **`supportsText` 缺键 = 默认支持文本**。
+
+**四条修复**：
+
+1. **F1 层序**：`capability.go` 把站点层上移到家族正则之前（`provider 自报 > override > site > zcode > presets > catalog`）。修正前实测：`zcode.z.ai` 系列站点规则下 420+ 个目录 id 丢 image+video、`api.deepseek.com` 下 `deepseek-v4-flash*` 丢 image、`opencode.ai/zen/go/v1` 下 14 例 out + 12 例 ctx/档位与 ZCode 生效值不符。锁定旧层序的用例改名重写（`TestLookupCapabilityForSiteSiteBeatsFamilyRule`），另加一条真实生成表的对照用例（层序倒回即红）。
+2. **F2 生成期 implied**：`inputFormat.supportsText` **段存在时**「缺键即真、显式 `false` 才排除」；**整段缺失不产出模态段**（23 条站点规则 + 2 条家族规则属此类，否则它们会在 F1 之后把下层收窄——实测各约 98 个 id 丢 image/video）。输出侧刻意不 implied（ZCode 输出面只有 `supportsText` 一位，一旦胜出会把 `mimo-v2.5-tts` / `gpt-6-astra` 的非文本输出抹成文本）。
+3. **F3 v2 读端**：`zcodeprovider.InputFormatModalities` 成为唯一读路径（`supportsText` 缺键即真、整段缺失返回 nil），`v2ApmCapabilities` / `v2LegacyModelCfg` / `cardFeaturesFromV2Properties` 统一走它；`_apm_capabilities` 内部通道仍严格三态。
+4. **F4 DSH 读/写拆分**：写端 `dshCapabilityModalities` 交集非空必含 text（绝不写出「不支持文本」的集合）；读端 `dshReadInputModalities` 对显式存在的 `input` 忠实照读、键缺失时按 DSH 的 `defaultInput=["text"]` 记。代价：手写的 `input:["image"]` 被保存一次后放宽为 `["text","image"]`（放宽而非收窄，有意为之）。
+
+**同轮审计的未修项**（两路只读审计：同类缺陷 + 安全不变量）记入 `TODO.md` **第 22 项**（安全类，含「无密钥备份导入把本地真实 Key 挂到文件里的 baseUrl」等）与第 18 项残留（能力层：只给布尔档位被写成默认档位集合、legacy 出口删除 `modalities`、opencode 写端缺 `_` 剥离等）。
+
+### 10.10 阶段 F — 档位（思考等级）批量补全（2026-10-15 规划）
+
+**问题**：能力位已经有完整的一套「卡片推断通道 `_capabilities_inferred` + 卡片级「采纳推断」+ 两页批量行「按能力表补全」」；**档位**（推理档位 / 思考等级）却只有卡片级、且仅在手动把思考打开时用推断值做种子（`ModelCard.vue:271-279`），批量场景没有任何入口。本阶段给档位补齐同形的一套：**两页批量行的一个按钮 + 卡片级一个「采纳推断档位」**。
+
+#### 10.10.1 实测基线（本地网关证据快照，不入库）
+
+用临时探针 `internal/core/zz_level_probe_test.go` 对用户两个网关的 90 个 id 取数（`baseURL=https://api.commandcode.ai/provider/v1`）：
+
+- 有档位推断 **79/90**；其中与现行「盲目默认三档」`[off,high,max]`（`DefaultVariantsFor`）**完全相同只有 2 个**，**需要修正 77 个**；
+- 推断集合大小直方图：1 档 3 / 2 档 15 / 3 档 20 / 4 档 14 / 5 档 16 / 6 档 8 / 7 档 3；
+- 相对默认三档**多出**的档位：low 58、medium 47、xhigh 36、minimal 13、enabled 12；
+- 反向的更要紧：默认三档会写进**推断集合里根本没有**的档位——off 43 个、max 43 个、high 19 个。也就是说，今天用户把拉取到的模型直接保存，会往 `optionSpecs.reasoningLevel.values` / DSH `reasoningEfforts` 里写模型并不支持的档位名。
+
+**「推断集合不含 off」不是数据缺陷**：用 `zz_level_source_probe_test.go` 逐层拆开后，产出档位的层分布是 `catalog:32 / override:4 / zcode:43`；其中不含 off 的 43 个里 **zcode 内建 19、override 2、catalog 22**。直接查生成表：`model_catalog_gen.go` 49 条带档位规则里 12 条不含关闭档（`.*glm-5\.3(?:-flash)?` → low,high,max），`model_site_rules_gen.go` 26 条里 19 条不含。⇒ 这是 **ZCode 自己的口径**，而 APM 的 S1 语义（集合不含 off ⇒ 无法关闭思考，开关禁用并提示）本来就在处理它。因此「把推断集合并入卡片档位」写的是 ZCode 自己的枚举，不是新引入的一类行为。
+
+#### 10.10.2 落点与命名（候选与取舍）
+
+| 候选 | 结论 |
+|---|---|
+| **A. 两页批量栏新增一行「档位」**（与「能力」行并列） | **采用**。与「能力」行同属「按能力表补全」家族，同形交互（多选带计数 + 按钮 + 两条 hint），两页共用一份 composable。 |
+| B. 并入既有「自动匹配」按钮（后端 `ApplyModelPresetsForSite`） | 不采用。「自动匹配」的既有语义是对 ctx/out **覆盖**（`internal/app/app.go:1465-1468` 的文档注释明确 "overwriting existing context/output values"），而档位必须「只补空缺」；两种语义塞进一个按钮会把「覆盖」误用到档位上，还会把推断档位静默写进配置。 |
+| C. 设置页开关「导入时自动按能力表填档位」 | 不采用。会**静默**把推断值写进用户配置，与「未知就留空」的既有口径冲突，且用户无法逐模型审阅。 |
+| D. 卡片内「采纳推断档位」（单卡） | **采用（作为 A 的补充）**。与能力区既有 `cap.adopt`「采纳推断」完全同形：批量行管可见集，单卡按钮管一个模型。 |
+
+命名（全部与 `cap.*` 同构）：composable `useLevelFill`（`frontend/src/composables/useLevelFill.ts`）、i18n 命名空间 `level.*`、批量行标签「档位」、按钮「按能力表补全档位」、单卡按钮「采纳推断档位」。（**UI 落点与 `level.*` 键集已由 10.11 修订**：不再有独立的「档位」批量行，补全/覆盖并入「推理档位」行。）
+
+#### 10.10.3 冻结契约
+
+> **已被 10.11 取代（2026-10-16）**：下述导出表里的 `picked` / `options`（「选择要补全的档位」多选）已删除，新增 `overwriteLevels` 与覆盖路径；`fillableLevels` 也**不再是「唯一实现」**（并入与覆盖两个判定同源于 `inferredLevels`）。原文保留，用于记录阶段 F 当时的规划口径。
+
+`frontend/src/composables/useLevelFill.ts` 的导出：
+
+```ts
+export function inferredLevels(card: ModelCard): string[]            // _supported_levels 规范化（trim/去空/去重/保序），无则 []
+export function fillableLevels(card: ModelCard): string[] | null     // 可补则返回「整组要写入的档位」，否则 null
+export function applyLevels(card: ModelCard, levels: string[]): void // 写 card.variants；默认档位缺失或不在集合内时用 pickDefaultVariant 修正
+export function useLevelFill(source: () => ModelCard[], lang: Ref<UiLang>): {
+  picked: Ref<string[]>
+  options: ComputedRef<{ label: string; value: string }[]>
+  fill: () => void
+}
+```
+
+`fillableLevels` 是**唯一实现**（单卡按钮与批量补全共用同一判定），返回「整组要写入的档位」（= 当前集合 ∪ 缺失档位，按规范序排序），或 `null`：
+
+1. `card.reasoning !== true` ⇒ `null`：思考未开是用户的显式决定，不动它（而且此时落盘会把档位集合收敛成单个 off 词，补进去的值会被静默丢弃；「开思考」那条路径本来就由 `toggleReasoning` 用 `_supported_levels` 做种子）；
+2. 推断集合里没有非 off 档（空、或只有 off）⇒ `null`：只有 off 等于「只能关闭思考」，与「思考已开」自相矛盾；
+3. 推断集合的档位当前都已存在 ⇒ `null`：无可补（也让单卡按钮自动隐藏）；
+4. 否则返回「当前集合 ∪ 缺失档位」。
+
+**语义是「只增不减地并入」，不是整组替换**（2026-10-15 规划期修正，理由与实测）：
+
+- `variants` 是完整声明集合，**替换会窄化用户自己挑过的集合**：推断集合里 1 档的 3 个、2 档的 15 个（共 18/79）多来自社区目录，数据本身可能稀疏，替换等于把用户原本可选的档位删掉；
+- 写入方向的不对称与模态那条同源：比事实**更少**的档位等于声明「其余档位不支持」，比事实**更多**只是多给几个可选项（用户随时可用胶囊点掉）；
+- 并入后的集合恒为「原集合的超集」，因此**从不删除任何档位**——「只补空缺、已有值不覆盖」在这条语义下是字面成立的；
+- 集合为空（新卡片）时并入的结果就等于推断集合本身，即「整组采纳」是并入的一个特例。
+
+实测两种卡片状态（本地网关证据快照 90 个 id，探针 `zz_level_probe_test.go`）：
+
+| 卡片状态 | 可补张数 | 并入档位数 | 副作用 |
+|---|---|---|---|
+| A 新卡片（`variants` 为空） | 79 | 298 | 43 张并入后不含 off → 该卡「思考」开关禁用（其中 19 张来自 ZCode 内建规则，属 ZCode 自己的口径） |
+| B 存量卡片（APM 早先写下的盲目三档 `[off,high,max]`） | 79（5 张无可补） | **166** | 原集合含 off，并入后 79 张的开关全部保持可用 |
+
+场景 B 是这次语义选择的关键：若按「已有非 off 档就跳过」，用户**已经保存过的**那批卡片恰好全部落在这一档，按钮会在最需要它的地方报「无补项」。
+
+并入的**反面代价**（记入残留，不在本操作里解决）：推断集合里没有、而配置里已有的旧档位会**留下**（例如 43 个模型上那个并不存在的 off / max 档名）——那是上一次写盘的既成事实，清理它需要一个显式的「覆盖为推断集合」动作（见 10.10.7）。
+
+批量语义（照抄能力行口径）：作用域 = 当前筛选出的可见模型；**未选择任何档位 = 对所有可补卡片并入全部缺失档位**，选中若干档位 = 只补「缺失档位与该选择有交集」的卡片；从不写 false、从不删键；无可补时提示「无补项」，不伪装成功；结果只落在卡片的 `variants` / `default_variant` 上，由两页既有载荷提交（**不新增 binding、不直接写盘**）。
+
+i18n 新键（`level.*`，三语齐全、零 emoji）：`level.batchLabel` / `level.batchFill` / `level.batchBitsPlaceholder` / `level.batchHint` / `level.batchArrayNote` / `level.batchDoneTitle` / `level.batchDoneBody`（含 `{n}` `{m}`）/ `level.batchNone` / `level.adopt` / `level.adoptAria`（含 `{name}`）。
+
+#### 10.10.4 后端口径修正：`_supported_levels` 不再受 autoFill 门控
+
+`cards.go:88-91` 把「能力表档位」放在 `autoFill` 门后，而**同性质的推断通道** `_capabilities_inferred`（`cards.go:97-113`）是**无条件**写入的；`autoFill` 的开关文案是「**导入时自动补全上下文与输出长度**」（`frontend/src/i18n/index.ts:63-72`），管的是「会被写进配置的值」。而 `_supported_levels` 从不写盘（`stripAPMInternalModelKeys` 剥离），也不参与自动写值（拉取路径 `Variants: nil`，落盘仍走 `DefaultVariantsFor`）。⇒ 去掉 `&& autoFill`，让档位推断与能力位推断口径一致；**保留** ctx/out 与 `capabilities` 有效值的门控。
+
+（后果提示：关掉该开关的用户从此也会看到「档位自适应」的弱化显示与批量档位操作的支持性提示——这正是阶段 C1 的设计意图，此前只是被开关误伤。）
+
+**同轮的第二处后端口径修正（provider 自报档位 ⇒ 支持思考）**：`cards.go:82-86` 先按能力表/关键词算 `reasoning`，再算 `levels`（provider 优先）。当 provider 在 `/models` 里自报了档位、而模型 id 既不在离线目录/内建正则里、名字也不命中关键词表时，卡片会同时得到 `reasoning=false` 与 `_supported_levels=["low","high"]`——即「列出了可选档位却声明不支持思考」，前端据此禁用思考开关，新的档位补全也会把它当作「用户的显式决定」跳过。现在在算出 `levels` 后补一条：provider **自报**档位含非 off 档且 `metaReasoning` 未给出显式判定时，`reasoning = true`（判据抽成 `infer.go` 的 `hasNonOffLevel`，与能力表推断同口径；provider 显式声明过思考支持态时绝不覆盖）。这是阶段 A「零 `true→false` 回归、允许 `false→true` 修正」同一方向的改动，测试见 `TestBuildModelCardsForSiteReasoning` 末尾新增的四组断言。
+
+#### 10.10.5 实施分工（三个 agent，文件所有权互不重叠）
+
+- **A：后端 + 文档** — `internal/core/cards.go`（一处 + 注释改写）、`internal/core/cards_meta_test.go`（**不新建文件**：`_supported_levels` 的优先级本来就在 `TestBuildModelCardsForSiteSupportedLevels` 里，且那条用例正是锁定旧门控的地方——按本文档的既有纪律「有据即改写并说明」，直接把该用例改成表驱动的新口径 + 补两条对照断言，比另开一个平行文件更不容易留下两套口径）、`CHANGELOG.md`、`TODO.md`。
+- **B：共享实现** — `frontend/src/composables/useLevelFill.ts`（新增）、`frontend/src/i18n/index.ts`（新增 `level.*` 三语键）。
+- **C：三处 UI 落点** — `ModelCard.vue`（单卡「采纳推断档位」，并把 `.mc-caps-adopt` 中性化为 `.mc-adopt` 后四处复用）、`ManagePage.vue` / `ImportPage.vue`（各新增一行，紧跟「能力」行之后）。
+
+三个 agent 一律**不跑构建**（`npm run build` / `wails build` 由主会话统一执行），改完只做只读自查。
+
+#### 10.10.6 验证
+
+`go test ./...`（含新测试）、`go vet ./...`、三条 `--check`、`npm run build`（内含 `vue-tsc --noEmit`）、`wails build`；探针复测两个网关的 90 个 id（记录补全前后的档位集合差异）；浅色/深色两套主题目测批量行与单卡按钮（人工，需真实窗口）。
+
+#### 10.10.7 残留 / 不做
+
+- **不清理旧档位名（并入语义的固有代价）**：推断集合里没有、而配置里已经有的档位会留下，例如 APM 早期盲目写下的 `[off,high,max]` 里那个并不存在的 off / max 档名（实测 43 个模型）。要清掉它需要一个显式的「覆盖为推断集合」动作（带确认），本轮不做——只增不减是「绝不静默覆盖用户数据」的必然代价。（**已由 10.11 实现**：覆盖落地为批量复选框 + 单卡按钮，两者都过 `uiConfirm` 并列出将删除的档位名。）
+- **新卡片可能拿到不含 off 的集合**：场景 A 的 43 张（19 张源自 ZCode 内建规则）并入后不含 off 档，前端会按既有 S1 语义禁用「思考」开关并给出悬浮提示。这是 ZCode 自己的档位枚举（`.*glm-5\.3(?:-flash)?` → low,high,max 这类规则本就没有关闭档），不是新引入的一类行为；存量卡片因原集合含 off 不受影响。
+- **站点上下文的两处缺口（既有存量，被本功能放大）**：`BuildSingleCard(modelID)`（手动添加模型）与拉取路径都只传空/部分站点上下文（`app.go:1394` 的 apiType 恒空），因此「只有站点规则才给档位」的模型（`minimax-m2.7` → enabled、`qwen3.8-max` → low,medium,xhigh）在手动添加的卡片上拿不到推断档位，批量行对它们无补项。修它要给 `BuildSingleCard` 一路透传 baseURL/apiType，属另一轮。
+- **前后端默认档位序不一致**：前端 `pickDefaultVariant`（`constants/variants.ts`：high → 首个非 off → 首个）与后端 `PickDefaultVariant`（`DefaultVariantPreference`：high,max,xhigh,medium,low,minimal,enabled,off）在「集合不含 high」时结论不同。本阶段**不强行统一**（改前端序会改变既有 `toggleReasoning` 的种子行为）；并入只增不减，因此原本合法且存在的默认档位不会被改写，只有默认档位为空或失效时才会按前端序补一个（值必在集合内，后端在值合法时不再改写），差异记入 `TODO.md`。
+- **无撤销**（既有 TODO 第 9 项）：批量补全一次改多张卡，误操作只能靠还原点；本阶段不引入 undo。
+
+### 10.11 阶段 F 修订：档位 UI 重做 + 「覆盖」方向（2026-10-16，人工验证反馈）
+
+阶段 F 落地后的人工验证（真实窗口目测批量栏与卡片）给出三条反馈，**全部采纳**。本节取代 10.10.2 的 UI 落点、10.10.3 的导出表与「唯一实现」口径、10.10.7 第 1 条的"后续动作"；10.1–10.9 与 10.10.1 / 10.10.4–10.10.6 不受影响。
+
+**反馈与根因**
+
+1. **「选择要补全的档位」多选无法表达任何意图**。它的标签承诺「只补这些档位」，实际行为是：写入**永远**是整组集合（`当前集合 ∪ 缺失档位`），选择只改变「处理哪些卡片」（缺失集合与所选有交集的卡）。也就是说它既不是"只补这些档位"，也不是"只补这些卡片"；而"我只想补缺 low 的模型、不想补缺 high 的"不是任何人的需求。最有力的证据是当时为它写的说明文案 `level.batchArrayNote`——一个需要向用户解释「你选的和你得到的不一样」的控件，本身就是错的。⇒ 删掉多选，补全改为**无参数的一次性动作**：点一次，全部可补项全补。
+   （**能力位的多选保留**：能力位是十几个彼此独立的位，`useCapabilityFill` 按方向、按位分别判定，"只补输入模态、先不确认布尔位"可以精确表达。差异来自**字段形状**——能力是多个离散位，档位是单一整体集合字段——所以这两者不该"形式一致"；后来者不要再为了一致性去删能力位的多选。）
+2. **同一字段被拆成上下两处、两个名字**：批量栏第 2 行是「思考开关 + 推理档位胶囊 + 默认档位」，批量栏最后一行又是「档位（多选 + 按能力表补全档位）」，都写 `card.variants`。⇒ **补全/覆盖并入「推理档位」那一行**（紧跟胶囊组、在「默认档位」之前），批量栏不再有独立的档位行。
+3. **卡片上三个等重高亮块**（推理档位 / 自填档位 / 默认档位）编辑的是同一组字段（`variants` + `default_variant`），主次不分。⇒ 合并为**一个** `.mc-effort` 块，块内每行一个子项（`.mc-effort-row`）：推理档位（胶囊 + 采纳 + 覆盖）→ 自填档位（仅 `customVariants`）→ 默认档位（+ ZCode 提示）。
+
+**新增动作：覆盖（即 10.10.7 第 1 条遗留的"后续动作"）**
+
+这是唯一能清理「APM 早期盲目写入的档位」（实测 43 个模型带并不存在的 off / max）的动作，因为并入语义**永远不删档位**。两处落点：批量栏「按能力表补全档位」按钮后的复选框「覆盖已有档位」；单卡的「覆盖为推断档位」（仅当**确有档位会被删除**时露出——没有多余档位时它与「采纳推断档位」结果相同，同时给两个按钮只会让人犹豫）。覆盖是破坏性动作，必须过 `uiConfirm`（`danger`）并聚合列出将删除的档位名。
+
+**两个判定的分工（取代 10.10.3 的"唯一实现"口径）**
+
+| | 并入 `fillableLevels` | 覆盖 `overwriteLevels` |
+|---|---|---|
+| 写入内容 | `当前集合 ∪ 缺失档位` | `推断集合` 本身 |
+| 处理条件 | 有缺失档位 | 与推断集合**不相等**（含"只有多余档位"） |
+| 单卡入口 | 采纳推断档位 | 覆盖为推断档位（仅确有删除时） |
+| 确认 | 无（只增、可逆） | `uiConfirm` + `danger` |
+
+两者**同源不合并**：共用 `inferredLevels` 与同一套门控（`reasoning !== true` 跳过；推断集合须含至少一个非 off 档）。覆盖**不能**复用 `fillableLevels`——后者把"无缺失"当"无可处理"，而覆盖模式最典型的卡片恰恰是「无缺失但有多余档位」（现有 `[off,high,max,medium]`、推断 `[high,max]`）。反过来，覆盖也**不能放宽门控**：无推断（空集合 / 只有 off）的卡片若被覆盖，`variants` 会被清空或置成 `["off"]`，那是**静默把用户的思考关掉**，比"少补"危险得多。
+
+**覆盖的已知副作用（确认文案里必须出现）**：删掉 `off` 会让该卡「思考」开关变灰（S1 语义：集合不含关闭档就无法关闭思考），实测基线里 19/90 的推断集合本就不含 off。不会留下脏数据：`cards.go:749-753` 只在集合确实含 `off` 时才回填 `offAlias`，残留的 `_off_alias` 会被写入路径忽略。
+
+**接口（取代 10.10.3 的导出表）**
+
+```ts
+export function inferredLevels(card: ModelCard): string[]            // 不变：_supported_levels 规范化，无则 []
+export function fillableLevels(card: ModelCard): string[] | null     // 并入：返回「当前集合 ∪ 缺失档位」，无可补则 null
+export function overwriteLevels(card: ModelCard): string[] | null   // 覆盖：与推断集合不相等时返回推断集合，否则 null
+export function applyLevels(card: ModelCard, levels: string[]): void // 不变：写 variants，默认档位失效时由 pickDefaultVariant 回落
+export function joinLevels(items: string[], lang: UiLang): string    // 中/日顿号、其它逗号（确认清单与悬浮提示共用）
+export function useLevelFill(source: () => ModelCard[], lang: Ref<UiLang>): {
+  overwrite: Ref<boolean>            // 动作方向（默认 false，不持久化——破坏性方向不该被粘住）
+  targetCount: ComputedRef<number>   // 当前方向下会被处理的模型数（0 时页面禁用按钮）
+  summary: ComputedRef<string>       // 现成文案：「可补 N 个模型」/「将覆盖 N 个模型」/「N 个模型未开启思考…」
+  fill: () => Promise<void>          // 覆盖路径先 await uiConfirm，取消即什么都不做
+}
+```
+
+**同轮的两处体验修正**：① 一个都处理不了时不再只说「无补项」，而是说出最常见的原因（「N 个模型尚未开启思考，本操作只在思考已开启时生效」）——门控是隐性的，点了没反应必须能知道为什么；② 「采纳推断档位」的悬浮提示改为列出**本次会并入的档位**，而不是只给模型名。
+
+**i18n 变更**：删 `level.batchBitsPlaceholder` / `level.batchArrayNote`（多选占位符与为它写的解释文案）；改写 `level.batchHint`（并入口径）、`level.adoptAria`（增 `{levels}`）；新增 19 键：`level.batchFillOverwrite` / `batchOverwriteToggle` / `batchCount` / `batchCountOverwrite` / `batchHintOverwrite` / `batchOverwriteTitle` / `batchOverwriteBody` / `batchRemoved` / `batchLoseOff` / `batchOverwriteConfirm` / `batchDoneBodyOverwrite` / `batchNoneReasoning` / `level.overwrite` / `overwriteAria` / `overwriteTitle` / `overwriteBody` / `overwriteRemoved` / `overwriteLoseOff` / `overwriteConfirm`（三语齐全、零 emoji）。
+
+**验证**：`cd frontend && npm run build`（含 `vue-tsc --noEmit`）通过；i18n 自检 475 键三语齐全、代码引用的 423 键全部命中、词典零 emoji；**无后端改动、不触碰任何写盘路径**，因此 `go test ./...` 不受影响。**待人工**：浅/深色两套主题目测新批量行与合并后的卡片块；勾选覆盖 → 确认明细与实际删除一致；覆盖后保存 → 重载 `variants` / `default_variant` 与推断集合一致（DSH 侧 `reasoningEfforts` 非空）；无 off 档模型的思考开关变灰且悬浮提示正确；覆盖写盘后确实生成了还原点（`PrepareChange` 链路，本次未验证）。
+
+### 10.12 阶段 G（拟定）：DSH 写入路径用能力表兜底档位（2026-10-16，用户已裁定，**尚未实施**）
+
+**触发**：人工反馈——「把 ZCode 的 provider 迁移到 DSH 后，DSH 里选择模型时没有思考强度」。
+
+**根因链（asar 实证 + 本机实验，全程只读应用自带资源，未读取任何用户配置）**
+
+1. DSH 的「推理等级」只在模型描述带 `reasoning` 时才渲染：`dsh-client-ui-model-selection/lib/client.js` 里是 `reasoning !== void 0 && …`，空态文案 `empty.efforts` = 「当前模型未提供推理等级」。
+2. 该 `reasoning` 由宿主组装（`dsh-llm-pi-ai/lib/index.js`）：`reasoningInfo()` 开头就是 `if (!model.reasoning) return {}`；而 `reasoningEfforts` 的三种写法决定 `model.reasoning`——**声明字典** ⇒ `reasoning: true`（未声明的档位被钉成 `null`，不可选）；**`false`** ⇒ 声明为非推理模型；**字段省略** ⇒ `{reasoning: base?.reasoning ?? false}`，其中 `base = defaults.get(entry.id)`、`defaults = catalogModels(路由 key)`，该函数注释原文即「**empty for a route pi-ai does not ship**」。
+3. 因此 DSH 侧的档位只有两个来源：模型节点显式声明 `reasoningEfforts`，或**路由 key 与模型 id 同时命中 pi-ai 内置目录**。APM 迁移出来的 provider 是一条「手写路由」（key = 源 provider id，一般不在 pi-ai 内置 provider 列表里），两条都不满足。
+4. DSH **没有任何 UI 入口**能补档位：`dsh-client-ui-settings-models/lib/client.js` 明写「There is deliberately no reasoning-effort control… `cordis.patch.yml` keeps the profile field」；整个客户端 UI 代码里 `reasoningEfforts` **零命中**（只存在于 `dsh-llm-pi-ai` 与其 README，以及 pi-ai 本体）。即：APM 不写，用户在 DSH 里也补不回来。
+5. APM 侧：迁移把源卡片原样投递（`internal/core/migrate.go` 的 `migratePayload`），`autoFill` 只在**拉取/新增模型**时生效（`internal/app/app.go:1445`/`1517`）；卡片的档位只来自源配置（`backend_zcode_v2.go:341` 读 `optionSpecs.reasoningLevel.values`），能力表只填 `_supported_levels`（`cards.go:570-577`，注释即「绝不覆盖…variants」）；`dshModelToRaw`（`deepseek.go:800`）的三分支中，「卡片完全没有推理信息」这一支**刻意什么都不写**。
+6. 关键不对称：**ZCode 的档位来自它自带的规则表，用户自己的 `provider_config.json` 里常常没有 `reasoningLevel.values`**。于是同一个模型在 ZCode 有档位可选、在 APM 眼里是「无档位信息」、迁到 DSH 后一个档位都没有。
+
+**实测（探针 `internal/core/zz_dsh_reasoning_probe_test.go`，`go test ./internal/core -run TestDshReasoningProbeFromZCodeCards -v` 可重跑）**
+
+| ZCode 源配置里的 `reasoningLevel.values` | 迁移后 DSH 模型节点 | DSH 里的表现 |
+|---|---|---|
+| **无该字段**（ZCode 靠内建规则给档位时的形态） | 无任何推理键 | **「推理等级」整行不显示**（本次反馈的场景） |
+| `disabled,low,high,max` | `{off:null, low, high, max}` | 正常 4 档 |
+| `off,low,medium,high,xhigh,max` | 6 档全在 | 正常 |
+| `enabled`（单元素） | `{high:high}` | 只有一档 High（既有 `enabled→high` 兼容映射） |
+| 只有 `disabled`（或只有 `none`） | `reasoningEfforts: false` | 被当作非推理模型，**整行不显示** |
+| `minimal,low,medium,high`（无 off） | 4 档（`minimal` 保留） | 正常 |
+| 自填词（如 `thinking,ultra`） | 无任何推理键 | **整行不显示**（读卡时被白名单滤光） |
+
+**用户裁定（2026-10-16）**：① 改代码，用能力表兜底；② 兜底覆盖**所有 DSH 写入路径**（不只迁移）；③ 门控**跟随既有「自动补全」开关**，不新增开关；④ 两个同源缺陷（自填档位词被白名单滤光、只有 off 的集合写成 `reasoningEfforts: false`）记 `TODO.md` **独立评估**，不塞进本轮。
+
+**落地设计（待实施）**
+
+- **出口**：`internal/core/deepseek.go` 的 `dshModelToRaw` —— DSH 两条写入路径（legacy settings 的 `deepSeekUpsertEntry`、profile patch 的 `deepSeekBuildEntry`）的唯一模型编码出口。
+- **触发条件（严格）**：`card.RawReasoningEnabled == nil && !card.Reasoning && len(card.Variants) == 0`。显式关闭（`RawReasoningEnabled == false`）与已有档位的卡片一律不参与——兜底**只补空缺**，绝不改判用户的选择，也不追加/修正既有集合。
+- **取值**：`LookupModelCapabilityForSite(modelID, baseURL, "")`。apiType 传空串与既有 DSH 读卡口径一致（DSH 侧没有 ZCode 的 `api.type`，限定 apiType 的站点规则 fail-closed 跳过，见 `deepseek_store.go` 的 `deepSeekBuildEntry` 注释）。需要把 baseURL 透传进 `dshModelToRaw`（当前第二参数 `_ string` 实际未使用，可在改签名时一并处理；两个调用点同在 `deepSeekBuildEntry`，既有测试调用点需同步）。
+- **写出**：走既有 `dshEffortForWrite` 的白名单与拼法；结果**非空且含非 off 档**才写 `reasoningEfforts`；**只有 off / 空一律不写 `false`**——`false` 在 DSH 侧是「显式声明非推理模型」，而兜底是推断，不得冒充用户声明。不写 `reasoningEffort`（推断不替用户挑默认档位，交给 DSH 的 provider 默认）。
+- **门控**：照 `internal/core/variant_policy.go` 的 `SetCustomVariantsAllowed`/`CustomVariantsAllowed` 写法新增一条 core 级策略，由 app 层三处推送（与既有 `custom_variants_enabled` 完全同款）：`Startup()`（`app.go:80-82` 并列）、`GetOptions()`（`app.go:866` 并列，保证界面读到开关时 core 已就绪）、`SetAutoFillLimits()`（`app.go:820-829` **当前只落盘不推 core**，需补一行）。开关关闭时行为与今天**逐字节一致**。
+- **测试**：在本轮既有文件里补表驱动用例（按本文档纪律不另开平行文件）——源无档位 + 命中能力表 ⇒ 迁移后有 `reasoningEfforts`；开关关闭 ⇒ 不写；显式关闭 ⇒ 仍是 `false`；推断集合只有 off ⇒ 一个键都不写。既有锁定「未改动模型不写 `reasoningEfforts`」的用例（`dsh_profile_test.go` 的 `TestDeepSeekMergeKeepsUnchangedModelNode` 等）需按新语义重跑，若其占位 id 命中能力表则改写并说明理由。
+- **文档**：`TODO.md` 第 26 项（本项）+ 第 27/28 项（两个同源缺陷）；`CHANGELOG.md` 随发版。
+
+**已知副作用（实施说明里必须写明）**
+
+1. **会改变既有 provider 的写盘结果**：开关打开时，任何一次保存都会给「配置里没有档位的模型」补上档位——即使用户这次根本没碰那张卡。这是「覆盖所有 DSH 写入路径」的必然代价，也正是修正目标本身；不接受这个面就只能退回「仅迁移路径」。
+2. **卡片与写盘会短暂不一致**：卡片按读入的配置展示（无档位），保存后配置里出现了档位（重载可见）。可选缓解是保存前把推断档位落到卡片（复用 `useLevelFill` 的「采纳推断档位」），或维持现状——**留待实施时裁定**。
+3. **只动了 DSH 侧**：ZCode 自己有内建规则表、opencode 未评估，症状只在 DSH 出现，本轮不扩散。
+
+**未验证 / 待人工**
+
+- 真实 DSH 窗口复测：开关打开 → 保存 → DSH 模型选择器出现「推理等级」行且档位与能力表一致；ZCode→DSH 迁移端到端同上（需真实窗口与真实网关，`AGENTS.md` 禁止代读用户配置）。
+- 用户的源配置里究竟有没有 `optionSpecs.reasoningLevel.values`：本轮只推出「大概率没有」这一结论，**未能实证**（不读用户配置是硬约束），确诊方法写在 `TODO.md` 第 26 项。
 
 ## 附录 A：证据与未能独立验证的事项
 

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"agentprovidermanager/internal/zcodeprovider"
 )
 
 // cardsContextMetaKeys / cardsOutputMetaKeys 是 provider /models 响应里上下文与输出上限的
@@ -42,8 +44,8 @@ func BuildModelCards(models []struct {
 // 优先级：
 //   - ctx/out：provider 返回的值永远胜出（沿用 emptyToken 判定）；只有 autoFill 为真且
 //     provider 没给时，才用能力表兜底。
-//   - _supported_levels：provider 明确给出的档位是 API 事实，与 _vendor 同级，**autoFill
-//     为假也照写**；provider 没给时才在 autoFill 为真时用能力表档位。
+//   - _supported_levels：provider 明确给出的档位是 API 事实，与 _vendor 同级，始终写入；
+//     provider 没给时用能力表档位兜底——同样与补全开关无关（该字段只做展示与种子，见函数内注释）。
 //   - Reasoning：metaReasoning 给出明确值时以它为准，否则沿用 guessReasoningFromCapability
 //     的推断（能力表档位 + 关键词表）。
 //   - _vendor：与补全开关无关，始终填。
@@ -79,13 +81,29 @@ func BuildModelCardsForSite(models []struct {
 		}
 		// API 明确声明的思考支持态优先于按模型名/档位做的推断。
 		reasoning := guessReasoningFromCapability(m.ID, cap)
+		reasoningDeclared := false
 		if v, known := metaReasoning(meta); known {
 			reasoning = v
+			reasoningDeclared = true
 		}
-		// provider 明确给出的档位优先（API 事实，与 _vendor 同级，autoFill 为假也写）。
+		// provider 明确给出的档位优先（API 事实，与 _vendor 同级）；provider 没给时用能力表
+		// 推断值兜底——**不受 autoFill 约束**，与下方同样只做展示的 _capabilities_inferred 一致。
+		//
+		// 为什么与 ctx/out 区别对待：autoFill（「导入时自动补全上下文与输出长度」）管的是
+		// 「会被写进配置的值」，而 _supported_levels 从不写盘（写盘出口会剥离内部键），也不参与
+		// 任何自动写值——拉取路径本来就把 Variants 留 nil，落盘时档位走 DefaultVariantsFor 兜底。
+		// 它只驱动展示（档位自适应弱化）、种子（开思考时用支持集合）与「按能力表补全档位」
+		// 这个显式动作，因此把开关关掉不该让档位推断一并消失（2026-10-15 阶段 F 修正）。
 		levels := metaLevels(meta)
-		if len(levels) == 0 && autoFill {
+		if len(levels) == 0 {
 			levels = cap.ReasoningLevels
+		}
+		// provider 自报的档位枚举本身就是「该模型支持思考」这一事实：能力表与关键词都认不出这个
+		// id 时上面的推断会给出 false，卡片于是「列出了可选档位却声明不支持思考」——前端据此禁用
+		// 思考开关、批量档位补全也会把它当作「用户的显式决定」跳过。因此 provider 自报档位含非
+		// off 档时补正为支持；provider **显式**声明过思考支持态时以它为准，绝不覆盖。
+		if !reasoningDeclared && !reasoning && hasNonOffLevel(levels) {
+			reasoning = true
 		}
 		// 中立能力位（阶段 E1，见 MODEL-MANAGEMENT-PLAN.md 10.2.2）：provider 自报的能力位
 		// 是 API 事实，与 _supported_levels 口径一致——**autoFill 为假也照填**；能力表那部分
@@ -1122,6 +1140,12 @@ func cardFeaturesFromOpenCodeKeys(modelCfg map[string]interface{}) ModelFeatures
 // 这些键出现在中间形态里时就是文档里写明的事实，但 false 仍按未知处理：中立层没有「不支持」
 // 的落点，把 v2 的默认值当成明确结论带去别的 harness 只会制造错误信息。不做
 // requiresMfjsToolSchema / optionSpecs.*.map（本轮明确不做）。
+//
+// 输入模态走 zcodeprovider.InputFormatModalities 这一条**唯一**读路径：ZCode 原生的
+// inputFormat.supportsText 是「缺键即默认支持」（ZCode 的最小增量写入会删掉与继承值相等的
+// 键），只有显式 false 才排除 text；其余四位与 outputFormat 保持严格只认 true。
+// 内层通道 `_apm_capabilities` **不适用**这条：它读的是本函数上方 cardFeaturesFromInternal
+// 的三态契约（缺键 = 未知），两条路径互不污染。
 func cardFeaturesFromV2Properties(value interface{}) ModelFeatures {
 	properties, _ := value.(map[string]interface{})
 	if properties == nil {
@@ -1129,19 +1153,7 @@ func cardFeaturesFromV2Properties(value interface{}) ModelFeatures {
 	}
 	var features ModelFeatures
 	if inFormat, ok := properties["inputFormat"].(map[string]interface{}); ok {
-		var inputs []string
-		for _, pair := range []struct{ key, modality string }{
-			{"supportsText", "text"},
-			{"supportsImage", "image"},
-			{"supportsVideo", "video"},
-			{"supportsAudio", "audio"},
-			{"supportsPdf", "pdf"},
-		} {
-			if v, known := metaBool(inFormat[pair.key]); known && v {
-				inputs = append(inputs, pair.modality)
-			}
-		}
-		features.InputModalities = NormalizeInputModalities(inputs)
+		features.InputModalities = NormalizeInputModalities(zcodeprovider.InputFormatModalities(inFormat))
 	}
 	if outFormat, ok := properties["outputFormat"].(map[string]interface{}); ok {
 		if v, known := metaBool(outFormat["supportsText"]); known && v {

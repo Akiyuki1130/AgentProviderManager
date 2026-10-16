@@ -17,6 +17,17 @@ export const REASONING_VARIANTS_BASIC = ['off', 'high', 'max'] as const
 export const MAX_VARIANT_LEN = 64
 
 /**
+ * 档位名归一：与后端 `internal/core/tokens.go` 的 `canonicalVariant` 同一口径——
+ * 去空白 + 小写，并把 off 的等价别名 none / disabled / nothink 折成 `off`
+ * （minimal 不折 low，A-6）。前端所有「用户输入 / 后端推断值 → 档位名」的比较都走它，
+ * 避免同一档位以多个等价拼法并存（那会让落盘折叠与前端字面量比较对不上）。
+ */
+export function canonicalVariant(raw: string): string {
+  const v = raw.trim().toLowerCase()
+  return v === 'none' || v === 'disabled' || v === 'nothink' ? 'off' : v
+}
+
+/**
  * 在给定档位集合内挑一个合理的默认档位：
  * 优先 high，其次首个非 off 档位，再次首个元素，空集回落空串。
  * 后端已容错（不再因集合不含 high 报错），但前端也应避免制造矛盾数据。

@@ -364,18 +364,16 @@ func v2LegacyModelCfg(mcfg map[string]interface{}) map[string]interface{} {
 		// 持久化。config.enabled 由 mergeV2ModelRuleConfig 原样保留，不在此处消费。
 		legacy["reasoning"] = reasoning
 	}
-	// 既有行为保持不动：modalities.input 仍只承载 image/video 两位（其余 3 位走
-	// `_apm_capabilities`，由下述 v2ApmCapabilities 带出，写入端取并集）。
+	// 中间形态的 `modalities.input` 承载 v2 输入面的全部 5 位，读取走
+	// zcodeprovider.InputFormatModalities：supportsText 缺键即真（只有显式 false 才排除）、
+	// 其余四位严格只认显式 true。于是「只写了 supportsImage 的个人规则」读回时是
+	// [text, image] 而不是残缺的 [image]（缺陷 1 同型：ZCode 的最小增量写入会删掉与继承值
+	// 相等的键，supportsText 因此常缺）；5 位全真时 5 个词都能带全。
+	// 这里不担心「写宽」：写入侧（zcodeprovider.FromLegacy 的 legacyInputFormat +
+	// _apm_capabilities 并集）只写已知为真的位，text 是真值才写 supportsText。
 	if format := zcodeprovider.ModelInputFormat(mcfg); format != nil {
-		var inputs []interface{}
-		if b, _ := format["supportsImage"].(bool); b {
-			inputs = append(inputs, "image")
-		}
-		if b, _ := format["supportsVideo"].(bool); b {
-			inputs = append(inputs, "video")
-		}
-		if len(inputs) > 0 {
-			legacy["modalities"] = map[string]interface{}{"input": inputs}
+		if inputs := zcodeprovider.InputFormatModalities(format); len(inputs) > 0 {
+			legacy["modalities"] = map[string]interface{}{"input": apmCapabilityStrings(inputs)}
 		}
 	}
 	// 中立能力位：把 v2 认的全部能力键收进内部通道，供卡片的 Capabilities 与
@@ -485,19 +483,6 @@ func apmTrueCapabilityFlags(vals map[string]interface{}, mapping []apmCapability
 	return flags
 }
 
-// v2InputFormatModalities 是 v2 `inputFormat.supports*` 键到中立输入模态词的映射，
-// 顺序即 ZCode 的 canonical 键序（order.go 的 inputFormatOrder）。
-var v2InputFormatModalities = []struct {
-	key  string
-	word string
-}{
-	{"supportsText", "text"},
-	{"supportsImage", "image"},
-	{"supportsVideo", "video"},
-	{"supportsAudio", "audio"},
-	{"supportsPdf", "pdf"},
-}
-
 // v2CapabilityPropertyKeys 是 v2 `properties` 布尔键到中立能力位的映射
 // （与 10.2.3 的写盘口径一致）。
 var v2CapabilityPropertyKeys = []apmCapabilityKeyMap{
@@ -511,19 +496,17 @@ var v2CapabilityPropertyKeys = []apmCapabilityKeyMap{
 //
 // 只收「明确为真」的位：v2 的 overlay 语义里省略键 = 不覆盖，false 是显式关闭，
 // null 是显式清空，因此未知一律省略，一个 false/null 都不写。
+// 输入模态的读取走 zcodeprovider.InputFormatModalities，其中 supportsText 是唯一带
+// implied 语义的一位（缺键即真、显式 false 才排除，理由见该函数注释）——它读取的是
+// **ZCode 原生的 inputFormat**，不是本通道自身的形状；通道里存的是读取结果（已知为真的
+// 模态词），通道本身的读端（cards.go 的 cardFeaturesFromInternal）仍严格三态、缺键 = 未知。
 // requiresMfjsToolSchema 与 optionSpecs.*.map 本轮不做，因此这里也不读它们。
 func v2ApmCapabilities(mcfg map[string]interface{}) map[string]interface{} {
 	props := zcodeprovider.ModelProperties(mcfg)
 	if len(props) == 0 {
 		return nil
 	}
-	var inputs []string
-	format := zcodeprovider.ModelInputFormat(mcfg)
-	for _, item := range v2InputFormatModalities {
-		if b, _ := format[item.key].(bool); b {
-			inputs = append(inputs, item.word)
-		}
-	}
+	inputs := zcodeprovider.InputFormatModalities(zcodeprovider.ModelInputFormat(mcfg))
 	var outputs []string
 	// v2 的 outputFormat 只有 supportsText 一个键，明确为真时等价于 output_modalities=["text"]。
 	if b, _ := zcodeprovider.ModelOutputFormat(mcfg)["supportsText"].(bool); b {

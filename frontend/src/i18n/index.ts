@@ -597,12 +597,18 @@ const dict: Record<string, Record<UiLang, string>> = {
   'restorePoints.bkModels': { zh: '{n} 个模型', en: '{n} model(s)', ja: '{n} 個のモデル' },
   'restorePoints.bkHasKey': { zh: '含 Key', en: 'has key', ja: 'キーあり' },
   'restorePoints.bkNoKey': { zh: '无 Key', en: 'no key', ja: 'キーなし' },
+  'restorePoints.bkBaseUrl': { zh: '目标地址：', en: 'Base URL: ', ja: 'ベース URL: ' },
   'restorePoints.bkConflict': { zh: '冲突策略', en: 'On conflict', ja: '競合時の扱い' },
   'restorePoints.bkConflictSkip': { zh: '跳过已存在', en: 'Skip existing', ja: '既存をスキップ' },
   'restorePoints.bkConflictOverwrite': { zh: '覆盖已存在', en: 'Overwrite existing', ja: '既存を上書き' },
   'restorePoints.importResult': { zh: '导入 {imported} · 跳过 {skipped}', en: 'Imported {imported} · skipped {skipped}', ja: '{imported} 件読み込み · {skipped} 件スキップ' },
   'restorePoints.importFailed': { zh: '导入失败', en: 'Import failed', ja: '読み込みに失敗しました' },
   'restorePoints.importPartial': { zh: '以下提供商导入失败：', en: 'These providers failed to import:', ja: '以下のプロバイダーの読み込みに失敗：' },
+  'restorePoints.importKeyConflict': {
+    zh: '以下提供商在备份里不含密钥，但 Base URL 与本地已有配置不同源，已整条跳过：沿用本地密钥会把它发给备份指定的域名。如需导入，请先删除本地同名提供商。',
+    en: 'These providers carry no key in the backup, but their Base URL points to a different origin than the local entry, so they were skipped: reusing the local key would send it to the domain named in the backup. Delete the local provider first if you really want to import them.',
+    ja: '以下のプロバイダーはバックアップにキーが含まれず、Base URL がローカルの既存設定と別オリジンだったため丸ごとスキップしました。ローカルのキーを再利用するとバックアップ側のドメインに送信されてしまいます。取り込む場合は先にローカルの同名プロバイダーを削除してください。',
+  },
   'common.ok': { zh: '确定', en: 'OK', ja: 'OK' },
   'common.cancel': { zh: '取消', en: 'Cancel', ja: 'キャンセル' },
   'reasoning.noOffTitle': {
@@ -632,6 +638,11 @@ const dict: Record<string, Record<UiLang, string>> = {
     ja: 'カンマまたは改行で区切る（例：very-high,custom1）',
   },
   'reasoning.customLabel': { zh: '自填档位', en: 'Custom tiers', ja: 'カスタムレベル' },
+  // 单卡档位块的两个行标签（与同块 reasoning.customLabel 同命名空间）。
+  // 注：ImportPage 的批量面板另有 import.variantTiers / import.defaultTier 两个同文案的键；
+  // 这里不跨页面命名空间复用——ModelCard 由管理页与导入页共用，行标签属于「推理档位」这个概念本身。
+  'reasoning.tierLabel': { zh: '推理档位', en: 'Reasoning tiers', ja: '推論レベル' },
+  'reasoning.defaultTierLabel': { zh: '默认档位', en: 'Default tier', ja: '既定のレベル' },
   'reasoning.batchUnsupported': {
     zh: '有 {n} 个当前可见模型不支持所选档位「{tier}」，仍要套用吗？',
     en: '{n} visible model(s) do not support the selected tier "{tier}". Apply anyway?',
@@ -678,6 +689,13 @@ const dict: Record<string, Record<UiLang, string>> = {
     ja: '未選択・未チェックは「不明」として扱い、対象クライアントの既定値に任せます（確認できた対応のみを書き込みます）',
   },
   'cap.sourceLabel': { zh: '推断来源：{source}', en: 'Inferred from: {source}', ja: '推定元：{source}' },
+  // 能力来源的人类可读标签（后端 `_source` 给的是稳定的英文 token；未知 token 原样显示）。
+  'cap.source.provider': { zh: '提供方自报', en: 'Provider self-report', ja: 'プロバイダ自己申告' },
+  'cap.source.override': { zh: 'APM 覆盖层', en: 'APM override', ja: 'APM オーバーライド' },
+  'cap.source.site': { zh: '站点规则', en: 'Site rule', ja: 'サイト規則' },
+  'cap.source.zcode': { zh: 'ZCode 内建规则', en: 'ZCode built-in rule', ja: 'ZCode 内蔵ルール' },
+  'cap.source.preset': { zh: '内置预设表', en: 'Built-in preset table', ja: '内蔵プリセット表' },
+  'cap.source.catalog': { zh: '社区离线目录', en: 'Offline community catalog', ja: 'コミュニティオフライン目録' },
   'cap.inferred': { zh: '推断支持', en: 'Inferred support', ja: '推定対応' },
   'cap.adopt': { zh: '采纳推断', en: 'Adopt inferred', ja: '推定を採用' },
   'cap.adoptAria': {
@@ -729,6 +747,86 @@ const dict: Record<string, Record<UiLang, string>> = {
     en: 'Nothing to fill (the capability table inferred no missing bits)',
     ja: '補完できる機能はありません（能力表が未設定項目を推定できませんでした）',
   },
+  // 阶段 F：档位（推理 / 思考等级）批量动作。档位是**整体集合字段**（`variants` 是完整声明集合），
+  // 因此文案的一等口径是「并入（只增不减）」与「覆盖（替换、会删档位）」两个方向，而不是
+  // 「选择要补全哪几个档位」——旧版的 level.batchBitsPlaceholder / batchArrayNote 正是因为
+  // 那个多选无法表达任何用户意图而被删除（选中一档实际会整组并入，选择只改变处理哪些卡片）。
+  'level.batchLabel': { zh: '档位', en: 'Levels', ja: 'レベル' },
+  'level.batchFill': { zh: '按能力表补全档位', en: 'Fill levels from the capability table', ja: '能力表からレベルを補完' },
+  'level.batchFillOverwrite': { zh: '按能力表覆盖档位', en: 'Replace levels from the capability table', ja: '能力表のレベルで上書き' },
+  'level.batchOverwriteToggle': { zh: '覆盖已有档位', en: 'Replace existing tiers', ja: '既存のレベルを上書き' },
+  'level.batchCount': { zh: '可补 {n} 个模型', en: '{n} model(s) can be filled', ja: '{n} 件のモデルを補完できます' },
+  'level.batchCountOverwrite': { zh: '将覆盖 {n} 个模型', en: '{n} model(s) will be replaced', ja: '{n} 件のモデルを上書きします' },
+  'level.batchHint': {
+    zh: '补全＝把能力表推断的档位并入，只增不减、不删除已有档位；仅对已开启思考的模型生效',
+    en: 'Fill merges the inferred tiers in (add-only, nothing is ever removed); applies only to models with reasoning on',
+    ja: '補完は推定レベルを追加のみで統合します（既存は削除しません）。思考が有効なモデルのみ対象です',
+  },
+  'level.batchHintOverwrite': {
+    zh: '覆盖＝以推断集合替换现有档位，会删除推断里没有的档位（写前会确认）；仅对已开启思考的模型生效',
+    en: 'Replace sets the tier set to the inferred one and deletes tiers the table does not list (confirmed before writing); applies only to models with reasoning on',
+    ja: '上書きは推定集合で置き換え、推定にないレベルを削除します（書き込み前に確認）。思考が有効なモデルのみ対象です',
+  },
+  'level.batchOverwriteTitle': { zh: '用推断档位覆盖？', en: 'Replace with inferred tiers?', ja: '推定レベルで上書きしますか？' },
+  'level.batchOverwriteBody': {
+    zh: '将把 {n} 个模型的档位集合替换为能力表推断结果，推断里没有的档位会被删除。此改动随保存写入配置。',
+    en: 'The tier set of {n} model(s) will be replaced by the inferred result; tiers it does not list are deleted. The change is written to the config on save.',
+    ja: '{n} 件のモデルのレベル集合を推定結果で置き換えます。推定にないレベルは削除され、保存時に設定へ書き込まれます。',
+  },
+  'level.batchRemoved': { zh: '删除档位：{list}', en: 'Removed tiers: {list}', ja: '削除するレベル：{list}' },
+  'level.batchLoseOff': {
+    zh: '其中 {n} 个模型的档位集合将不含关闭档，其思考开关会变灰（无法再直接关闭思考）',
+    en: '{n} of them will end up without an off tier, so their reasoning switch becomes unavailable (reasoning can no longer be turned off there)',
+    ja: 'うち {n} 件はオフレベルがなくなり、思考スイッチが無効（灰色）になります',
+  },
+  'level.batchOverwriteConfirm': { zh: '覆盖', en: 'Replace', ja: '上書き' },
+  'level.batchDoneTitle': { zh: '档位补全完成', en: 'Level fill complete', ja: 'レベルの補完が完了しました' },
+  'level.batchDoneBody': {
+    zh: '已为 {n} 个模型补入 {m} 个档位',
+    en: 'Added {m} tier(s) across {n} model(s)',
+    ja: '{n} 個のモデルに {m} 件のレベルを追加しました',
+  },
+  'level.batchDoneBodyOverwrite': {
+    zh: '已为 {n} 个模型覆盖档位，删除 {m} 个档位',
+    en: 'Replaced tiers across {n} model(s), removing {m} tier(s)',
+    ja: '{n} 件のモデルを上書きし、{m} 件のレベルを削除しました',
+  },
+  'level.batchNone': {
+    zh: '没有可补全的档位（能力表未推断出档位，或推断出的档位都已存在）',
+    en: 'Nothing to fill (the capability table inferred no levels, or every inferred tier is already present)',
+    ja: '補完できるレベルはありません（能力表がレベルを推定できない、または推定されたレベルがすべて既に存在します）',
+  },
+  'level.batchNoneReasoning': {
+    zh: '没有可处理的档位：{n} 个模型尚未开启思考，本操作只在思考已开启时生效',
+    en: 'Nothing to do: {n} model(s) have reasoning off, and this action only applies when reasoning is on',
+    ja: '処理できるレベルがありません：{n} 件のモデルは思考がオフです（思考が有効なときのみ動作します）',
+  },
+  // 单卡：同一组字段的两个动作——「采纳」（只增不减、可逆）与「覆盖」（会删档位，需确认）。
+  'level.adopt': { zh: '采纳推断档位', en: 'Adopt inferred levels', ja: '推定レベルを採用' },
+  'level.adoptAria': {
+    zh: '采纳推断档位：{name}，并入 {levels}',
+    en: 'Adopt the inferred levels for {name}, adding {levels}',
+    ja: '{name} の推定レベルを採用（{levels} を追加）',
+  },
+  'level.overwrite': { zh: '覆盖为推断档位', en: 'Replace with inferred levels', ja: '推定レベルで上書き' },
+  'level.overwriteAria': {
+    zh: '覆盖为推断档位：{name}，将删除 {levels}',
+    en: 'Replace the levels of {name} with the inferred set, deleting {levels}',
+    ja: '{name} を推定レベルで上書き（{levels} を削除）',
+  },
+  'level.overwriteTitle': { zh: '用推断档位覆盖？', en: 'Replace with inferred tiers?', ja: '推定レベルで上書きしますか？' },
+  'level.overwriteBody': {
+    zh: '将把「{name}」的档位集合替换为能力表推断结果，推断里没有的档位会被删除。此改动随保存写入配置。',
+    en: 'The tier set of "{name}" will be replaced by the inferred result; tiers it does not list are deleted. The change is written to the config on save.',
+    ja: '「{name}」のレベル集合を推定結果で置き換えます。推定にないレベルは削除され、保存時に設定へ書き込まれます。',
+  },
+  'level.overwriteRemoved': { zh: '将删除：{list}', en: 'Will delete: {list}', ja: '削除します：{list}' },
+  'level.overwriteLoseOff': {
+    zh: '覆盖后该模型无法再直接关闭思考（档位集合不含关闭档，开关会变灰）',
+    en: 'Afterwards reasoning can no longer be turned off for this model (no off tier in the set, so the switch is disabled)',
+    ja: '上書き後はこのモデルの思考を直接オフにできなくなります（オフレベルがなくスイッチが無効になります）',
+  },
+  'level.overwriteConfirm': { zh: '覆盖', en: 'Replace', ja: '上書き' },
 }
 
 export function t(key: string, lang: UiLang): string {

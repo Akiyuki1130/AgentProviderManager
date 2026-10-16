@@ -42,16 +42,17 @@ type ModelCapability struct {
 	// 取值集合（按优先级降序）：
 	//   "provider" —— 调用方直接给出的 API 事实（不在本文件求值，代表卡片补全路径上的最高层）；
 	//   "override" —— APM 自维护的覆盖层（model_overrides.go）；
-	//   "zcode"    —— ZCode 内建模型名正则表（model_catalog_gen.go）；
 	//   "site"     —— ZCode 内建站点级规则（model_site_rules.go）；
+	//   "zcode"    —— ZCode 内建模型名正则表（model_catalog_gen.go）；
 	//   "catalog"  —— 离线精确 id 目录（capability_catalog.go）；
 	//   "preset"   —— presets.go 的手维护旧表。
 	// 供测试/调试；分层求值顺序见 lookupCapabilityForSite。
 	Source string
 }
 
-// LookupModelCapability 按 override > zcode 正则全表覆盖 > presets 旧表 > catalog 离线目录
-// 的顺序求值（后两层都只补前面各层留下的空字段，见 lookupCapabilityForSite）。
+// LookupModelCapability 按 override > site > zcode 正则全表覆盖 > presets 旧表 > catalog 离线目录
+// 的顺序求值（后四层都只补前面各层留下的空字段，见 lookupCapabilityForSite；本入口不带站点
+// 上下文，因此 site 层必然不命中，等价于「override 之后直接进 zcode 层」）。
 //
 // 返回值语义：除 modelID 为空外**始终返回 ok==true**（与 presets 时代的 false 语义
 // 区分开）。调用方用「Context==0 && Output==0 && len(ReasoningLevels)==0」判断「无信息」。
@@ -71,14 +72,23 @@ func LookupModelCapability(modelID string) (ModelCapability, bool) {
 
 // LookupModelCapabilityForSite 是带站点上下文的求值入口，分层为
 //
-//	override → zcode 正则 → site → presets 旧表 → catalog 离线目录
+//	override → site → zcode 正则 → presets 旧表 → catalog 离线目录
 //
 // 各层的取舍理由：
 //   - override 是 APM 手维护的修正，最高优先；
+//   - site 是站点级规则：它要同时满足模型名 + baseUrl（+ apiType）三道门，是 ZCode 自身
+//     **最具体**的一层事实——ZCode 的规则数组把 providerSiteRules 拼接在 modelRules /
+//     modelApiRules 之后，resolve() 顺序遍历、命中即 overlay，因此站点规则在 ZCode 里
+//     真实地覆盖家族正则（由 capability_site_test.go 的回归用例在真实生成表上固定）。
+//     它之所以必须排在家族正则之前，还有一层具体后果：输入侧 implied text 让家族层的模态
+//     集合恒非空（text 缺键即真），而模态是整字段「前层胜出」，站点层的模态集合就再也无法
+//     胜出。实测（目录 2305 个 id）：在 zcode.z.ai/api/v1/highspeed/anthropic（以及同类不限定
+//     apiType 的 zcode-plan / api.z.ai / open.bigmodel.cn 规则）下，422 个 id 的输入模态被
+//     家族层的 [text] 压掉，站点规则明确写出的 image+video 无法生效；api.deepseek.com 下
+//     deepseek-v4-flash / deepseek-v4-flash-vision-exp 同样丢掉站点规则给出的 image；
 //   - zcode 内建 modelRules 是「既有正确值」的既有来源，且 APM 写出的配置正是给
 //     ZCode / DSH 消费的，ZCode 内建值本身就是那个 harness 的真正口径，因此必须排在
 //     社区数据（catalog）之前；
-//   - site 是 ZCode 自身最具体的一层（模型名 + baseUrl + apiType 三道门），仅次于家族正则；
 //   - presets 是 APM 手维护的旧表，代表「此前发布物的既有行为」，社区快照同样不该静默
 //     改写它，因此排在 catalog 之前；
 //   - catalog 是第三方社区补充（models.dev / pi-ai 快照），**最后兜底**：它只逐字段补空，
@@ -127,9 +137,10 @@ func lookupCapability(modelID string, overrides []modelOverride) ModelCapability
 // 求值顺序（逐字段覆盖，前层已给出的字段不再被后层改写）：
 //  1. override 层：精确 ID 优先、最长前缀次之；命中字段直接采用（0/nil 表示不覆盖，
 //     留给后续来源补），符合「显式给出即胜出」。
-//  2. zcode 层：内建模型名正则全表顺序扫描 + 逐字段覆盖（见 mergeCatalog）。
-//  3. site 层：内建站点级规则，模型名 / baseUrl / apiType 三正则同时命中才适用；
-//     baseURL 为空时整层不命中。
+//  2. site 层：内建站点级规则，模型名 / baseUrl / apiType 三正则同时命中才适用；
+//     baseURL 为空时整层不命中。它排在家族正则之前，因为 ZCode 自己就是这么应用的
+//     （providerSiteRules 在规则数组里拼在 modelRules 之后，后命中者 overlay 前命中者）。
+//  3. zcode 层：内建模型名正则全表顺序扫描 + 逐字段覆盖（见 mergeCatalog）。
 //  4. presets 层：presets.go 旧表（APM 手维护、代表已发布行为），Context/Output 两列
 //     各自独立补。
 //  5. catalog 层：离线精确 id 目录（容错允许去掉命名空间前缀），**最后兜底且无条件参与**，
@@ -169,24 +180,10 @@ func lookupCapabilityForSite(modelID, baseURL, apiType string, overrides []model
 		}
 	}
 
-	// 2. zcode 正则全表顺序覆盖（既有正确值的既有来源，必须排在社区目录之前）。
-	zcode := mergeCatalog(id, modelCatalogRules)
-	if cap.Context == 0 {
-		cap.Context = zcode.Context
-	}
-	if cap.Output == 0 {
-		cap.Output = zcode.Output
-	}
-	if cap.ReasoningLevels == nil {
-		cap.ReasoningLevels = zcode.ReasoningLevels
-	}
-	// features 逐字段补空：内建正则给出的位不得被后面的站点层 / 目录层改写。
-	cap.Features = mergeFeatures(cap.Features, zcode.Features)
-	if cap.Source == "" && (zcode.Context > 0 || zcode.Output > 0 || zcode.ReasoningLevels != nil || zcode.Features.HasAny()) {
-		cap.Source = "zcode"
-	}
-
-	// 3. site 层：baseURL 为空、或 apiType 不满足规则门时整层不命中。
+	// 2. site 层：baseURL 为空、或 apiType 不满足规则门时整层不命中。
+	// 排在 zcode 家族层之前：站点规则是 ZCode 按 baseUrl/apiType 定向的网关调参，在 ZCode 的
+	// 规则数组里拼在 modelRules 之后、由 overlay 覆盖家族值，因此它在 APM 里也必须是比家族
+	// 正则更具体的 ZCode 事实。否则家族层恒非空的输入模态会整字段压掉站点层的模态集合。
 	site := matchSiteRulesWith(id, baseURL, apiType, rules)
 	if cap.Context == 0 {
 		cap.Context = site.Context
@@ -200,6 +197,25 @@ func lookupCapabilityForSite(modelID, baseURL, apiType string, overrides []model
 	cap.Features = mergeFeatures(cap.Features, site.Features)
 	if cap.Source == "" && (site.Context > 0 || site.Output > 0 || site.ReasoningLevels != nil || site.Features.HasAny()) {
 		cap.Source = siteSource
+	}
+
+	// 3. zcode 正则全表顺序覆盖（既有正确值的既有来源，必须排在社区目录之前，但排在站点层
+	// 这个更具体的 ZCode 事实之后）。
+	zcode := mergeCatalog(id, modelCatalogRules)
+	if cap.Context == 0 {
+		cap.Context = zcode.Context
+	}
+	if cap.Output == 0 {
+		cap.Output = zcode.Output
+	}
+	if cap.ReasoningLevels == nil {
+		cap.ReasoningLevels = zcode.ReasoningLevels
+	}
+	// features 逐字段补空：内建正则给出的位不得被后面的目录层改写，但它也改不动站点层
+	// 已经给出的位。
+	cap.Features = mergeFeatures(cap.Features, zcode.Features)
+	if cap.Source == "" && (zcode.Context > 0 || zcode.Output > 0 || zcode.ReasoningLevels != nil || zcode.Features.HasAny()) {
+		cap.Source = "zcode"
 	}
 
 	// 4. presets 层：APM 手维护的旧表。它代表「此前发布物的既有行为」，因此必须排在社区
@@ -280,13 +296,14 @@ func lookupCatalogTolerant(modelID string) ModelCapability {
 //
 // 它在完整分层里的位置（见 lookupCapabilityForSite）：
 //
-// provider 返回 > override > zcode > site > presets > catalog
+// provider 返回 > override > site > zcode > presets > catalog
 //
 //   - provider 返回：调用方从 /models 拿到的 ctx/out 是 API 事实，永远最高；
 //   - override：APM 手维护的修正，仅覆盖它显式给出的字段，以便在内建数据落后时立刻纠偏；
+//   - site：站点级规则要同时满足模型名 + baseUrl（+ apiType），是 ZCode 自身最具体的一层；
+//     ZCode 的规则数组把它拼在家族正则之后由 overlay 覆盖家族值，因此它必须排在下面这层之前；
 //   - zcode（本函数）：ZCode 自带的家族正则。APM 写出的配置正是给 ZCode / DSH 消费的，
 //     因此这一层就是那个 harness 的真正口径，必须排在社区数据之前；
-//   - site：站点级规则要同时满足模型名 + baseUrl（+ apiType），是 ZCode 自身最具体的一层；
 //   - presets：APM 手维护旧表，代表此前发布物的既有行为，社区快照同样不应静默改写它；
 //   - catalog：第三方社区离线目录，最后兜底，只补前面各层留下的空缺，**永不改写**已给出的值
 //     （实测社区数据与既有值存在 272000 vs 1050000、262000 vs 262144 这类离群差异）。

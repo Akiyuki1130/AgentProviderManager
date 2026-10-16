@@ -280,6 +280,8 @@ export interface BackupProviderSummary {
   id: string
   name: string
   kind: string
+  /** 文件里的 Base URL：预览必须显示它，否则用户看不出目标域名被换掉。 */
+  base_url?: string
   model_count: number
   has_api_key: boolean
 }
@@ -320,10 +322,19 @@ export interface BackupImportFailure {
   error: string
 }
 
+/** 备份/源配置不含密钥、且 Base URL 与本地已有配置不同源，被整条跳过的提供商。 */
+export interface KeyConflict {
+  id: string
+  local_base_url?: string
+  backup_base_url?: string
+  source_base_url?: string
+}
+
 export interface ImportBackupResult {
   success: boolean
   error?: string
   imported?: string[]
   skipped?: string[]
   failed?: BackupImportFailure[]
+  key_conflict?: KeyConflict[]
 }

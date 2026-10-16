@@ -11,7 +11,7 @@ import (
 //
 // 分层求值的顺序（见 lookupCapabilityForSite）是
 //
-//	override → zcode 内建正则 → site 站点规则 → presets 旧表 → catalog 离线目录
+//	override → site 站点规则 → zcode 内建正则 → presets 旧表 → catalog 离线目录
 //
 // 其中 presets 与 catalog 都是「兜底层」，它们的**相对顺序**决定了社区快照能否静默改写
 // 已经发布出去的取值（实测社区数据存在 gpt-4 上下文 128000→8192、
@@ -218,8 +218,8 @@ func featureFieldValue(f ModelFeatures, name string) (string, bool) {
 }
 
 // TestFeaturesLayeringNeverErasesEarlierFields 是 features 版的「零回归」网：在**合成表**上逐字段
-// 断言「更早层已经给出的能力位，绝不被更晚的层改写或清空」，并顺带锁住 override → zcode →
-// site → catalog 的层序（presets 旧表没有 features 列，不参与）。
+// 断言「更早层已经给出的能力位，绝不被更晚的层改写或清空」，并顺带锁住 override → site →
+// zcode → catalog 的层序（presets 旧表没有 features 列，不参与）。
 //
 // 期望值不是把实现里的合并代码抄一遍，而是现场调用各层函数取回它们**各自**的提案，再按文档
 // 层序取第一个「已知」的提案——与同文件既有的「旧两层现场构造」写法同源：被验证的是合并顺序，
@@ -312,7 +312,7 @@ func TestFeaturesLayeringNeverErasesEarlierFields(t *testing.T) {
 
 		got := lookupCapabilityForSite(sc.id, sc.baseURL, "", sc.overrides, sc.siteRules)
 
-		// 现场取回各层**各自**的提案，按文档层序排列。
+		// 现场取回各层**各自**的提案，按文档层序排列（override → site → zcode → catalog）。
 		// 注意：override 层这里取的是条目原值，而实现会先过 normalizeOverrideFeatures（模态归一）。
 		// 因此本用例的合成条目必须写规范词（现有条目都是），否则观测值与实现值会不必要地不一致。
 		layers := make([]featureLayer, 0, 4)
@@ -320,8 +320,8 @@ func TestFeaturesLayeringNeverErasesEarlierFields(t *testing.T) {
 			layers = append(layers, featureLayer{"override", ov.Features})
 		}
 		layers = append(layers,
-			featureLayer{"zcode", zcodeObserved.Features},
 			featureLayer{"site", matchSiteRulesWith(sc.id, sc.baseURL, "", sc.siteRules).Features},
+			featureLayer{"zcode", zcodeObserved.Features},
 			featureLayer{"catalog", lookupCatalogFeatures(sc.id)},
 		)
 

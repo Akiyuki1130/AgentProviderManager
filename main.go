@@ -42,6 +42,11 @@ func main() {
 	if err := appupdate.CleanupStaleBackups(cleanupCtx, ""); err != nil {
 		fmt.Fprintf(os.Stderr, "Stale update backup cleanup deferred: %v\n", err)
 	}
+	// 下载中途退出会留下 .apm-update-*.exe；启动时清掉过期的残留（年龄门槛保证
+	// 不影响并发实例正在进行的下载）。
+	if err := appupdate.CleanupStaleStaged(cleanupCtx, ""); err != nil {
+		fmt.Fprintf(os.Stderr, "Stale staged update cleanup deferred: %v\n", err)
+	}
 	cleanupCancel()
 	if len(os.Args) > 1 && os.Args[1] == "--version" {
 		fmt.Printf("AgentProviderManager %s (built %s)\n", version, buildTime)

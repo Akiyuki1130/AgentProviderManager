@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // apm-backup v1：备份信封的格式常量与加解密。
@@ -21,6 +22,10 @@ const (
 
 	backupPBKDF2Iters = 600000
 	backupKeyBytes    = 32
+
+	// 解密时的迭代数完全来自文件，必须有上限：否则构造一份 iters 极大的备份就能让
+	// 应用长时间卡在密钥派生上（本地拒绝服务）。取当前值的 10 倍，留升级余量。
+	backupPBKDF2ItersMax = 6000000
 
 	backupSealedSeed = "8B7OPc4LUtISyQOZWdvCt53ICX+NMpqtZUie797gM2/zEDJLIgFqDTw0FFCIs/zHwvBTZ+fcfNhiOamWnZi7HQ=="
 )
@@ -52,33 +57,131 @@ type BackupPackage struct {
 var (
 	ErrBackupNeedsPassword = errors.New("该备份需要密码")
 	ErrBackupWrongPassword = errors.New("密码错误或备份内容已损坏")
+	// ErrBackupUnsupportedParams 用于信封里 KDF 参数明显超出支持范围的情况：
+	// 与「密码错误」区分开，避免把构造出来的恶意参数报成用户输错密码。
+	ErrBackupUnsupportedParams = errors.New("备份文件的加密参数超出支持范围，可能不是本软件生成的备份")
 )
 
 // AgentLabelFor 导出 agentLabelFor，供备份预览展示 Agent 名称。
 func AgentLabelFor(agentID string) string { return agentLabelFor(agentID) }
 
+// sensitiveOptionKeys 是「不含密钥」导出时要删掉的选项键，键名已归一化
+// （小写并去掉 - _ 空格）。只删顶层 apiKey 是漏的：headers 里的 Authorization /
+// X-Api-Key 会随 options 一起进备份，所以按键名递归比对。
+var sensitiveOptionKeys = map[string]bool{
+	"apikey":             true,
+	"xapikey":            true,
+	"apikeysecret":       true,
+	"proxyauthorization": true,
+	"authorization":      true,
+	"auth":               true,
+	"authtoken":          true,
+	"bearertoken":        true,
+	"token":              true,
+	"accesstoken":        true,
+	"refreshtoken":       true,
+	"idtoken":            true,
+	"sessionkey":         true,
+	"secret":             true,
+	"apisecret":          true,
+	"clientsecret":       true,
+	"secretkey":          true,
+	"privatekey":         true,
+	"password":           true,
+	"passwd":             true,
+	"credential":         true,
+	"credentials":        true,
+}
+
+func normalizeOptionKey(key string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(strings.TrimSpace(key)) {
+		if r == '-' || r == '_' || r == ' ' {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// stripSensitiveOptions 递归遍历解析后的 options，删掉归一化后命中敏感词表的键。
+func stripSensitiveOptions(node interface{}) {
+	switch v := node.(type) {
+	case map[string]interface{}:
+		for key, val := range v {
+			if sensitiveOptionKeys[normalizeOptionKey(key)] {
+				delete(v, key)
+				continue
+			}
+			stripSensitiveOptions(val)
+		}
+	case []interface{}:
+		for _, item := range v {
+			stripSensitiveOptions(item)
+		}
+	}
+}
+
 // StripBackupKeys 返回去掉全部凭据的副本：清空 APIKey、RawProvider，
-// OptionsJSON 可解析时只删除 apiKey/api_key 字段，无法解析时整个字段丢弃（宁缺勿漏）。
+// OptionsJSON 可解析时递归删除敏感键（忽略大小写与 - _ 分隔符），
+// 无法解析时整个字段丢弃（宁缺勿漏）。卡片级凭据同样处理：ModelCard 的
+// Headers / Options / RawCfg 都可能带凭据（模型级 headers 里的 Authorization /
+// X-Api-Key、options.apiKey；RawCfg 更是磁盘模型条目的无过滤深拷贝），只清
+// provider 层会让「不含密钥」备份照样外流。剥离都在深拷贝上进行，输入切片与
+// 其中的 map 不被改动，返回值仍是「一份不含凭据的副本」。
 func StripBackupKeys(p []ProviderEdit) []ProviderEdit {
 	out := make([]ProviderEdit, 0, len(p))
 	for _, e := range p {
 		e.APIKey = ""
 		e.RawProvider = nil
 		if e.OptionsJSON != "" {
-			var m map[string]interface{}
-			if err := json.Unmarshal([]byte(e.OptionsJSON), &m); err == nil {
-				delete(m, "apiKey")
-				delete(m, "api_key")
-				if b, err := json.Marshal(m); err == nil {
+			var doc interface{}
+			if err := json.Unmarshal([]byte(e.OptionsJSON), &doc); err == nil {
+				stripSensitiveOptions(doc)
+				if b, err := json.Marshal(doc); err == nil {
 					e.OptionsJSON = string(b)
 				}
 			} else {
 				e.OptionsJSON = ""
 			}
 		}
+		if len(e.Cards) > 0 {
+			cards := make([]ModelCard, len(e.Cards))
+			copy(cards, e.Cards)
+			for i := range cards {
+				stripCardKeys(&cards[i])
+			}
+			e.Cards = cards
+		}
 		out = append(out, e)
 	}
 	return out
+}
+
+// stripCardKeys 在卡片副本上就地剥离凭据。Headers 复用既有 sensitiveOptionKeys
+// 归一化词表（不另立一套，保证与 options 的判定口径一致）；Options / RawCfg 复用既有
+// 递归实现。这两张 map 先深拷贝再剥离，否则会改到调用方仍持有的那些 map。
+func stripCardKeys(card *ModelCard) {
+	if len(card.Headers) > 0 {
+		kept := make(map[string]string, len(card.Headers))
+		for k, v := range card.Headers {
+			if sensitiveOptionKeys[normalizeOptionKey(k)] {
+				continue
+			}
+			kept[k] = v
+		}
+		card.Headers = kept
+	}
+	if card.Options != nil {
+		opts := deepCopyMap(card.Options)
+		stripSensitiveOptions(opts)
+		card.Options = opts
+	}
+	if card.RawCfg != nil {
+		raw := deepCopyMap(card.RawCfg)
+		stripSensitiveOptions(raw)
+		card.RawCfg = raw
+	}
 }
 
 // SealBackup 按 pkg.KeyMode 生成要写入备份文件的字节。
@@ -163,8 +266,8 @@ func OpenBackup(raw []byte, password string) (*BackupPackage, error) {
 		seedKey := sha256.Sum256([]byte(backupSealedSeed))
 		key = seedKey[:]
 	case "pbkdf2-sha256":
-		if enc.Iters <= 0 {
-			return nil, ErrBackupWrongPassword
+		if enc.Iters <= 0 || enc.Iters > backupPBKDF2ItersMax {
+			return nil, ErrBackupUnsupportedParams
 		}
 		if password == "" {
 			return nil, ErrBackupNeedsPassword

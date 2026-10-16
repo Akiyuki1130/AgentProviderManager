@@ -81,6 +81,17 @@ func collectProviderEdits(agent, target string, selected []string) ([]core.Provi
 	return out, nil
 }
 
+// rejectNonLocalPath 拒绝 UNC 与设备路径。备份可能含密钥，读写到网络共享
+// （\\server\share）或设备命名空间（\\.\、\\?\）都不在本功能的预期范围内，
+// 一旦写错就是把凭据投递到了第三方主机。
+func rejectNonLocalPath(path string) error {
+	trimmed := strings.TrimSpace(path)
+	if strings.HasPrefix(trimmed, `\\`) || strings.HasPrefix(trimmed, "//") {
+		return errors.New("不支持 UNC 或设备路径，请选择本地磁盘上的文件")
+	}
+	return nil
+}
+
 func (a *App) ExportBackup(opts map[string]interface{}) map[string]interface{} {
 	if opts == nil {
 		return map[string]interface{}{"success": false, "error": "参数格式错误"}
@@ -88,6 +99,9 @@ func (a *App) ExportBackup(opts map[string]interface{}) map[string]interface{} {
 	path := strings.TrimSpace(stringOr(opts["path"], ""))
 	if path == "" {
 		return map[string]interface{}{"success": false, "error": "请先选择备份保存位置"}
+	}
+	if err := rejectNonLocalPath(path); err != nil {
+		return map[string]interface{}{"success": false, "error": err.Error()}
 	}
 	includeKeys, _ := opts["include_keys"].(bool)
 	keyMode := strings.TrimSpace(stringOr(opts["key_mode"], ""))
@@ -162,6 +176,9 @@ func readBackupPackage(path, password string) (*core.BackupPackage, map[string]i
 	if strings.TrimSpace(path) == "" {
 		return nil, map[string]interface{}{"success": false, "error": "请选择备份文件"}
 	}
+	if err := rejectNonLocalPath(path); err != nil {
+		return nil, map[string]interface{}{"success": false, "error": err.Error()}
+	}
 	info, err := os.Stat(path)
 	if err != nil {
 		return nil, map[string]interface{}{"success": false, "error": core.ShortText(err.Error(), 300)}
@@ -194,7 +211,7 @@ func (a *App) InspectBackup(path, password string) map[string]interface{} {
 	list := make([]map[string]interface{}, 0, len(pkg.Providers))
 	for _, p := range pkg.Providers {
 		list = append(list, map[string]interface{}{
-			"id": p.ID, "name": p.Name, "kind": p.Kind,
+			"id": p.ID, "name": p.Name, "kind": p.Kind, "base_url": p.BaseURL,
 			"model_count": len(p.Cards), "has_api_key": p.APIKey != "",
 		})
 	}
@@ -243,6 +260,7 @@ func (a *App) ImportBackup(path, password, conflict string) map[string]interface
 	imported := []string{}
 	skipped := []string{}
 	failed := []map[string]interface{}{}
+	keyConflicts := []map[string]interface{}{}
 	for _, p := range pkg.Providers {
 		_, isExisting := existingEdits[p.ID]
 		if isExisting && conflict == "skip" {
@@ -251,9 +269,21 @@ func (a *App) ImportBackup(path, password, conflict string) map[string]interface
 		}
 		apiKey := p.APIKey
 		if apiKey == "" && isExisting && existingEdits[p.ID] != nil {
-			// 无密钥备份覆盖本地已有条目时保留现有 Key，与 MergeConfig 的保护同义，
-			// 否则 v2 store 会把空 api_key 解释成「编辑器清空了 Key」而静默删除。
-			apiKey = existingEdits[p.ID].APIKey
+			local := existingEdits[p.ID]
+			// 无密钥备份覆盖本地已有条目时保留现有 Key，但只在「同一个来源」时保留：
+			// 文件里的 base_url 可以指向任意主机，把本地真实 Key 挂到别的主机上等于
+			// 把凭据交给对方。来源不同就整条跳过，让用户自己决定要不要重建。
+			switch {
+			case local.APIKey == "":
+				// 本地也没有 Key：没有可外泄的凭据，按文件内容导入。
+			case core.SameURLOrigin(local.BaseURL, p.BaseURL):
+				apiKey = local.APIKey
+			default:
+				keyConflicts = append(keyConflicts, map[string]interface{}{
+					"id": p.ID, "local_base_url": local.BaseURL, "backup_base_url": p.BaseURL,
+				})
+				continue
+			}
 		}
 		payload := map[string]interface{}{
 			"provider_id": p.ID, "provider_name": p.Name, "base_url": p.BaseURL,
@@ -271,5 +301,5 @@ func (a *App) ImportBackup(path, password, conflict string) map[string]interface
 			failed = append(failed, map[string]interface{}{"id": p.ID, "error": core.ShortText(stringOr(resp["error"], "导入失败"), 300)})
 		}
 	}
-	return map[string]interface{}{"success": true, "imported": imported, "skipped": skipped, "failed": failed}
+	return map[string]interface{}{"success": true, "imported": imported, "skipped": skipped, "failed": failed, "key_conflict": keyConflicts}
 }

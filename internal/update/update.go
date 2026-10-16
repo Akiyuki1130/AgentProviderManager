@@ -184,7 +184,7 @@ func (u *Updater) DownloadLatest(ctx context.Context, currentVersion string, pro
 	if err := os.MkdirAll(stagingDir, 0755); err != nil {
 		return UpdateInfo{}, fmt.Errorf("create staging directory: %w", err)
 	}
-	f, err := os.CreateTemp(stagingDir, ".apm-update-*.exe")
+	f, err := os.CreateTemp(stagingDir, updateFilePrefix+"*.exe")
 	if err != nil {
 		return UpdateInfo{}, fmt.Errorf("create staged file: %w", err)
 	}

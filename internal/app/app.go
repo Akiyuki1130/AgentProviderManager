@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -22,11 +24,15 @@ type App struct {
 	updateMu          sync.Mutex
 	updateInfo        appupdate.UpdateInfo
 	updateDownloading bool
-	targetConfigPath  string
-	currentAgent      string
-	agentPaths        map[string]string
-	lastDialogPath    string
-	settingsPath      string
+	// installToken 是「安装并重启」的一次性确认令牌：由 PrepareUpdateInstall 发放，
+	// InstallUpdate 消费后立即作废。界面上的确认弹窗是唯一的发放点。
+	installToken       string
+	installTokenExpiry time.Time
+	targetConfigPath   string
+	currentAgent       string
+	agentPaths         map[string]string
+	lastDialogPath     string
+	settingsPath       string
 }
 
 func NewApp() *App {
@@ -331,7 +337,52 @@ func (a *App) DownloadUpdate() map[string]interface{} {
 	return status
 }
 
-func (a *App) InstallUpdate() map[string]interface{} {
+// PrepareUpdateInstall 发放一次性安装令牌。安装会替换并重启可执行文件，因此令牌
+// 只由界面上的显式确认弹窗触发；InstallUpdate 校验后立刻作废（单次 + 过期）。
+func (a *App) PrepareUpdateInstall() map[string]interface{} {
+	token, reason := a.mintInstallToken()
+	if reason != "" {
+		return map[string]interface{}{"success": false, "error": reason}
+	}
+	return map[string]interface{}{"success": true, "token": token}
+}
+
+// mintInstallToken 发放一次性安装令牌：随机 16 字节 + 5 分钟有效期。尚未下载到暂存
+// 文件时拒绝发放。抽成独立方法是为了让测试能直接驱动令牌的发放与消费，而不必真的
+// 启动 helper 进程或触碰真实路径；返回的 reason 为中文、非空即表示发放失败。
+func (a *App) mintInstallToken() (token string, reason string) {
+	a.updateMu.Lock()
+	defer a.updateMu.Unlock()
+	if a.updateInfo.StagedPath == "" || a.updateInfo.ExpectedSHA256 == "" {
+		return "", "没有已下载的更新"
+	}
+	raw := make([]byte, 16)
+	if _, err := rand.Read(raw); err != nil {
+		return "", "生成安装令牌失败，请重试"
+	}
+	a.installToken = hex.EncodeToString(raw)
+	a.installTokenExpiry = time.Now().Add(5 * time.Minute)
+	return a.installToken, ""
+}
+
+// consumeInstallToken 校验并立刻作废令牌。无论成败都清零：令牌是一次性的，失败后
+// 必须回到界面上重新确认。返回值 ok 为 false 时 reason 是给用户看的中文原因。
+func (a *App) consumeInstallToken(token string) (ok bool, reason string) {
+	a.updateMu.Lock()
+	defer a.updateMu.Unlock()
+	valid := a.installToken != "" && token == a.installToken && time.Now().Before(a.installTokenExpiry)
+	a.installToken = ""
+	a.installTokenExpiry = time.Time{}
+	if !valid {
+		return false, "安装确认已失效，请在界面上重新确认后再安装"
+	}
+	return true, ""
+}
+
+func (a *App) InstallUpdate(token string) map[string]interface{} {
+	if ok, reason := a.consumeInstallToken(token); !ok {
+		return map[string]interface{}{"success": false, "error": reason}
+	}
 	a.updateMu.Lock()
 	info := a.updateInfo
 	a.updateMu.Unlock()
@@ -1423,8 +1474,13 @@ func (a *App) RefreshProviderModels(providerID, baseURLOverride, apiKeyOverride 
 			baseURL = edit.BaseURL
 		}
 		apiKey := strings.TrimSpace(apiKeyOverride)
+		// 已存 Key 只在与「本次请求要用的 Base URL」同源时沿用：覆盖值可以是任意
+		// 主机，把真实 Key 发过去等于把凭据交给对方（界面上的重新获取总会带上表单
+		// 里的 Key，所以正常路径不受影响）。
 		if apiKey == "" && edit != nil {
-			apiKey = edit.APIKey
+			if baseURLOverride == "" || core.SameURLOrigin(edit.BaseURL, baseURLOverride) {
+				apiKey = edit.APIKey
+			}
 		}
 		if baseURL == "" {
 			return map[string]interface{}{"success": false, "error": "该提供商未配置 Base URL，请先在管理页填写"}
@@ -1445,8 +1501,11 @@ func (a *App) RefreshProviderModels(providerID, baseURLOverride, apiKeyOverride 
 		baseURL = provider.BaseURL
 	}
 	apiKey := strings.TrimSpace(apiKeyOverride)
+	// 同 backend 分支：已存 Key 只在与本次要用的 Base URL 同源时沿用。
 	if apiKey == "" && provider != nil {
-		apiKey = provider.APIKey
+		if baseURLOverride == "" || core.SameURLOrigin(provider.BaseURL, baseURLOverride) {
+			apiKey = provider.APIKey
+		}
 	}
 	if baseURL == "" {
 		return map[string]interface{}{"success": false, "error": "该提供商未配置 Base URL，请先在管理页填写"}
@@ -1864,6 +1923,10 @@ func (a *App) MergeConfig(payload map[string]interface{}) map[string]interface{}
 	}
 	imported := []string{}
 	merged := []string{}
+	keyConflicts := []map[string]interface{}{}
+	// changed 记录本轮是否真的改过目标文档：所有条目都可能因来源不同被跳过，
+	// 那种情况下内容没变，不应再写盘（否则只是白白刷新 mtime）。
+	changed := false
 	for _, pid := range selectedIDs {
 		edit, gerr := srcStore.Get(srcDoc, pid)
 		if gerr != nil {
@@ -1872,14 +1935,25 @@ func (a *App) MergeConfig(payload map[string]interface{}) map[string]interface{}
 		apiKey := strings.TrimSpace(edit.APIKey)
 		cards := edit.Cards
 		if existing, eerr := tgtStore.Get(tgtDoc, pid); eerr == nil && existing != nil {
+			// 与备份导入同一条闸门：源没有 Key 时只在「同一个来源」沿用目标已存的
+			// Key；来源不同就整条跳过，避免把本地凭据挂到源配置里的任意 base_url 上。
+			if apiKey == "" {
+				switch {
+				case existing.APIKey == "":
+				case core.SameURLOrigin(existing.BaseURL, edit.BaseURL):
+					apiKey = existing.APIKey
+				default:
+					keyConflicts = append(keyConflicts, map[string]interface{}{
+						"id": pid, "local_base_url": existing.BaseURL, "source_base_url": edit.BaseURL,
+					})
+					continue
+				}
+			}
 			if merge {
 				cards = core.MergeModelCards(existing.Cards, cards)
 				merged = append(merged, pid)
 			} else {
 				imported = append(imported, pid)
-			}
-			if apiKey == "" {
-				apiKey = existing.APIKey
 			}
 		} else {
 			imported = append(imported, pid)
@@ -1899,15 +1973,18 @@ func (a *App) MergeConfig(payload map[string]interface{}) map[string]interface{}
 			return map[string]interface{}{"success": false, "error": core.ShortText(uerr.Error(), 300)}
 		}
 		tgtDoc = next
+		changed = true
 	}
-	if err := tgtBackend.Write(target, tgtDoc, fingerprint); err != nil {
-		return map[string]interface{}{"success": false, "error": fmt.Sprintf("写入配置文件时出错：\n%s", core.ShortText(err.Error(), 300))}
+	if changed {
+		if err := tgtBackend.Write(target, tgtDoc, fingerprint); err != nil {
+			return map[string]interface{}{"success": false, "error": fmt.Sprintf("写入配置文件时出错：\n%s", core.ShortText(err.Error(), 300))}
+		}
 	}
 	latestBak := snapshot.BackupPath
 	if latestBak == "" {
 		latestBak = core.FindLatestBackup(target)
 	}
-	return map[string]interface{}{"success": true, "imported": imported, "merged": merged, "target": target, "backup": latestBak, "latest_backup": latestBak, "source_agent": srcAgent, "source_format": srcFormat}
+	return map[string]interface{}{"success": true, "imported": imported, "merged": merged, "key_conflict": keyConflicts, "target": target, "backup": latestBak, "latest_backup": latestBak, "source_agent": srcAgent, "source_format": srcFormat}
 }
 
 // Migrate

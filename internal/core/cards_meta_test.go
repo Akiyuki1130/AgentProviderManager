@@ -193,8 +193,15 @@ func TestBuildModelCardsForSiteProviderValuesWin(t *testing.T) {
 	}
 }
 
-// TestBuildModelCardsForSiteSupportedLevels _supported_levels 的优先级：
-// provider 明确给出的档位（API 事实）> 能力表档位，且 autoFill 为假也照写 provider 档位。
+// TestBuildModelCardsForSiteSupportedLevels _supported_levels 的优先级与开关口径：
+// provider 明确给出的档位（API 事实）> 能力表档位；**两者都与 autoFill 无关**。
+//
+// 2026-10-15（阶段 F）本条改写过一次：此前能力表档位被 `autoFill` 门控（「provider 未给
+// 档位 + autoFill 为假 ⇒ SupportedLevels 为 nil」），现改为照填。依据：该开关的文案是
+// 「导入时自动补全上下文与输出长度」，管的是**会被写进配置的值**；而 _supported_levels
+// 从不写盘、也不参与任何自动写值，只驱动展示（档位自适应弱化）、种子（开思考时用支持
+// 集合）与「按能力表补全档位」这一显式动作——与同性质的 _capabilities_inferred 一样
+// 应当无条件写入（理由见 cards.go 该处注释）。
 func TestBuildModelCardsForSiteSupportedLevels(t *testing.T) {
 	setCustomVariantsForTest(t, false)
 	const base = "https://example.invalid/v1"
@@ -205,35 +212,44 @@ func TestBuildModelCardsForSiteSupportedLevels(t *testing.T) {
 	}
 
 	provider := map[string]interface{}{"thinking_level": "max"}
-	c := cardsForSiteTest(t, "glm-5.3", provider, true, base, api)
-	if !reflect.DeepEqual(c.SupportedLevels, []string{"max"}) {
-		t.Errorf("provider 档位应胜出：%v", c.SupportedLevels)
+	cases := []struct {
+		name     string
+		meta     map[string]interface{}
+		autoFill bool
+		want     []string
+	}{
+		{"provider 档位 + autoFill 开：provider 胜出", provider, true, []string{"max"}},
+		{"provider 档位 + autoFill 关：provider 仍胜出", provider, false, []string{"max"}},
+		{"provider 未给 + autoFill 开：回落能力表", map[string]interface{}{}, true, []string{"low", "high", "max"}},
+		{"provider 未给 + autoFill 关：仍回落能力表（阶段 F 修正）", map[string]interface{}{}, false, []string{"low", "high", "max"}},
 	}
-	// autoFill 为假：provider 档位照写（与 _vendor 同级）。
-	c = cardsForSiteTest(t, "glm-5.3", provider, false, base, api)
-	if !reflect.DeepEqual(c.SupportedLevels, []string{"max"}) {
-		t.Errorf("autoFill 关闭时 provider 档位仍应写入：%v", c.SupportedLevels)
+	for _, c := range cases {
+		if got := cardsForSiteTest(t, "glm-5.3", c.meta, c.autoFill, base, api).SupportedLevels; !reflect.DeepEqual(got, c.want) {
+			t.Errorf("%s：SupportedLevels=%v，期望 %v", c.name, got, c.want)
+		}
 	}
-	// provider 没给档位：autoFill 为真才用能力表档位。
-	c = cardsForSiteTest(t, "glm-5.3", map[string]interface{}{}, true, base, api)
+	// 放开档位不等于放开 ctx/out 的门控：provider 值照样胜出，缺的那一侧仍留空。
+	c := cardsForSiteTest(t, "glm-5.3", map[string]interface{}{"context_length": 64000}, false, base, api)
+	if c.Context != 64000 || c.Output != "" {
+		t.Errorf("autoFill 关闭时 ctx/out 门控必须保持不变：ctx=%v out=%v", c.Context, c.Output)
+	}
 	if !reflect.DeepEqual(c.SupportedLevels, []string{"low", "high", "max"}) {
-		t.Errorf("autoFill 为真时应回落能力表档位：%v", c.SupportedLevels)
+		t.Errorf("autoFill 关闭时档位仍应回落能力表：%v", c.SupportedLevels)
 	}
-	c = cardsForSiteTest(t, "glm-5.3", map[string]interface{}{}, false, base, api)
-	if c.SupportedLevels != nil {
-		t.Errorf("autoFill 为假且 provider 未给档位时应为 nil：%v", c.SupportedLevels)
-	}
-	// 站点层补出的档位同样经 autoFill 落到卡片上：minimax-m2.7 只有站点规则给档位。
-	c = cardsForSiteTest(t, "minimax-m2.7", map[string]interface{}{}, true, "https://opencode.ai/zen/go/v1", "anthropic-messages")
-	if !reflect.DeepEqual(c.SupportedLevels, []string{"enabled"}) {
-		t.Errorf("站点层档位应落到卡片：%v", c.SupportedLevels)
-	}
-	if c.Vendor != "minimax" {
-		t.Errorf("Vendor=%q，期望 minimax", c.Vendor)
+	// 站点层补出的档位同样落到卡片上，且与开关无关：minimax-m2.7 只有站点规则给档位。
+	for _, autoFill := range []bool{true, false} {
+		c := cardsForSiteTest(t, "minimax-m2.7", map[string]interface{}{}, autoFill, "https://opencode.ai/zen/go/v1", "anthropic-messages")
+		if !reflect.DeepEqual(c.SupportedLevels, []string{"enabled"}) {
+			t.Errorf("站点层档位应落到卡片（autoFill=%v）：%v", autoFill, c.SupportedLevels)
+		}
+		if c.Vendor != "minimax" {
+			t.Errorf("Vendor=%q，期望 minimax（autoFill=%v）", c.Vendor, autoFill)
+		}
 	}
 }
 
-// TestBuildModelCardsForSiteReasoning API 明确声明的思考支持态优先于按能力表 / 模型名做的推断。
+// TestBuildModelCardsForSiteReasoning API 明确声明的思考支持态优先于按能力表 / 模型名做的推断；
+// 反过来，provider 用**档位枚举**宣告的思考支持同样成立（见函数末尾一段，2026-10-15 阶段 F 补正）。
 func TestBuildModelCardsForSiteReasoning(t *testing.T) {
 	setCustomVariantsForTest(t, false)
 	const base = "https://example.invalid/v1"
@@ -252,6 +268,29 @@ func TestBuildModelCardsForSiteReasoning(t *testing.T) {
 	}
 	if c := cardsForSiteTest(t, "my-local-model", map[string]interface{}{"capabilities": map[string]interface{}{"reasoning": true}}, true, base, api); !c.Reasoning {
 		t.Errorf("API 明确 true 时应以 API 为准：%+v", c.Reasoning)
+	}
+	// provider 自报**档位枚举** = 支持思考（2026-10-15，阶段 F 补正）：自命名模型的能力表与
+	// 关键词都认不出它，但 API 明确列出了可选档位。此前的顺序会得到「卡片列出了档位却声明不
+	// 支持思考」，前端据此禁用思考开关，批量的「按能力表补全档位」也会把它当成显式关闭而跳过，
+	// 因此必须以档位枚举补正。
+	c := cardsForSiteTest(t, "my-local-model", map[string]interface{}{"thinking_level": []interface{}{"low", "high"}}, true, base, api)
+	if !c.Reasoning {
+		t.Errorf("provider 列出非 off 档位时应判定为支持思考：%+v", c)
+	}
+	if !reflect.DeepEqual(c.SupportedLevels, []string{"low", "high"}) {
+		t.Errorf("SupportedLevels=%v，期望 provider 自报的 [low high]", c.SupportedLevels)
+	}
+	// 只有关闭档的枚举不算支持思考（与能力表「存在非 off 档才算支持」同口径）。
+	if c := cardsForSiteTest(t, "my-local-model", map[string]interface{}{"thinking_level": []interface{}{"disabled"}}, true, base, api); c.Reasoning {
+		t.Errorf("档位枚举里只有 off 时不应判定为支持思考：%+v", c)
+	}
+	// provider **显式**声明过思考支持态时，档位枚举不得把它翻回来。
+	if c := cardsForSiteTest(t, "my-local-model", map[string]interface{}{"thinking_level": []interface{}{"high"}, "reasoning": false}, true, base, api); c.Reasoning {
+		t.Errorf("provider 显式 false 时不得被档位枚举覆盖：%+v", c)
+	}
+	// 关掉自动补全不影响这条判断（它看的是 provider 自报事实，不是能力表推断）。
+	if c := cardsForSiteTest(t, "my-local-model", map[string]interface{}{"thinking_level": []interface{}{"high"}}, false, base, api); !c.Reasoning {
+		t.Errorf("autoFill 关闭时 provider 自报档位仍应判为支持思考：%+v", c)
 	}
 }
 

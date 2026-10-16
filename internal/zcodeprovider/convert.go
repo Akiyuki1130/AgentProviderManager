@@ -321,6 +321,47 @@ var legacyInputFormatKeys = []struct {
 	{"pdf", "supportsPdf"},
 }
 
+// v2ImpliedTextKey 是 v2 输入面里唯一「**缺键即默认支持**」的键（只影响读端，写端仍只写真）。
+const v2ImpliedTextKey = "supportsText"
+
+// InputFormatModalities 把 v2 `properties.inputFormat` 读成「已知为真」的输入模态词，
+// 按 canonical 键序（text,image,video,audio,pdf）返回；没有 inputFormat 段（nil）时返回 nil。
+//
+// **supportsText 走 implied（缺键即真）语义**：只有显式 `false` 才排除 text——缺键、null、
+// 非布尔一律按「默认支持文本」处理。依据与生成脚本的输入侧口径完全一致
+// （scripts/sync-model-catalog.mjs 的 IMPLIED_TRUE_KEYS）：ZCode 的输入面里 text 是**默认项**，
+// 其余模态都是在 text 之上追加的增量；ZCode 自己写个人规则时 `inputFormatValue` 的默认值就是
+// `{supportsText: n?.supportsText ?? true, supportsImage: … ?? false, …}`，而它的最小增量
+// 写入器（`n===r ? delete e[t] : e[t]=n`）会把「与继承值相等」的键删掉——因此 ZCode 设置页
+// 编辑过（或经 APM 保存过）的个人规则通常根本不带 supportsText 键。
+// 若按严格 `=== true` 读，这类规则会被读成「输入 = image」之类**不含 text** 的集合；
+// 而中立层的模态是整字段「前层胜出」，这个残缺集合会把下层（离线目录 / 站点规则）给出的
+// 完整集合整段挡住（本缺陷的一手证据与后果见 capability.go 的站点层注释）。
+//
+// image / video / audio / pdf 与 outputFormat 一律维持严格 `=== true`：它们是叠加在 text 之上
+// 的增量，缺键只说明这条规则没提到它，当成「支持」就是凭空猜测。outputFormat 更是只有
+// supportsText 一位、表达不了非文本输出，「缺键即默认 text」会抹掉下层对 TTS 这类模型的
+// 正确读数（详见生成脚本里 IMPLIED_TRUE_KEYS 的注释）。
+func InputFormatModalities(format map[string]interface{}) []string {
+	if format == nil {
+		return nil
+	}
+	var out []string
+	for _, item := range legacyInputFormatKeys {
+		if item.key == v2ImpliedTextKey {
+			if b, ok := format[item.key].(bool); ok && !b {
+				continue
+			}
+			out = append(out, item.word)
+			continue
+		}
+		if b, _ := format[item.key].(bool); b {
+			out = append(out, item.word)
+		}
+	}
+	return out
+}
+
 // legacyCapabilityPropertyKeys 是中立布尔能力位到 v2 `properties` 键的映射（写端唯一口径，
 // 见 MODEL-MANAGEMENT-PLAN.md 10.2.3）。顺序即 propertiesOrder 里这几个键的顺序。
 var legacyCapabilityPropertyKeys = []struct {
@@ -483,15 +524,12 @@ func legacyModelConfig(mcfg map[string]interface{}) map[string]interface{} {
 		out["reasoning"] = map[string]interface{}{"variants": variants}
 	}
 	if format := ModelInputFormat(mcfg); format != nil {
-		var inputs []interface{}
-		if b, _ := format["supportsImage"].(bool); b {
-			inputs = append(inputs, "image")
-		}
-		if b, _ := format["supportsVideo"].(bool); b {
-			inputs = append(inputs, "video")
-		}
-		if len(inputs) > 0 {
-			out["modalities"] = map[string]interface{}{"input": inputs}
+		// 用与卡片读端同一个读取器（InputFormatModalities）：v2 的 5 个输入位全数转写，
+		// supportsText 走「缺键即真」的 implied 语义，其余四位严格只认 true。
+		// 于是「v2 → legacy」不再丢掉 text（旧实现只搬 image/video，往返一次就把 text 丢了），
+		// 而 legacy 的 `modalities.input` 恰好就是完整集合语义，转写是忠实的。
+		if inputs := InputFormatModalities(format); len(inputs) > 0 {
+			out["modalities"] = map[string]interface{}{"input": toInterfaceSlice(inputs)}
 		}
 	}
 	return out

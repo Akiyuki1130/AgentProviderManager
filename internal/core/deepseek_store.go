@@ -289,10 +289,10 @@ func deepSeekBuildEntry(providerID string, providerCfg map[string]interface{}, e
 			envName = derived
 		}
 		entry["apiKeyEnv"] = envName
-		delete(entry, "apiKey")
-	} else if envName == "" {
-		delete(entry, "apiKey")
 	}
+	// 明文 apiKey 一律清掉：凭据只经 apiKeyEnv 落到 .credentials.yaml。旧条目里可能
+	// 残留明文（entry 以旧节点为基座），在清空 Key 时更不能留着——否则密钥继续躺在 patch 里。
+	delete(entry, "apiKey")
 	entry["api"] = apiForDeepSeekKind(uiKind)
 	// 透传 headers 等 pi-ai 路由支持的字段（来自 ZCode 侧 options 或 DSH 原条目）。
 	for k, v := range deepSeekRouteExtras(opts) {

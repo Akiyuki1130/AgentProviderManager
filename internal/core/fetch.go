@@ -63,12 +63,9 @@ func FetchModelsRaw(baseURL, apiKey string, timeout time.Duration) ([]struct {
 		return nil, NewModelFetchError(fmt.Sprintf("请求被拦截：%v", err), "BAD_URL")
 	}
 
-	client := &http.Client{
-		Timeout: timeout,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
+	client := newGuardedClient(timeout, func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	})
 
 	headers := map[string]string{}
 	if strings.TrimSpace(apiKey) != "" {

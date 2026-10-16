@@ -145,34 +145,35 @@ func TestLookupModelCapabilityForSiteRealTables(t *testing.T) {
 		want    ModelCapability
 	}{
 		{
-			// 站点层补出一个档位空洞：内建正则（MiniMax-M2 家族）与离线目录（204800|131072|）
-			// 都没有档位，opencode + anthropic-messages 的站点规则补出 ["enabled"]。
-			// Source 仍记最高贡献者 zcode。
-			name:    "站点层补出一个档位空洞",
+			// 站点层全胜家族层：opencode + anthropic-messages 的站点规则给出
+			// 204800/131072/[enabled]，家族正则（MiniMax-M2.7 家族）给的 Output 只有 32000
+			// 且没有档位——站点规则命中后它的三列都必须胜出（ZCode 的 overlay 顺序）。
+			name:    "站点层胜家族层（minimax-m2.7）",
 			modelID: "minimax-m2.7",
 			baseURL: opencode,
 			apiType: "anthropic-messages",
 			want: ModelCapability{
-				Context: 204800, Output: 32000, ReasoningLevels: []string{"enabled"},
-				Vendor: "minimax", Source: "zcode",
+				Context: 204800, Output: 131072, ReasoningLevels: []string{"enabled"},
+				Vendor: "minimax", Source: siteSource,
 			},
 		},
 		{
-			// zcode 胜 catalog：gpt-5.6 家族内建是 1050000/128000，社区目录写的是
-			// 272000/128000（离群值），必须保留内建值——这正是审计要求改动顺序的原因。
-			name:    "zcode 胜 catalog（gpt-5.6 家族）",
+			// 站点层与家族层给出同一组值（1050000/128000/六档），因此这里锁的是
+			// 「社区目录的离群值 272000 不得改写它们」；Source 记最高贡献者 site。
+			name:    "site（与 zcode 家族同值）胜 catalog（gpt-5.6 家族）",
 			modelID: "gpt-5.6-luna",
 			baseURL: opencode,
 			apiType: "openai-responses",
 			want: ModelCapability{
 				Context: 1050000, Output: 128000,
 				ReasoningLevels: []string{"off", "low", "medium", "high", "xhigh", "max"},
-				Vendor:          "openai", Source: "zcode",
+				Vendor:          "openai", Source: siteSource,
 			},
 		},
 		{
 			// zcode 胜 catalog：内建 kimi-k2.7-code = 262144|98304|[enabled]，
 			// 目录 = 262144|262144|（Output 与档位都不同），内建值必须保留。
+			// baseURL 不命中任何站点规则，因此这里测的正是 zcode 与 catalog 两层。
 			name:    "zcode 胜 catalog（kimi-k2.7-code）",
 			modelID: "kimi-k2.7-code",
 			baseURL: "https://example.invalid/v1",
@@ -308,47 +309,181 @@ func TestLookupCapabilityForSiteBuiltinBeatsCommunityCatalog(t *testing.T) {
 	}
 }
 
-// TestLookupCapabilityForSiteZcodeBeatsSite 内建正则胜站点规则：注入同模型的站点规则
-// （三个字段都给），结果必须一个字段都不被站点层改写；再用同形状的规则证明站点层
-// 在「前面几层全空」时确实会生效（区分「被压制」与「实现缺失」）。
-func TestLookupCapabilityForSiteZcodeBeatsSite(t *testing.T) {
+// TestLookupCapabilityForSiteSiteBeatsFamilyRule 站点规则胜内建家族正则：ZCode 的规则数组把
+// providerSiteRules 拼在 modelRules / modelApiRules 之后，resolve() 顺序遍历、命中即 overlay，
+// 因此站点规则里的字段在 ZCode 里真实地覆盖家族正则；APM 的层序必须一致。
+//
+// 三个断言各有分工：
+//   - 站点规则三个字段都给 ⇒ 结果必须一个字段都不被家族层改写；
+//   - 站点规则只给一部分字段 ⇒ 它没给出的字段仍由家族层补空（逐字段语义不被「胜出」破坏）；
+//   - baseURL 不命中任何站点规则 ⇒ 家族值原样保留（证明上面不是「站点层被当成必须命中」）。
+func TestLookupCapabilityForSiteSiteBeatsFamilyRule(t *testing.T) {
 	const id = "glm-5.3-flash-zzz"
-	// 前提：该 id 不在离线目录里（无 "/" 也不走去前缀路径），因此只有覆盖层 / 内建正则 /
-	// 站点层会给值。presets 只兜底 ctx/out 两列，而内建正则已经给出 ctx/out（除非该字段为
-	// 0，presets 不会覆盖已有值），所以它不影响本用例的期望值。
+	// 前提：该 id 不在离线目录里（无 "/" 也不走去前缀路径），因此只有覆盖层 / 站点层 /
+	// 内建正则会给值，期望值不掺目录层。presets 只兜底 ctx/out 两列，而内建正则已经给出
+	// ctx/out（除非该字段为 0，presets 不会覆盖已有值），所以它不影响本用例的期望值。
 	if got := lookupCatalogTolerant(id); !sameCapability(got, ModelCapability{}) {
 		t.Fatalf("前提破坏：%s 已被离线目录命中：%+v", id, got)
 	}
-	zcodeOnly, _ := LookupModelCapability(id)
-	want := ModelCapability{Context: 1000000, Output: 128000, ReasoningLevels: []string{"low", "high", "max"}, Vendor: "zhipu", Source: "zcode"}
-	if !sameCapability(zcodeOnly, want) {
-		t.Fatalf("前提破坏：%s 的内建正则值变了：%+v", id, zcodeOnly)
+	// 家族层取值现场观察（不写死数字）：内建正则对该 id 给出 ctx/out/档位/features。
+	family := mergeCatalog(id, modelCatalogRules)
+	if family.Context == 0 || family.Output == 0 || family.ReasoningLevels == nil || !family.Features.HasAny() {
+		t.Fatalf("前提破坏：内建正则对 %s 要求 ctx/out/档位/features 都有值，实际 %+v / %s",
+			id, family, describeFeatures(family.Features))
+	}
+	wantFamily := ModelCapability{
+		Context:         family.Context,
+		Output:          family.Output,
+		ReasoningLevels: family.ReasoningLevels,
+		Features:        family.Features,
+		Vendor:          "zhipu",
+		Source:          "zcode",
+	}
+	if got, _ := LookupModelCapability(id); !sameCapability(got, wantFamily) {
+		t.Fatalf("前提破坏：%s 的无站点结果变了：%+v", id, got)
 	}
 
 	hostRe := mustReCS(t, `https://api\.example\.com/v1`)
-	sameModel := []siteRule{{
+	// 情形一：站点规则三个能力字段全给 —— 站点值全胜，Source 记 site。
+	full := []siteRule{{
 		Model:   mustRe(t, `glm-5\.3-flash-zzz`),
 		BaseURL: hostRe,
 		Context: 111,
 		Output:  222,
 		Levels:  []string{"medium"},
 	}}
-	if got := lookupCapabilityForSite(id, "https://api.example.com/v1", "", modelOverrides, sameModel); !sameCapability(got, want) {
-		t.Errorf("内建正则应胜站点规则：got %+v，期望 %+v", got, want)
+	wantSite := ModelCapability{Context: 111, Output: 222, ReasoningLevels: []string{"medium"}, Vendor: "zhipu", Source: siteSource}
+	if got := lookupCapabilityForSite(id, "https://api.example.com/v1", "", modelOverrides, full); !sameCapability(got, wantSite) {
+		t.Errorf("站点规则应胜家族正则：got %+v，期望 %+v", got, wantSite)
 	}
 
-	// 正向对照：内容相同的规则，换成前面几层全空的 id 时全部字段都由站点层给出。
-	anyModel := []siteRule{{
-		Model:   mustRe(t, `.*`),
+	// 情形二：站点规则只给 Context —— 胜出只发生在它给出的字段上，家族层的 out/档位必须照旧补空。
+	partial := []siteRule{{
+		Model:   mustRe(t, `glm-5\.3-flash-zzz`),
 		BaseURL: hostRe,
 		Context: 111,
-		Output:  222,
-		Levels:  []string{"medium"},
 	}}
-	got := lookupCapabilityForSite("zzz-local-model", "https://api.example.com/v1", "", modelOverrides, anyModel)
-	wantSite := ModelCapability{Context: 111, Output: 222, ReasoningLevels: []string{"medium"}, Vendor: "unknown", Source: siteSource}
-	if !sameCapability(got, wantSite) {
-		t.Errorf("站点层未被采用：got %+v，期望 %+v", got, wantSite)
+	wantPartial := wantFamily
+	wantPartial.Context = 111
+	wantPartial.Source = siteSource
+	if got := lookupCapabilityForSite(id, "https://api.example.com/v1", "", modelOverrides, partial); !sameCapability(got, wantPartial) {
+		t.Errorf("站点规则未给出的字段应由家族层补空：got %+v，期望 %+v", got, wantPartial)
+	}
+
+	// 对照：baseURL 不命中任何站点规则时站点层整体不参与，结果回到家族值（逐字段、含 Source）。
+	if got := lookupCapabilityForSite(id, "https://other.example.invalid/v1", "", modelOverrides, full); !sameCapability(got, wantFamily) {
+		t.Errorf("站点未命中时应收敛到家族值：got %+v，期望 %+v", got, wantFamily)
+	}
+	if got := lookupCapabilityForSite(id, "", "", modelOverrides, full); !sameCapability(got, wantFamily) {
+		t.Errorf("baseURL 为空时应收敛到家族值：got %+v，期望 %+v", got, wantFamily)
+	}
+}
+
+// TestLookupCapabilityForSiteRealSiteRuleBeatsFamilyRule 是同一语义在**真实生成表**上的回归：
+// 拿一条真实站点规则与一个同 id 也确实命中的家族正则，断言最终取到的是站点规则的值。
+//
+// 两条配对都取自生成表（model_site_rules_gen.go / model_catalog_gen.go），前提在用例内显式校验，
+// 因此表一回归（例如站点层又被挪回家族层之后、或某条规则被删）就会立刻变红，而不是静默退化。
+func TestLookupCapabilityForSiteRealSiteRuleBeatsFamilyRule(t *testing.T) {
+	cases := []struct {
+		name        string
+		modelID     string
+		baseURL     string
+		apiType     string
+		siteInputs  []string // 站点规则给出的输入模态（必须胜出）
+		siteTool    bool     // 站点规则是否给出 tool_call=true
+		familyCtx   int      // 家族层给出的 ctx/out/档位（站点规则一概没给，必须保留）
+		familyOut   int
+		familyInput []string // 家族层给出的输入模态（必须被站点值替换）
+		why         string
+	}{
+		{
+			name:        "api.deepseek.com：文字输入被站点规则扩成 text+image",
+			modelID:     "deepseek-v4-flash",
+			baseURL:     "https://api.deepseek.com/v1",
+			apiType:     "openai-responses",
+			siteInputs:  []string{"text", "image"},
+			siteTool:    true,
+			familyCtx:   1000000,
+			familyOut:   384000,
+			familyInput: []string{"text"},
+			why: "站点规则 deepseek-v4-flash(?:-vision-exp)? @ api.deepseek.com 给出 " +
+				"text,image（后一条覆盖前一条的 text），家族正则只给 text",
+		},
+		{
+			name:        "zcode.z.ai 提速端点：家族只给 text，站点规则给 text+image+video",
+			modelID:     "glm-5.3",
+			baseURL:     "https://zcode.z.ai/api/v1/highspeed/anthropic",
+			apiType:     "", // 只让「不限定 apiType」的那条站点规则参与
+			siteInputs:  []string{"text", "image", "video"},
+			familyCtx:   1000000,
+			familyOut:   128000,
+			familyInput: []string{"text"},
+			why:         "站点规则 `.*` @ zcode.z.ai/api/v1/highspeed/anthropic（不限定 apiType）给出 text,image,video",
+		},
+	}
+	for _, c := range cases {
+		// 前提一：家族层（内建正则）确实命中该 id，且给出的输入模态与站点值**不同**——
+		// 否则「站点胜出」没有区分力。
+		family := mergeCatalog(c.modelID, modelCatalogRules)
+		if family.Context != c.familyCtx || family.Output != c.familyOut {
+			t.Fatalf("%s：前提破坏，家族层 ctx/out=%d/%d，期望 %d/%d",
+				c.name, family.Context, family.Output, c.familyCtx, c.familyOut)
+		}
+		if !reflect.DeepEqual(family.Features.InputModalities, c.familyInput) {
+			t.Fatalf("%s：前提破坏，家族层输入模态=%v，期望 %v",
+				c.name, family.Features.InputModalities, c.familyInput)
+		}
+		// 前提二：站点层（真实表）确实命中，且给出的输入模态就是期望值。
+		site := matchSiteRulesWith(c.modelID, c.baseURL, c.apiType, modelSiteRules)
+		if site.Source != siteSource {
+			t.Fatalf("%s：前提破坏，站点规则未命中（baseURL=%s apiType=%q）：%+v", c.name, c.baseURL, c.apiType, site)
+		}
+		if !reflect.DeepEqual(site.Features.InputModalities, c.siteInputs) {
+			t.Fatalf("%s：前提破坏，站点层输入模态=%v，期望 %v", c.name, site.Features.InputModalities, c.siteInputs)
+		}
+		// 前提三：站点规则没有给出 ctx/out/档位（本用例要顺带锁住「站点未给 ⇒ 家族补空」）。
+		if site.Context != 0 || site.Output != 0 || site.ReasoningLevels != nil {
+			t.Fatalf("%s：前提破坏，站点层给出了 ctx/out/档位 %+v，本用例的「家族补空」断言前提不再成立", c.name, site)
+		}
+		// 前提四：没有任何覆盖层条目命中该 id（否则 override 会先占位，站点层胜出无从观察）。
+		if ov, ok := matchOverride(c.modelID, modelOverrides); ok {
+			t.Fatalf("%s：前提破坏，覆盖层条目 %+v 命中了 %s", c.name, ov, c.modelID)
+		}
+
+		got := LookupModelCapabilityForSite(c.modelID, c.baseURL, c.apiType)
+		// 站点规则给的字段必须胜出（这正是层序修正的核心）。
+		if !reflect.DeepEqual(got.Features.InputModalities, c.siteInputs) {
+			t.Errorf("%s：输入模态=%v，期望站点规则的 %v（家族层的 %v 不得胜出；%s）",
+				c.name, got.Features.InputModalities, c.siteInputs, c.familyInput, c.why)
+		}
+		if c.siteTool {
+			if got.Features.ToolCall == nil || !*got.Features.ToolCall {
+				t.Errorf("%s：站点规则给的 tool_call 未生效：%s", c.name, describeFeatures(got.Features))
+			}
+		}
+		// 站点规则没给出的字段由家族层补空（逐字段语义不因层序调整而变）。
+		if got.Context != c.familyCtx || got.Output != c.familyOut {
+			t.Errorf("%s：ctx/out=%d/%d，期望家族层的 %d/%d（站点规则未给出这两列）",
+				c.name, got.Context, got.Output, c.familyCtx, c.familyOut)
+		}
+		if len(got.ReasoningLevels) == 0 {
+			t.Errorf("%s：站点规则未给档位，应由家族层补空，实际为空", c.name)
+		}
+		// Source 记最高贡献者：站点层贡献了能力位，且它排在家族层之前。
+		if got.Source != siteSource {
+			t.Errorf("%s：Source=%q，期望 %q", c.name, got.Source, siteSource)
+		}
+
+		// 对照：换一个不命中任何站点规则的 baseURL，站点层整体不参与 ⇒ 回到家族值
+		// （输入模态回到 familyInput，且与无站点入口逐字段一致）。
+		plain := LookupModelCapabilityForSite(c.modelID, "https://example.invalid/v1", c.apiType)
+		if !reflect.DeepEqual(plain.Features.InputModalities, c.familyInput) {
+			t.Errorf("%s：站点未命中时输入模态=%v，期望家族层的 %v", c.name, plain.Features.InputModalities, c.familyInput)
+		}
+		if plain.Context != c.familyCtx || plain.Output != c.familyOut {
+			t.Errorf("%s：站点未命中时 ctx/out=%d/%d，期望 %d/%d", c.name, plain.Context, plain.Output, c.familyCtx, c.familyOut)
+		}
 	}
 }
 

@@ -220,8 +220,12 @@ export async function CheckForUpdate(): Promise<Record<string, unknown>> {
 export async function DownloadUpdate(): Promise<Record<string, unknown>> {
   return call('DownloadUpdate')
 }
-export async function InstallUpdate(): Promise<Record<string, unknown>> {
-  return call('InstallUpdate')
+/** 界面上确认安装后先领一次性令牌，InstallUpdate 校验令牌通过才会替换并重启。 */
+export async function PrepareUpdateInstall(): Promise<Record<string, unknown>> {
+  return call('PrepareUpdateInstall')
+}
+export async function InstallUpdate(token: string): Promise<Record<string, unknown>> {
+  return call('InstallUpdate', token)
 }
 export async function GetUpdateStatus(): Promise<Record<string, unknown>> {
   return call('GetUpdateStatus')

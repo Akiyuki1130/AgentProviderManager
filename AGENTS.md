@@ -65,7 +65,7 @@ GOOS=windows GOARCH=amd64 go test -c ./internal/update
 
 - 依赖方向严格单向：`main.go` → `internal/app` → `internal/core` → `internal/dshprovider` / `internal/zcodeprovider`。只有 `main.go` 与 `internal/app` 可以 import Wails；`internal/update` 不得依赖 Wails 层。
 - 每次写配置都必须先走 `core.PrepareChange`（同级备份 + 还原点）。ZCode v2 的写入还要经过唯一收口 `WriteConfigBytes` → `guardZCodeV2Doc`；任何写入路径都不得绕过这两道门。
-- 写入是原子的：同目录临时文件 + `Sync` + `Rename`。备份与临时文件后缀是固定词表：`.bak_<ts>`、`.snapshot_<ts>`、`.restore_*`、`.removed_<ts>`、`.apm-update-*`、`.apm-backup-*`。
+- 写入是原子的：同目录临时文件 + `Sync` + `Rename`。备份与临时文件后缀是固定词表：`.bak_<ts>`、`.snapshot_<ts>`、`.restore_*`、`.removed_<ts>`、`.tmp_*`、`.apm-update-*`、`.apm-backup-*`。
 - 并发修改用内容指纹（`mtime:size:sha256`）在 `a.mu` 下检测；不匹配即中止并提示重试。`internal/core/lock.go` 当前没有调用方。
 - Wails 绑定方法绝不返回 `error`，一律返回 `{success, error, error_code}`；面向用户的字符串用 `core.ShortText`（300）截断。前端必须把 binding reject 与 `success: false` 两种情况都归一化为 rejection。
 - 没有日志框架，也不用 `panic`。唯一的诊断输出是 `main.go` 里的 stderr 打印；用户可见的错误文案是中文。

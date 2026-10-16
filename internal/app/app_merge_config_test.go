@@ -198,3 +198,62 @@ func TestMergeConfigDoesNotDisableReasoningOnUntouchedModels(t *testing.T) {
 	}
 	t.Fatalf("合并后缺少 acme-1：%#v", acme["models"])
 }
+
+// 与备份导入同一条闸门：源配置没有 Key 而 baseUrl 指向别的主机时，
+// 不得把目标已存的真实 Key 挂到那个主机上。
+func TestMergeConfigDoesNotReuseKeyAcrossOrigins(t *testing.T) {
+	a := sandboxApp(t)
+
+	target := core.ZCodeProviderConfigPath()
+	tgt := zcodeprovider.NewConfig()
+	tgtRule := zcodeprovider.NewProviderRule("acme", "Acme", zcodeprovider.GroupStandardPersonal)
+	tgtCfg := zcodeprovider.RuleConfig(tgtRule)
+	tgtCfg["api"] = map[string]interface{}{"type": "openai-chat-completions", "baseUrl": "https://acme.example.invalid/v1"}
+	tgtCfg["access"] = map[string]interface{}{"type": "api-key", "apiKey": "sk-local"}
+	tgt.UpsertProviderRule(tgtRule)
+	tgt.SetProviderOrder([]string{"acme"})
+	tgtEncoded, err := zcodeprovider.Encode(tgt)
+	if err != nil {
+		t.Fatalf("构造目标 v2 配置失败：%v", err)
+	}
+	writeText(t, target, string(tgtEncoded))
+	a.currentAgent = string(core.AgentZCode)
+	a.targetConfigPath = target
+
+	src := filepath.Join(t.TempDir(), "provider_config.json")
+	srcCfgObj := zcodeprovider.NewConfig()
+	srcRule := zcodeprovider.NewProviderRule("acme", "Acme", zcodeprovider.GroupStandardPersonal)
+	srcRuleCfg := zcodeprovider.RuleConfig(srcRule)
+	srcRuleCfg["api"] = map[string]interface{}{"type": "openai-chat-completions", "baseUrl": "https://evil.example.invalid/v1"}
+	srcCfgObj.UpsertProviderRule(srcRule)
+	srcCfgObj.SetProviderOrder([]string{"acme"})
+	srcEncoded, err := zcodeprovider.Encode(srcCfgObj)
+	if err != nil {
+		t.Fatalf("构造源 v2 配置失败：%v", err)
+	}
+	writeText(t, src, string(srcEncoded))
+
+	resp := a.MergeConfig(map[string]interface{}{
+		"path":         src,
+		"selected_ids": []interface{}{"acme"},
+		"merge":        true,
+	})
+	requireSuccess(t, resp, "MergeConfig")
+	conflicts, _ := resp["key_conflict"].([]map[string]interface{})
+	if len(conflicts) != 1 || conflicts[0]["id"] != "acme" {
+		t.Fatalf("应报告 key_conflict：%v", resp)
+	}
+	cfg, err := zcodeprovider.Decode([]byte(readText(t, target)))
+	if err != nil {
+		t.Fatalf("合并后的 v2 配置必须能严格解码：%v", err)
+	}
+	ruleCfg := zcodeprovider.RuleConfig(cfg.ProviderRule("acme"))
+	access, _ := ruleCfg["access"].(map[string]interface{})
+	if access["apiKey"] != "sk-local" {
+		t.Fatalf("本地 Key 不应被改写：%#v", access)
+	}
+	api, _ := ruleCfg["api"].(map[string]interface{})
+	if api["baseUrl"] != "https://acme.example.invalid/v1" {
+		t.Fatalf("来源不同的合并应被整条跳过：%#v", api)
+	}
+}

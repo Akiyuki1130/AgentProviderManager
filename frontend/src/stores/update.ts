@@ -147,7 +147,15 @@ export const useUpdateStore = defineStore('update', () => {
   async function install(): Promise<void> {
     error.value = ''
     try {
-      const result = await api.InstallUpdate()
+      // 后端要求一次性确认令牌：先领牌，再带着令牌安装；领牌失败（例如已无已下载
+      // 的更新）就停在这里，不去调用安装。
+      const prepared = await api.PrepareUpdateInstall()
+      if (prepared.success !== true) {
+        applyStatus(prepared)
+        if (error.value === '') error.value = String(prepared.error ?? '')
+        return
+      }
+      const result = await api.InstallUpdate(String(prepared.token ?? ''))
       applyStatus(result)
       // Installation is explicit; the helper replaces the executable and restarts it.
     } catch (cause) {

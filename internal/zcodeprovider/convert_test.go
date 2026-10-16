@@ -332,8 +332,10 @@ func TestToLegacyRoundTrip(t *testing.T) {
 		t.Errorf("acme-large.reasoning.variants = %v, want [off low high]", got)
 	}
 	modalities, _ := large["modalities"].(map[string]interface{})
-	if got := stringSlice(modalities["input"]); !reflect.DeepEqual(got, []string{"image", "video"}) {
-		t.Errorf("acme-large.modalities.input = %v, want [image video]", got)
+	// 读端走 InputFormatModalities（supportsText 缺键即真 + 5 位全搬），因此 text 不再丢失：
+	// 旧实现只搬 image/video，legacy → v2 → legacy 往返一次就把 text 抹掉了。
+	if got := stringSlice(modalities["input"]); !reflect.DeepEqual(got, []string{"text", "image", "video"}) {
+		t.Errorf("acme-large.modalities.input = %v, want [text image video]", got)
 	}
 
 	if got := providers["beta"].(map[string]interface{})["kind"]; got != "anthropic" {

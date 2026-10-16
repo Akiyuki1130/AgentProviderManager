@@ -64,45 +64,70 @@
                 />
               </div>
             </div>
+            <!-- 阶段 F 修订：推理档位 / 自填档位 / 默认档位合并为**一个**块——三者编辑的是同一个
+                 字段（`variants` + `default_variant`），拆成三个等重高亮块只会让主次不分
+                 （人工验证反馈）。块内每行一个子项，顺序：可选档位 → 自填 → 默认。 -->
             <div v-if="card.reasoning" class="mc-effort">
-              <label>推理档位</label>
-              <div class="mc-effort-opts">
+              <div class="mc-effort-row">
+                <label>{{ t('reasoning.tierLabel', lang) }}</label>
+                <div class="mc-effort-opts">
+                  <button
+                    v-for="v in variantOptions"
+                    :key="v"
+                    type="button"
+                    class="pill"
+                    :class="{ checked: (card.variants || []).includes(v), unsupported: !isSupported(v) }"
+                    :title="isSupported(v) ? undefined : t('reasoning.supportedHint', lang)"
+                    @click="toggleVariant(v)"
+                  >
+                    <span>{{ v }}</span>
+                  </button>
+                </div>
+                <!-- C1：仅在确有档位被弱化（支持集与显示全集不同）时显示，避免常态噪音 -->
+                <span v-if="showSupportHint" class="mc-effort-note">{{ t('reasoning.supportedHint', lang) }}</span>
+                <!-- 阶段 F：整组采纳推断档位（只增不减），与能力区 adoptableCount > 0 同一纪律 -->
                 <button
-                  v-for="v in variantOptions"
-                  :key="v"
+                  v-if="adoptableLevels"
                   type="button"
-                  class="pill"
-                  :class="{ checked: (card.variants || []).includes(v), unsupported: !isSupported(v) }"
-                  :title="isSupported(v) ? undefined : t('reasoning.supportedHint', lang)"
-                  @click="toggleVariant(v)"
-                >
-                  <span>{{ v }}</span>
-                </button>
+                  class="pill mc-adopt"
+                  :title="t('level.adoptAria', lang).replace('{name}', card.name || card.model_id).replace('{levels}', adoptFromTooltip)"
+                  :aria-label="t('level.adoptAria', lang).replace('{name}', card.name || card.model_id).replace('{levels}', adoptFromTooltip)"
+                  @click="adoptLevels"
+                >{{ t('level.adopt', lang) }}</button>
+                <!-- 阶段 F 修订：覆盖（把集合直接置为推断集合）。只在**确有档位会被删除**时露出
+                     ——没有多余档位时它与「采纳推断档位」结果相同，同时给两个按钮只会让人犹豫。
+                     破坏性动作，必须先过 uiConfirm 并列出将删除的档位名。 -->
+                <button
+                  v-if="overwritableLevels"
+                  type="button"
+                  class="pill mc-adopt mc-adopt-danger"
+                  :title="t('level.overwriteAria', lang).replace('{name}', card.name || card.model_id).replace('{levels}', overwriteRemovedLabel)"
+                  :aria-label="t('level.overwriteAria', lang).replace('{name}', card.name || card.model_id).replace('{levels}', overwriteRemovedLabel)"
+                  @click="overwriteInferred"
+                >{{ t('level.overwrite', lang) }}</button>
               </div>
-              <!-- C1：仅在确有档位被弱化（支持集与显示全集不同）时显示，避免常态噪音 -->
-              <span v-if="showSupportHint" class="mc-effort-note">{{ t('reasoning.supportedHint', lang) }}</span>
-            </div>
-            <!-- C2：允许自填档位时露出自由输入；失焦/回车把解析出的档位名并入集合（此处不做白名单过滤，后端依开关放宽校验） -->
-            <div v-if="card.reasoning && settingStore.customVariants" class="mc-effort">
-              <label>{{ t('reasoning.customLabel', lang) }}</label>
-              <input
-                v-model="customInput"
-                class="field mc-custom-input"
-                :maxlength="MAX_VARIANT_LEN"
-                :placeholder="t('reasoning.customPlaceholder', lang)"
-                @keydown.enter.prevent="commitCustomVariants"
-                @blur="commitCustomVariants"
-              />
-            </div>
-            <div v-if="card.reasoning" class="mc-effort">
-              <label>默认档位</label>
-              <select class="field select-sm" :value="card.default_variant" @change="onDefaultChange">
-                <option value="">—</option>
-                <option v-for="v in variantOptions" :key="v" :value="v">{{ v }}</option>
-              </select>
-              <!-- ZCode 的 modelRule 没有「当前档位」字段：档位由 optionSpecs.reasoningLevel.map
-                   在运行时求值，配置里只存可选集合与映射，默认档位无处落盘。DSH 有对应字段故有效。 -->
-              <span v-if="showZcodeNote" class="mc-effort-note">{{ t('reasoning.zcodeDefaultNote', lang) }}</span>
+              <!-- C2：允许自填档位时露出自由输入；失焦/回车把解析出的档位名并入集合（此处不做白名单过滤，后端依开关放宽校验） -->
+              <div v-if="settingStore.customVariants" class="mc-effort-row">
+                <label>{{ t('reasoning.customLabel', lang) }}</label>
+                <input
+                  v-model="customInput"
+                  class="field mc-custom-input"
+                  :maxlength="MAX_VARIANT_LEN"
+                  :placeholder="t('reasoning.customPlaceholder', lang)"
+                  @keydown.enter.prevent="commitCustomVariants"
+                  @blur="commitCustomVariants"
+                />
+              </div>
+              <div class="mc-effort-row">
+                <label>{{ t('reasoning.defaultTierLabel', lang) }}</label>
+                <select class="field select-sm" :value="card.default_variant" @change="onDefaultChange">
+                  <option value="">—</option>
+                  <option v-for="v in variantOptions" :key="v" :value="v">{{ v }}</option>
+                </select>
+                <!-- ZCode 的 modelRule 没有「当前档位」字段：档位由 optionSpecs.reasoningLevel.map
+                     在运行时求值，配置里只存可选集合与映射，默认档位无处落盘。DSH 有对应字段故有效。 -->
+                <span v-if="showZcodeNote" class="mc-effort-note">{{ t('reasoning.zcodeDefaultNote', lang) }}</span>
+              </div>
             </div>
             <div class="mc-field">
               <label>上下文长度 (tokens)</label>
@@ -122,7 +147,7 @@
                 <!-- 三态口径整块只说一次：未选择 / 未勾选 = 未知，交给目标客户端默认值。
                      不承诺「取消勾选 = 告诉客户端不支持」——写端从不下发 false，那种承诺做不到。 -->
                 <span class="mc-caps-note">{{ t('cap.emptyHint', lang) }}</span>
-                <span v-if="inferredSource" class="mc-caps-note">{{ t('cap.sourceLabel', lang).replace('{source}', inferredSource) }}</span>
+                <span v-if="inferredSourceLabel" class="mc-caps-note">{{ t('cap.sourceLabel', lang).replace('{source}', inferredSourceLabel) }}</span>
               </div>
               <div class="mc-caps-row">
                 <span class="mc-caps-label">{{ t('cap.input', lang) }}</span>
@@ -140,7 +165,7 @@
                     <span>{{ modalityLabel(m) }}</span>
                   </button>
                 </div>
-                <button v-if="adoptableCount('input') > 0" type="button" class="pill mc-caps-adopt" @click="adoptModalities('input')">{{ t('cap.adopt', lang) }}</button>
+                <button v-if="adoptableCount('input') > 0" type="button" class="pill mc-adopt" @click="adoptModalities('input')">{{ t('cap.adopt', lang) }}</button>
               </div>
               <div class="mc-caps-row">
                 <span class="mc-caps-label">{{ t('cap.output', lang) }}</span>
@@ -158,7 +183,7 @@
                     <span>{{ modalityLabel(m) }}</span>
                   </button>
                 </div>
-                <button v-if="adoptableCount('output') > 0" type="button" class="pill mc-caps-adopt" @click="adoptModalities('output')">{{ t('cap.adopt', lang) }}</button>
+                <button v-if="adoptableCount('output') > 0" type="button" class="pill mc-adopt" @click="adoptModalities('output')">{{ t('cap.adopt', lang) }}</button>
               </div>
               <div class="mc-caps-block">
                 <span class="mc-caps-label">{{ t('cap.flags', lang) }}</span>
@@ -175,7 +200,7 @@
                       <span class="mc-caps-note">{{ t('cap.inferred', lang) }}</span>
                       <button
                         type="button"
-                        class="pill mc-caps-adopt"
+                        class="pill mc-adopt"
                         :title="t('cap.adoptAria', lang).replace('{name}', flagLabel(f))"
                         :aria-label="t('cap.adoptAria', lang).replace('{name}', flagLabel(f))"
                         @click="adoptFlag(f)"
@@ -199,9 +224,11 @@ import { ChevronDown, CloseOutline } from '@vicons/ionicons5'
 import type { ModelCapabilities, ModelCard } from '../types'
 import { CAP_FLAG_KEYS, CAP_INPUT_MODALITIES, CAP_OUTPUT_MODALITIES } from '../types'
 import { useSettingStore } from '../stores/setting'
+import { uiConfirm } from '../stores/uiDialog'
 import { highlightSegments } from '../composables/useHighlight'
 import { t } from '../i18n'
-import { REASONING_VARIANTS, REASONING_VARIANTS_BASIC, MAX_VARIANT_LEN, pickDefaultVariant } from '../constants/variants'
+import { REASONING_VARIANTS, REASONING_VARIANTS_BASIC, MAX_VARIANT_LEN, canonicalVariant, pickDefaultVariant } from '../constants/variants'
+import { fillableLevels, overwriteLevels, applyLevels, joinLevels } from '../composables/useLevelFill'
 
 const props = defineProps<{ card: ModelCard; showSelect?: boolean; kind?: string; agent?: string; query?: string }>()
 const emit = defineEmits<{ (e: 'delete'): void; (e: 'update'): void }>()
@@ -292,20 +319,70 @@ function toggleVariant(v: string) {
   emit('update')
 }
 function onDefaultChange(e: Event) { props.card.default_variant = (e.target as HTMLSelectElement).value; emit('update') }
+
+// ---- 阶段 F：单卡「采纳推断档位」/「覆盖为推断档位」 ----
+// fillableLevels 是与批量行共用的唯一判定：思考已开、推断集合里有非 off 档、且其中有当前集合
+// 还没有的档位时，返回「当前集合 ∪ 缺失档位」，否则 null——**只增不减，绝不删除已有档位**。
+// applyLevels 写 card.variants 并用 pickDefaultVariant 修正默认档位；这里再触发页面既有的
+// 更新 / 自动保存链路（与能力区 adopt* 同一口径）。
+const adoptableLevels = computed(() => fillableLevels(props.card))
+/** 采纳按钮悬浮提示里要列出的档位：本次会**新并入**的那些（不是整组目标集合）。 */
+const adoptFromTooltip = computed(() => {
+  const target = adoptableLevels.value
+  if (!target) return ''
+  const cur = props.card.variants || []
+  return joinLevels(target.filter((v) => !cur.includes(v)), lang.value)
+})
+function adoptLevels() {
+  const levels = adoptableLevels.value
+  if (!levels) return
+  applyLevels(props.card, levels)
+  emit('update')
+}
+/**
+ * 单卡覆盖：把该卡 `variants` 直接置为推断集合（会删除推断里没有的档位）。
+ * 只在**确有档位会被删除**时露出——没有多余档位时覆盖与「采纳推断档位」结果相同，
+ * 同时给两个按钮只会让人不知道点哪个；破坏性所以必须先过 uiConfirm，并列出将删除的档位名。
+ */
+const overwritableLevels = computed<string[] | null>(() => {
+  const target = overwriteLevels(props.card)
+  if (!target) return null
+  const cur = props.card.variants || []
+  return cur.some((v) => !target.includes(v)) ? target : null
+})
+const overwritableRemoved = computed(() => {
+  const target = overwritableLevels.value
+  if (!target) return []
+  return (props.card.variants || []).filter((v) => !target.includes(v))
+})
+const overwriteRemovedLabel = computed(() => joinLevels(overwritableRemoved.value, lang.value))
+async function overwriteInferred() {
+  const target = overwritableLevels.value
+  if (!target) return
+  const detail = t('level.overwriteRemoved', lang.value).replace('{list}', overwriteRemovedLabel.value)
+  // 覆盖后集合不含 off 时，该卡的思考开关会变灰（S1 语义：无关闭档则无法关闭思考）——
+  // 这是用户没预料到的副作用，必须在确认里说出来。
+  const ok = await uiConfirm({
+    title: t('level.overwriteTitle', lang.value),
+    content: t('level.overwriteBody', lang.value).replace('{name}', props.card.name || props.card.model_id),
+    detail: target.includes('off') ? detail : `${detail} · ${t('level.overwriteLoseOff', lang.value)}`,
+    positiveText: t('level.overwriteConfirm', lang.value),
+    danger: true,
+  })
+  if (!ok) return
+  applyLevels(props.card, target)
+  emit('update')
+}
 // C2：自填输入解析成档位名并入 card.variants。逗号或换行分隔，trim 去空、去重；
-// 与后端 canonicalVariant 一致地做别名归一（none/disabled/nothink→off，大小写归一），
+// 档位名走共享的 canonicalVariant（与后端同名函数同口径：大小写归一 + none/disabled/nothink→off），
 // 避免同一个 off 档以 off/disabled/Disabled 多个等价拼法并存。此处不做白名单过滤——
 // 后端依 customVariants 开关决定是否放宽；超长档位名由后端 NormalizeVariants 兜底拒绝。
-function normVariant(s: string): string {
-  const v = s.trim().toLowerCase()
-  return v === 'none' || v === 'disabled' || v === 'nothink' ? 'off' : v
-}
 function commitCustomVariants() {
   const raw = customInput.value
   if (!raw.trim()) { customInput.value = ''; return }
   const parsed = raw
     .split(/[,\n\r]+/)
-    .map((s) => normVariant(s))
+    .map((s) => canonicalVariant(s))
     .filter((s) => s.length > 0 && s.length <= MAX_VARIANT_LEN)
   if (parsed.length === 0) { customInput.value = ''; return }
   const arr = [...(props.card.variants || [])]
@@ -408,6 +485,14 @@ const inferredSource = computed(() => {
   const s = inferred()._source
   return typeof s === 'string' && s.trim() !== '' ? s.trim() : ''
 })
+
+/** 来源 token 的人类可读标签：已知 token 走 i18n，未知 token 原样显示（t() 未命中时返回 key）。 */
+const inferredSourceLabel = computed(() => {
+  const s = inferredSource.value
+  if (!s) return ''
+  const label = t(`cap.source.${s}`, lang.value)
+  return label === `cap.source.${s}` ? s : label
+})
 </script>
 
 <style scoped>
@@ -449,9 +534,13 @@ const inferredSource = computed(() => {
 .mc-field .field { height: 30px; font-size: 12px; }
 .mc-field .switch-row { display: flex; align-items: center; height: 30px; }
 .mc-tip { grid-column: 1 / -1; font-size: 10px; color: var(--fluent-text-soft); }
-.mc-effort { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; background: color-mix(in srgb, var(--accent, #0078d4) 8%, transparent); border: 1px solid var(--fluent-border); border-radius: 8px; padding: 8px 12px; }
+/* 阶段 F 修订：推理档位 / 自填档位 / 默认档位合并为**一个**块——三者编辑的是同一组字段
+   （variants + default_variant），拆成三个等重高亮块会让主次不分（人工验证反馈）。
+   块内纵向排列，每行一个子项（行内仍是 flex）。 */
+.mc-effort { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 6px; background: color-mix(in srgb, var(--accent, #0078d4) 8%, transparent); border: 1px solid var(--fluent-border); border-radius: 8px; padding: 8px 12px; }
+.mc-effort-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .mc-effort label { font-size: 11px; color: var(--fluent-text-soft); white-space: nowrap; }
-.mc-effort-opts { display: flex; flex-wrap: wrap; gap: 6px; flex: 1; }
+.mc-effort-opts { display: flex; flex-wrap: wrap; gap: 6px; flex: 1; min-width: 0; }
 /* C2：自填档位输入框在 .mc-effort 的 flex 行内占满剩余宽度（全局 .field 为 100% 宽，需在 flex 下归一） */
 .mc-custom-input { flex: 1; min-width: 0; height: 30px; font-size: 12px; }
 .mc-effort-note { font-size: 10px; color: var(--fluent-text-soft); white-space: nowrap; }
@@ -469,7 +558,10 @@ const inferredSource = computed(() => {
 .mc-caps-flag-toggle { gap: 6px; min-width: 0; }
 .mc-caps-flag-name { font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* 采纳按钮复用 .pill（同屏只有一套胶囊控件体系），这里只压一档尺寸 */
-.mc-caps-adopt { font-size: 10px; padding: 2px 8px; }
+.mc-adopt { font-size: 10px; padding: 2px 8px; }
+/* 破坏性档位动作（覆盖为推断档位）：与全局 .badge-err 同一套语义色 token，只改配色不改形状。
+   与相邻的「采纳推断档位」（只增不减、可逆）在视觉上区分开——两者后果不同。 */
+.mc-adopt-danger { color: var(--err); border-color: color-mix(in srgb, var(--err) 40%, transparent); background: var(--err-soft); }
 /* B10/C3/D2：原 scoped 的 .effort-opt/.field/.switch/.mc-check/.check-mark 与全局控件规范层重复，已删除改用全局类。
    全局 .switch 轨道为 color-mix(text 22%)，dark 下不再隐形（原 rgba(0,0,0,.18) 硬伤随之消失）；
    全局 .check-mark 边框跟主题（原 #888 死色删除）；.effort-opt 与全局 .pill 视觉完全一致，故本地定义全删。

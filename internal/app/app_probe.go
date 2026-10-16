@@ -76,7 +76,10 @@ func probeProvider(edit *core.ProviderEdit, baseURLOverride, apiKeyOverride stri
 		baseURL = edit.BaseURL
 	}
 	apiKey := strings.TrimSpace(apiKeyOverride)
-	if apiKey == "" {
+	// 与 app.go 的「重新获取模型」同口径：已存 Key 只在与本次要用的 Base URL 同源时沿用。
+	// 否则「把 Base URL 改成任意主机 + 清空 Key 输入框 + 测试连接」会把表单里预填的
+	// 本地真实 Key 发给对方——测试连接同样能外带凭据，不能只堵重新获取那条路径。
+	if apiKey == "" && acceptsLocalKeyForOverride(edit.BaseURL, baseURLOverride) {
 		apiKey = edit.APIKey
 	}
 	if baseURL == "" {
@@ -84,4 +87,16 @@ func probeProvider(edit *core.ProviderEdit, baseURLOverride, apiKeyOverride stri
 	}
 	kindNorm := core.ProbeKind(edit.Kind)
 	return probeResponse(core.TestConnection(baseURL, apiKey, kindNorm), kindNorm)
+}
+
+// acceptsLocalKeyForOverride 判定「本次测试是否允许沿用本地已存的 API Key」：
+// 没有 Base URL 覆盖时沿用（测的就是这个 provider 自己）；有覆盖时只在与本地
+// Base URL 同源（协议 + 主机 + 端口一致）时沿用，来源不明一律不沿用（fail-closed，
+// Key 留空，由既有错误路径返回中文提示）。
+// 抽成纯函数是为了能直接单测这条闸门，不必真的发起网络请求。
+func acceptsLocalKeyForOverride(localBaseURL, override string) bool {
+	if override == "" {
+		return true
+	}
+	return core.SameURLOrigin(localBaseURL, override)
 }

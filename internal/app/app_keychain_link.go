@@ -1,6 +1,10 @@
 package app
 
-import "strings"
+import (
+	"strings"
+
+	"agentprovidermanager/internal/core"
+)
 
 // keychain_links 在 settings.json 里记录「agent|providerID」-> 钥匙串条目 ID 的映射，
 // 用于把供应商关联到钥匙串里的凭据条目。
@@ -24,6 +28,11 @@ func (a *App) SetKeychainLink(providerID, entryID string) map[string]interface{}
 	entryID = strings.TrimSpace(entryID)
 	if providerID == "" || entryID == "" {
 		return map[string]interface{}{"success": false, "error": "参数不能为空"}
+	}
+	// 关联指向不存在的条目会在钥匙串页显示成「已关联但填不出 Key」，
+	// 且删掉条目后这条悬挂引用不会被清理，因此写入前先确认条目真实存在。
+	if core.GetKeychainEntry("", entryID) == nil {
+		return map[string]interface{}{"success": false, "error": "钥匙串条目不存在或已被删除"}
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()

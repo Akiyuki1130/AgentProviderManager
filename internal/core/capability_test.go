@@ -376,12 +376,18 @@ func TestLookupCapabilityFeaturesFollowsCtxOutLayering(t *testing.T) {
 // 「只给 features 的条目也标 override」与「override 没给的 ctx/out 仍由后续层补齐、不被覆盖」。
 func TestLookupCapabilityOverrideFeaturesNormalized(t *testing.T) {
 	const id = "glm-5.3"
-	// 前提一：内建正则（model_catalog_gen.go 的 modelCatalogRules）给出 ctx/out，**且不给 features**，
-	// 这样 features 只可能来自 override 层，断言才有区分力。
+	// 前提一：内建正则（model_catalog_gen.go 的 modelCatalogRules）给出 ctx/out，且它给出的
+	// 输入模态与下面断言的 override 归一结果**不同**——这样「断言通过」本身就证明了这批模态
+	// 来自 override 层（mergeFeatures 是前层胜出，内建层给的位不会被后层改写；反之若 override
+	// 被忽略，结果里就会留下内建层的 text）。
 	zcode := mergeCatalog(id, modelCatalogRules)
-	if zcode.Context == 0 || zcode.Output == 0 || zcode.Features.HasAny() {
-		t.Fatalf("前提破坏：%s 的内建正则应给出 ctx/out 且**不**给出 features，实际 ctx=%d out=%d features=%s",
+	if zcode.Context == 0 || zcode.Output == 0 || !zcode.Features.HasAny() {
+		t.Fatalf("前提破坏：%s 的内建正则应给出 ctx/out 与能力位，实际 ctx=%d out=%d features=%s",
 			id, zcode.Context, zcode.Output, describeFeatures(zcode.Features))
+	}
+	if reflect.DeepEqual(zcode.Features.InputModalities, []string{"text", "image", "video", "pdf"}) {
+		t.Fatalf("前提破坏：%s 的内建输入模态（%v）与目标集合相同，断言失去区分力",
+			id, zcode.Features.InputModalities)
 	}
 	// 前提二：把离线功能表临时清空，隔离出 override 层。真实表（capability_features_gen.go）
 	// 是否收录了这个 id 会随快照重裁变化，因此不做「表里没有它」这种会漂移的前提，直接注入空表。
@@ -419,13 +425,15 @@ func TestLookupCapabilityOverrideFeaturesNormalized(t *testing.T) {
 
 	// 情形二（fail-closed）：条目只写了未知词 ⇒ 归一后整条为空，与「未给出」等价：
 	// 不带入任何能力位，也不得据此把 Source 标成 override。
+	// 内建层本身有能力位（见前提一），因此「等价」要与**完全没有 override** 的基线逐字段比较。
 	ovUnknown := []modelOverride{{Match: id, Features: ModelFeatures{InputModalities: []string{"telepathy"}}}}
 	plain := lookupCapabilityForSite(id, "", "", ovUnknown, nil)
 	if plain.Source != "zcode" {
 		t.Errorf("Source=%q，期望 zcode（override 归一后为空，未贡献任何能力字段）", plain.Source)
 	}
-	if plain.Features.HasAny() {
-		t.Errorf("只写未知词的条目不得带入能力位：%s", describeFeatures(plain.Features))
+	if baseline := lookupCapabilityForSite(id, "", "", nil, nil); !sameFeatures(plain.Features, baseline.Features) {
+		t.Errorf("只写未知词的条目必须与「未给出」逐字段等价：实际 %s，期望 %s",
+			describeFeatures(plain.Features), describeFeatures(baseline.Features))
 	}
 }
 
@@ -466,7 +474,8 @@ func TestLookupCapabilityFeaturesCatalogOnlyMarksCatalog(t *testing.T) {
 }
 
 // TestLookupCapabilitySiteFeaturesFillsGaps 站点层的 features 与 ctx/out 同构：
-// 只补前面各层留下的空位，且前面的 zcode 层已给出的位不得被它改写。
+// 只补前面各层留下的空位（override 层已给出的位不得被它改写），且它自己排在家族正则之前
+// ——本用例的合成 id 不命中内建正则，因此这里观察到的正是「override 首层 + 站点层补空」。
 func TestLookupCapabilitySiteFeaturesFillsGaps(t *testing.T) {
 	const id = "feat-probe-site-gap"
 	rules := []siteRule{{

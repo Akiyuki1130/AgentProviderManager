@@ -153,12 +153,30 @@
                 <label class="batch-item">思考 <button class="switch" :class="{ on: batchReasoningOn }" role="switch" :aria-checked="batchReasoningOn" aria-label="批量切换思考" @click="batchToggleReasoning" /></label>
                 <span class="batch-group-label">推理档位</span>
                 <span v-for="v in variantOpts" :key="v" class="batch-pill" :class="{ unsupported: tierAllUnsupported(v) }" role="button" tabindex="0" @click="batchToggleVariant(v)" @keydown.enter.prevent="batchToggleVariant(v)" @keydown.space.prevent="batchToggleVariant(v)">{{ v }}</span>
+                <!-- 阶段 F 修订：档位补全并入本行——它编辑的正是左边这组胶囊，放在同一行才看得出关系
+                     （旧版把它单独放在批量栏最下面，与「推理档位」分成两处、两个名字）。
+                     按钮文案与配色随方向开关变化：覆盖是破坏性动作，不能与并入长得一样。 -->
+                <n-button
+                  size="small"
+                  :type="levelOverwrite ? 'error' : 'primary'"
+                  ghost
+                  :disabled="filteredCards.length === 0 || levelTargetCount === 0"
+                  @click="onFillLevels"
+                ><template #icon><n-icon :component="SparklesOutline" /></template>{{ levelOverwrite ? t('level.batchFillOverwrite', lang) : t('level.batchFill', lang) }}</n-button>
+                <label class="check batch-item">
+                  <input type="checkbox" v-model="levelOverwrite" :aria-label="t('level.batchOverwriteToggle', lang)" />
+                  <span class="check-mark" />
+                  <span>{{ t('level.batchOverwriteToggle', lang) }}</span>
+                </label>
                 <span class="batch-group-label">默认档位</span>
                 <n-select v-model:value="batchDefault" :options="variantSelectOpts" placeholder="—" style="width: 100px" size="small" clearable @update:value="batchSetDefault" />
               </div>
-              <!-- C3：说明批量作用域与灰色档位含义；套用不受支持档位时会先确认，不静默写入 -->
+              <!-- C3：说明批量作用域与灰色档位含义；套用不受支持档位时会先确认，不静默写入。
+                   档位补全/覆盖的语义与计数同处一行：一个都处理不了时 summary 会直接说出原因。 -->
               <div class="batch-row batch-row--wrap">
                 <span class="batch-hint">{{ t('reasoning.batchHint', lang) }}</span>
+                <span class="batch-hint">{{ levelOverwrite ? t('level.batchHintOverwrite', lang) : t('level.batchHint', lang) }}</span>
+                <span class="batch-hint">{{ levelSummary }}</span>
               </div>
               <div class="batch-row batch-row--wrap">
                 <span class="batch-group-label">上下文长度</span>
@@ -291,6 +309,7 @@ import { highlightSegments } from '../composables/useHighlight'
 import { useVendorGroup, fetchVendorMeta } from '../composables/useVendorGroup'
 import { useAutoSave } from '../composables/useAutoSave'
 import { useCapabilityFill } from '../composables/useCapabilityFill'
+import { useLevelFill } from '../composables/useLevelFill'
 import ModelCard from '../components/ModelCard.vue'
 import KeychainPicker from '../components/KeychainPicker.vue'
 import StickySaveBar from '../components/ui/StickySaveBar.vue'
@@ -743,6 +762,18 @@ function applyBatchLimit(field: 'context' | 'output') {
 // 作用域与其它批量行一致：当前筛选出的可见模型。结果只落在卡片的 capabilities 上，
 // 由两页既有的卡片载荷（保存 / 导入）提交，不新增接口、不直接写盘。
 const { picked: capBits, options: capBitOptions, fill: onFillCapabilities } = useCapabilityFill(() => filteredCards.value, lang)
+
+// ---- 阶段 F 修订：档位并入「推理档位」行 ----
+// 计数 / 并入 / 覆盖 / 确认 / 汇报都在 useLevelFill（两页同一实现）；作用域与其它批量行一致：
+// 当前筛选出的可见模型。结果只落在卡片的 variants / default_variant 上，由两页既有的卡片载荷
+// （保存 / 导入）提交，不新增接口、不直接写盘。`overwrite` 是动作方向开关（默认并入、不持久化），
+// `targetCount` 供按钮禁用，`summary` 是计数/原因的现成文案（逻辑只此一处）。
+const {
+  overwrite: levelOverwrite,
+  targetCount: levelTargetCount,
+  summary: levelSummary,
+  fill: onFillLevels,
+} = useLevelFill(() => filteredCards.value, lang)
 
 async function onAutoMatchLimits() {
   const list = filteredCards.value
