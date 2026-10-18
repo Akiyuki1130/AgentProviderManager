@@ -46,6 +46,8 @@ func BuildModelCards(models []struct {
 //     provider 没给时，才用能力表兜底。
 //   - _supported_levels：provider 明确给出的档位是 API 事实，与 _vendor 同级，始终写入；
 //     provider 没给时用能力表档位兜底——同样与补全开关无关（该字段只做展示与种子，见函数内注释）。
+//   - Variants / DefaultVariant：思考已开时，用同一组支持档位自动勾选（集合里没有 off 就不勾
+//     off）。这是**会被写进配置的值**，因此与 ctx/out 一样受 autoFill 门控。
 //   - Reasoning：metaReasoning 给出明确值时以它为准，否则沿用 guessReasoningFromCapability
 //     的推断（能力表档位 + 关键词表）。
 //   - _vendor：与补全开关无关，始终填。
@@ -89,11 +91,11 @@ func BuildModelCardsForSite(models []struct {
 		// provider 明确给出的档位优先（API 事实，与 _vendor 同级）；provider 没给时用能力表
 		// 推断值兜底——**不受 autoFill 约束**，与下方同样只做展示的 _capabilities_inferred 一致。
 		//
-		// 为什么与 ctx/out 区别对待：autoFill（「导入时自动补全上下文与输出长度」）管的是
+		// 为什么与 ctx/out 区别对待：autoFill（「导入时自动补全模型参数」）管的是
 		// 「会被写进配置的值」，而 _supported_levels 从不写盘（写盘出口会剥离内部键），也不参与
-		// 任何自动写值——拉取路径本来就把 Variants 留 nil，落盘时档位走 DefaultVariantsFor 兜底。
-		// 它只驱动展示（档位自适应弱化）、种子（开思考时用支持集合）与「按能力表补全档位」
-		// 这个显式动作，因此把开关关掉不该让档位推断一并消失（2026-10-15 阶段 F 修正）。
+		// 任何自动写值——它只驱动展示（档位自适应弱化）、种子（开思考时用支持集合）与「按能力表
+		// 补全档位」这个显式动作，因此把开关关掉不该让档位推断一并消失（2026-10-15 阶段 F 修正）。
+		// 注意区分下面由同一组档位派生的 Variants：那个才是「会被写进配置的值」，受开关门控。
 		levels := metaLevels(meta)
 		if len(levels) == 0 {
 			levels = cap.ReasoningLevels
@@ -105,9 +107,23 @@ func BuildModelCardsForSite(models []struct {
 		if !reasoningDeclared && !reasoning && hasNonOffLevel(levels) {
 			reasoning = true
 		}
+		// 「导入新供应商」时自动勾选支持的思考强度（2026-10-17）：思考已开且档位里有非 off 档
+		// 时，直接把上面解析出的支持档位作为卡片的**初始选择**，让卡片上勾着的档位就是将要写进
+		// 配置的档位。此前的做法是留 nil、由写盘侧回落 DefaultVariantsFor（写死的 {off,high,max}），
+		// 于是卡片上一个档位都没勾、写出去还多了一个 off——glm-5.3 这类档位集合不含 off 的模型
+		// 会被静默写成「可以关闭思考」。
+		//
+		// 开关口径：variants 会被写进配置，因此与 ctx/out、capabilities 同属「自动补全」开关的
+		// 管辖范围（_supported_levels 只是展示与种子，照旧与开关无关）。
+		var variants []string
+		var defaultVariant string
+		if autoFill && reasoning && hasNonOffLevel(levels) {
+			variants = cloneStrings(levels)
+			defaultVariant = PickDefaultVariant(variants)
+		}
 		// 中立能力位（阶段 E1，见 MODEL-MANAGEMENT-PLAN.md 10.2.2）：provider 自报的能力位
 		// 是 API 事实，与 _supported_levels 口径一致——**autoFill 为假也照填**；能力表那部分
-		// 是推断，只在 autoFill 为真时补进 Capabilities（绝不改动上面 ctx/out/档位的既有行为）。
+		// 是推断，只在 autoFill 为真时补进 Capabilities（绝不改动上面 ctx/out/档位推断的既有行为）。
 		// 推断结果另有独立出口 _capabilities_inferred，供前端展示来源与「按能力表补全」按钮。
 		// 「只记真」的口径（显式 false 一律丢弃）见 providerMetaFeatures 的注释。
 		inferred := providerMetaFeatures(meta)
@@ -132,7 +148,8 @@ func BuildModelCardsForSite(models []struct {
 			APIReturned:          len(meta) > 0,
 			Name:                 m.ID,
 			Reasoning:            reasoning,
-			Variants:             nil,
+			Variants:             variants,
+			DefaultVariant:       defaultVariant,
 			Context:              ctx,
 			Output:               out,
 			Select:               true,

@@ -1,6 +1,9 @@
 package core
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 // TestApplyModelPresetsFillsCapabilitiesWithoutOverwriting 锁定「自动匹配」按钮的能力位补全语义：
 //
@@ -68,6 +71,53 @@ func TestApplyModelPresetsFillsCapabilitiesWithoutOverwriting(t *testing.T) {
 			t.Errorf("无能力信息时不应生成 capabilities：%+v", out[0].Capabilities)
 		}
 	})
+}
+
+// TestApplyModelPresetsFillsMissingLevels 锁定「自动匹配」按钮的档位补全语义（2026-10-17）：
+// 思考已开、档位集合还是空的卡片，用它的支持档位（`_supported_levels`，与界面展示同源）填上；
+// 非空集合、显式关闭思考、以及没有任何档位信息的情形一律不动。档位不计入 filled。
+func TestApplyModelPresetsFillsMissingLevels(t *testing.T) {
+	const known = "glm-5.3" // 能力表档位 [low high max]，不含 off
+	tableCap := LookupModelCapabilityForSite(known, "", "")
+	if !reflect.DeepEqual(tableCap.ReasoningLevels, []string{"low", "high", "max"}) {
+		t.Fatalf("前提破坏：%s 的能力表档位变了：%v", known, tableCap.ReasoningLevels)
+	}
+	want := []string{"low", "high", "max"}
+
+	cases := []struct {
+		name       string
+		card       ModelCard
+		want       []string
+		wantFilled int // glm-5.3 的能力表同时给出 ctx/out；filled 只统计它们
+	}{
+		{"思考已开 + 卡片带支持档位：补齐", ModelCard{ModelID: known, Reasoning: true, SupportedLevels: tableCap.ReasoningLevels}, want, 2},
+		{"思考已开 + 卡片没带支持档位：回落能力表", ModelCard{ModelID: known, Reasoning: true}, want, 2},
+		{"思考未开：不动", ModelCard{ModelID: known, Reasoning: false, SupportedLevels: tableCap.ReasoningLevels}, nil, 2},
+		{"已有档位集合：不删不改", ModelCard{ModelID: known, Reasoning: true, Variants: []string{"medium", "max"}}, []string{"medium", "max"}, 2},
+		{"只有 off 的非空集合：不动", ModelCard{ModelID: known, Reasoning: true, Variants: []string{"off"}}, []string{"off"}, 2},
+		{"无档位信息：不动", ModelCard{ModelID: "local-model-with-no-catalog-entry", Reasoning: true}, nil, 0},
+	}
+	for _, c := range cases {
+		cards := []ModelCard{c.card}
+		out, filled := ApplyModelPresetsForSite(cards, "", "")
+		if len(c.want) == 0 {
+			if out[0].Variants != nil {
+				t.Errorf("%s：Variants=%v，期望 nil", c.name, out[0].Variants)
+			}
+		} else if !reflect.DeepEqual(out[0].Variants, c.want) {
+			t.Errorf("%s：Variants=%v，期望 %v", c.name, out[0].Variants, c.want)
+		}
+		if filled != c.wantFilled {
+			t.Errorf("%s：filled=%d，期望 %d（档位不计入 filled）", c.name, filled, c.wantFilled)
+		}
+	}
+
+	// 补齐时同时挑一个落在集合内的默认档位，避免写出「默认档位不在可选集合里」的矛盾数据。
+	cards := []ModelCard{{ModelID: known, Reasoning: true}}
+	out, _ := ApplyModelPresetsForSite(cards, "", "")
+	if out[0].DefaultVariant != "high" {
+		t.Errorf("DefaultVariant=%q，期望 high", out[0].DefaultVariant)
+	}
 }
 
 // boolState 把三态布尔压成可比较的字符串，便于在断言消息里区分 nil / false / true。

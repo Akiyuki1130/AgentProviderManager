@@ -326,7 +326,8 @@ func emptyToken(v interface{}) bool {
 // 本函数没有站点上下文，等价于 ApplyModelPresetsForSite(cards, "", "")；知道 provider
 // 的 baseUrl / api.type 时改用后者，让离线目录与站点级规则一起参与。
 //
-// filled 仍只统计 context/output 两类字段（档位补全属于卡片自适应，另行提示）。
+// filled 仍只统计 context/output 两类字段（能力位与推理档位都是只补空缺、另有各自入口与计数，
+// 见 ApplyModelPresetsForSite）。
 func ApplyModelPresets(cards []ModelCard) ([]ModelCard, int) {
 	return ApplyModelPresetsForSite(cards, "", "")
 }
@@ -342,6 +343,10 @@ func ApplyModelPresets(cards []ModelCard) ([]ModelCard, int) {
 // （卡片已有选择一律保留），与前端「按能力表补全」按钮同一口径——ctx/out 是估算值可以覆盖，
 // 能力位则可能已经被用户逐位确认过，覆盖等于抹掉用户的选择。能力位不计入 filled
 // （filled 仍是 ctx/out 的字段数，前端有独立的能力入口与计数）。
+//
+// 推理档位（variants）同样只补空缺（2026-10-17）：思考已开、档位集合还是空的卡片，用它的支持
+// 档位填上——否则卡片上一档未勾，写盘侧还会回落到写死的 {off,high,max}。非空集合与显式关闭
+// 思考的卡片一律不动（删档位只能走卡片上那个要先确认的「覆盖为推断档位」动作）。档位不计入 filled。
 func ApplyModelPresetsForSite(cards []ModelCard, baseURL, apiType string) ([]ModelCard, int) {
 	filled := 0
 	for i := range cards {
@@ -361,6 +366,21 @@ func ApplyModelPresetsForSite(cards []ModelCard, baseURL, apiType string) ([]Mod
 			}
 			if merged := mergeFeatures(cur, cap.Features); merged.HasAny() {
 				cards[i].Capabilities = &merged
+			}
+		}
+		// 支持档位取卡片上那一个（`_supported_levels` 已是「provider 自报优先、能力表兜底」的
+		// 结果，与界面展示的弱化/勾选同源）；卡片没带时回落到本次求值的能力表档位。
+		//
+		// 判据是「集合为空」而不是「没有非 off 档」：非空集合一律不碰——即便它只有一个 off
+		// （那与「思考已开」自相矛盾，但删掉它是实打实的改动，不该由「自动匹配」顺手做）。
+		if cards[i].Reasoning && len(cards[i].Variants) == 0 {
+			levels := cards[i].SupportedLevels
+			if !hasNonOffLevel(levels) {
+				levels = cap.ReasoningLevels
+			}
+			if hasNonOffLevel(levels) {
+				cards[i].Variants = cloneStrings(levels)
+				cards[i].DefaultVariant = PickDefaultVariant(cards[i].Variants)
 			}
 		}
 	}

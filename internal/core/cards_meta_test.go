@@ -248,6 +248,90 @@ func TestBuildModelCardsForSiteSupportedLevels(t *testing.T) {
 	}
 }
 
+// TestBuildModelCardsForSiteAutoChecksLevels 「导入新供应商」时自动勾选支持的思考强度
+// （2026-10-17）：拉取模型产出的卡片直接带着**将要写进配置的档位集合**，因此
+//   - 思考已开且档位里有非 off 档时，Variants = 该组档位、DefaultVariant = 规范默认（high 优先）；
+//   - 与 ctx/out、capabilities 同口径：受「自动补全」开关门控（它们都会被写进配置）；
+//   - provider 显式声明不支持思考、或档位里只有 off、或任何来源都没给出档位时一律不勾。
+//
+// 最后一组断言锁住真正的收益：写出去的档位是**支持集合**，而不是写死的 {off,high,max}
+// ——后者会给 glm-5.3 这类不支持关闭思考的模型凭空写一个 off。
+func TestBuildModelCardsForSiteAutoChecksLevels(t *testing.T) {
+	setCustomVariantsForTest(t, false)
+	const base = "https://example.invalid/v1"
+	const api = "openai-chat-completions"
+	if cap := LookupModelCapabilityForSite("glm-5.3", base, api); !reflect.DeepEqual(cap.ReasoningLevels, []string{"low", "high", "max"}) {
+		t.Fatalf("前提破坏：glm-5.3 的能力表档位变了：%+v", cap.ReasoningLevels)
+	}
+
+	cases := []struct {
+		name        string
+		id          string
+		meta        map[string]interface{}
+		autoFill    bool
+		want        []string
+		wantDefault string
+	}{
+		{"能力表档位 + 开关开：自动勾选", "glm-5.3", map[string]interface{}{}, true, []string{"low", "high", "max"}, "high"},
+		{"能力表档位 + 开关关：卡片不动", "glm-5.3", map[string]interface{}{}, false, nil, ""},
+		{"provider 自报档位胜出", "glm-5.3", map[string]interface{}{"thinking_level": "max"}, true, []string{"max"}, "max"},
+		{"provider 显式关闭思考：不勾", "glm-5.3", map[string]interface{}{"reasoning": false}, true, nil, ""},
+		{"档位里只有 off：不勾", "my-local-model", map[string]interface{}{"thinking_level": "disabled"}, true, nil, ""},
+		{"任何来源都没有档位：不勾", "my-local-model", map[string]interface{}{}, true, nil, ""},
+		{
+			"自命名模型 + provider 档位：照勾",
+			"my-local-model", map[string]interface{}{"thinking_level": []interface{}{"high", "low"}}, true,
+			[]string{"low", "high"}, "high",
+		},
+	}
+	for _, c := range cases {
+		card := cardsForSiteTest(t, c.id, c.meta, c.autoFill, base, api)
+		if len(c.want) == 0 {
+			if card.Variants != nil {
+				t.Errorf("%s：Variants=%v，期望 nil", c.name, card.Variants)
+			}
+			if card.DefaultVariant != "" {
+				t.Errorf("%s：DefaultVariant=%q，期望空", c.name, card.DefaultVariant)
+			}
+			continue
+		}
+		if !reflect.DeepEqual(card.Variants, c.want) {
+			t.Errorf("%s：Variants=%v，期望 %v", c.name, card.Variants, c.want)
+		}
+		if card.DefaultVariant != c.wantDefault {
+			t.Errorf("%s：DefaultVariant=%q，期望 %q", c.name, card.DefaultVariant, c.wantDefault)
+		}
+	}
+
+	// 收益的落点：导入写出的档位就是支持集合；开关关掉时保持既有行为（卡片无档位，
+	// 写盘侧回落 DefaultVariantsFor 的 [off high max]）。
+	cfg, _, err := CardToCfg(cardsForSiteTest(t, "glm-5.3", map[string]interface{}{}, true, base, api), "openai-compatible")
+	if err != nil {
+		t.Fatalf("CardToCfg 失败：%v", err)
+	}
+	if got := reasoningVariantsForTest(t, cfg); !reflect.DeepEqual(got, []string{"low", "high", "max"}) {
+		t.Errorf("开关开启时写出的档位应为支持集合：%v", got)
+	}
+	plain, _, err := CardToCfg(cardsForSiteTest(t, "glm-5.3", map[string]interface{}{}, false, base, api), "openai-compatible")
+	if err != nil {
+		t.Fatalf("CardToCfg 失败：%v", err)
+	}
+	if got := reasoningVariantsForTest(t, plain); !reflect.DeepEqual(got, DefaultVariantsFor("openai-compatible")) {
+		t.Errorf("开关关闭时应保持既有兜底：%v", got)
+	}
+}
+
+// reasoningVariantsForTest 取写回配置里 reasoning.variants（测试辅助）。
+func reasoningVariantsForTest(t *testing.T, cfg map[string]interface{}) []string {
+	t.Helper()
+	block, ok := cfg["reasoning"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("写回的配置里没有 reasoning 块：%+v", cfg)
+	}
+	got, _ := block["variants"].([]string)
+	return got
+}
+
 // TestBuildModelCardsForSiteReasoning API 明确声明的思考支持态优先于按能力表 / 模型名做的推断；
 // 反过来，provider 用**档位枚举**宣告的思考支持同样成立（见函数末尾一段，2026-10-15 阶段 F 补正）。
 func TestBuildModelCardsForSiteReasoning(t *testing.T) {
