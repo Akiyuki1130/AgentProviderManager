@@ -77,7 +77,7 @@
 
 - [~] **18. 补齐模型匹配规则**（2026-10-15 主体完成，剩 a–e 五条尾巴）
   阶段 B 只抽了 ZCode `modelRules` 84 条，覆盖不到的部分模型拿不到正确的 context/output/档位。本轮补齐如下（细节见 `MODEL-MANAGEMENT-PLAN.md` 与 `CHANGELOG.md`）：
-  1. **新增两层离线信源**：`scripts/sync-ability-catalog.mjs` → `internal/core/capability_catalog_gen.go`（**2305 条精确 id**：pi-ai 994 + models.dev 1311；pi-ai 侧逐文件 SHA-256 校验 `.manifest.json`；`--check` **完全离线且跨天幂等**，`--update-snapshot` 才联网刷新 `internal/core/data/models-dev-snapshot.json`；`--verify` 与 OpenRouter `/api/v1/models` 交叉校验、只报告不并入）。
+  1. **新增两层离线信源**：`scripts/sync-ability-catalog.mjs` → `internal/core/capability_catalog_gen.go`（**2312 条精确 id**：pi-ai 1048 + models.dev 1264；pi-ai 侧逐文件 SHA-256 校验 `.manifest.json`；`--check` **完全离线且跨天幂等**，`--update-snapshot` 才联网刷新 `internal/core/data/models-dev-snapshot.json`；`--verify` 与 OpenRouter `/api/v1/models` 交叉校验、只报告不并入）。
   2. **站点层**：`scripts/sync-model-catalog.mjs` 追加产出 `model_site_rules_gen.go`（ZCode `providerSiteRules` 54 条，含 `baseUrlMatch`/`apiTypeMatch`）。匹配语义用 asar 内代码实测确认：**模型名全串锚定 + 大小写不敏感；baseUrl/apiType 全串锚定 + 大小写敏感**；baseUrl 先归一化（摘 search/hash、去尾部 `/`）。有意偏离一处：apiType 传空串视作「未知」而跳过，ZCode 只在 `null` 时跳过（受影响的 6 条 `.*` 规则都不给能力字段）。
   3. **求值链改为五层**（逐字段覆盖）：**provider 自报 > override > site（需 baseUrl/apiType 命中）> ZCode `modelRules` > presets（手维护旧表）> catalog（社区目录兜底）**。`presets` 排在 `catalog` 之前是刻意的：社区库不得静默改写 APM 既有值（实测若反向排序会改写 270 个字段，如 `gpt-4` 128000→8192、`gemini-2.5-flash-tts` 1048576→8192）。新增入口：`LookupModelCapabilityForSite` / `BuildModelCardsForSite` / `CfgToCardForSite` / `ApplyModelPresetsForSite`（旧函数保留并转调，行为不变）。
   4. **拉取模型时读 provider 元数据**（此前只读 5+5 个 token 键，档位全丢）：新增 `metaLevels`（`thinking_level`/`thinkingLevel`/`reasoning_effort(s)`/`supported_efforts`/`reasoning_options[type=effort].values`/`supported_parameters`）与 `metaReasoning`；**provider 给的档位优先于能力表**（`_supported_levels`）；ctx 键补 `max_input_tokens`/`context_size`，out 键补 `output_token_limit`/`max_new_tokens`。
@@ -89,6 +89,7 @@
     c. **覆盖层前缀语义**：`Match` 是前缀匹配，`nvidia/nemotron-3-ultra-550b-a55b` 会外溢到 `:free` 兄弟（档位取值刻意取成与之一致，只有 ctx 被一并改写）；此外既有条目 `deepseek-v4.1-flash` 不带命名空间，命中不了网关原拼写 `deepseek/deepseek-v4.1-flash`（数值恰好相同，无实害）。若要把覆盖层写成「精确 id 优先 + 去命名空间容错」，需改 `matchOverride`。
     d. **阶段 4（运行时手动更新能力表）未做**：需要固定白名单域名 + 既有 URL/SSRF 复检，默认关闭，单独评审后再实施。
     e. **覆盖层「上游自报」条目的证据登记是手工的**：新增这类条目若忘了登记来源表与 `model_overrides_test.go` 的断言，测试抓不到（只有注释里的文字要求）。彻底修法是把「来源类别 + 证据 id」提升为 `modelOverride` 的结构字段，由测试断言「所有上游自报型条目都必须有证据」。
+   f. **pi-ai 目录键新增类型前缀（2026-10-18 修复，随 v2.1.2 发版）**：DSH 更新后，其内嵌 pi-ai 目录的模型键从裸 id 变成 `<类型>:<id>`（`chat:` / `image:` / `classifier:`），每条记录另带显式的 `id` 与 `type` 字段。生成脚本原先直接拿键当索引，重建会把 pi-ai 的全部索引写成配置与 API 响应里都不存在的 `chat:…` 形态（`--check` 也随之失败）；现在改取记录自己的 `id` 字段（旧格式无 `type` 时仍走键，且只在键前缀恰好是已知类型时才当类型看——`amazon.nova-2-lite-v1:0` 这类 id 自带冒号），并只收 `chat` 类型的记录（`image` / `classifier` 的 ctx 与档位语义不同，旧数据里也只有对话模型）。表已按更新后的 DSH 目录（manifest `080cfcf6…`，42 个 provider 文件，`pi-ai 非对话记录跳过 87 条`）重建：目录 **2312 条**、能力位表 **2327 条**。
   - 影响面：只影响「自动补全命中率」，不改写既有值（新顺序按构造成立，并由回归测试锁定）；不触碰任何写入路径。
 
 - [x] **19. 「自动匹配」与拉取模型时的自动补全口径不一致**（2026-10-14 实现导入页厂商分组时发现，同日修复）
@@ -99,7 +100,7 @@
 
 - [x] **20. 补全模型能力维度（阶段 E，2026-10-15 完成）**
   触发：模型参数里除上下文/输出/档位外，还有一整类能力可记录（是否支持图片/视频/音频/PDF、结构化输出、工具调用…），用户要求「能自动填的全填」，且**不局限于 ZCode v2**——DSH 与后续 harness 都要从同一层取值。方案与实测证据见 `MODEL-MANAGEMENT-PLAN.md` 第 10 节（含冻结契约 10.2.4 与实施记录 10.8）。
-  1. **中立层**：新增 `internal/core/model_features.go`（`ModelFeatures`：输入模态 5 位、输出模态、工具调用、结构化输出、原生联网搜索、中段 system、附件、温度；**全部三态，`nil` = 未知而非「不支持」**）与并列生成表 `internal/core/capability_features_gen.go`（**2320 条精确 id**，编码 `<输入模态>|<输出模态>|<flags>`，flags 固定序 `tjwmaT`，fail-closed 解析；既有 `ctx|out|levels` 三段表与它的解析器一字未动）。
+  1. **中立层**：新增 `internal/core/model_features.go`（`ModelFeatures`：输入模态 5 位、输出模态、工具调用、结构化输出、原生联网搜索、中段 system、附件、温度；**全部三态，`nil` = 未知而非「不支持」**）与并列生成表 `internal/core/capability_features_gen.go`（**2327 条精确 id**，编码 `<输入模态>|<输出模态>|<flags>`，flags 固定序 `tjwmaT`，fail-closed 解析；既有 `ctx|out|levels` 三段表与它的解析器一字未动）。
   2. **求值链**：override / 站点规则 / ZCode 正则 / presets / 离线目录各层与新增能力位走**同一套逐字段合并**（层间填空缺、层内后命中覆盖），`.*` 兜底规则照旧整条跳过（否则内建兜底的 `supportsToolCall:true` 会占满所有模型）。测试锁定「旧层已给出的位不得被新层改写或清空」（含三态交锋：已知为假不被后层真值覆盖）。
   3. **三 harness 映射（只写真）**：ZCode v2 → `inputFormat.supports*` / `outputFormat.supportsText` / `supportsToolCall` / `supportsJsonSchemaOutput` / `supportsNativeWebSearch` / `supportsMidConversationSystem`；DSH → `input`（收敛 `{text,image}`，交集空则整键省略）+ `compat.supportsStrictMode` / `compat.supportsTemperature`；opencode → `modalities{input,output}` / `attachment` / `tool_call` / `temperature`。绝不写 `null` / `false` / `enabled` / `requiresMfjsToolSchema` / `optionSpecs.*.map`。
   4. **顺带修的两个真缺陷**：① `dshModelToRaw` 原样把 `modalities.input` 搬进 DSH `input`，含 video/pdf/audio 会被 DSH schema 拒收（现按交集收敛）；② DSH 两处写出口（旧式顶层 `provider` 布局、`deepSeekBuildEntry` 的合并路径）会把内部键 `_apm_capabilities` / `_dsh_raw` 落盘（现已统一剥离）。
@@ -163,14 +164,14 @@
   6. **拨号守卫带来的用户可见行为变化（需在文档 / 文案里说明）。** `internal/core/probe.go` 现在也走 `newGuardedClient`，因此未打开「允许本地与内网地址」时，对本地 / Ollama / LAN 网关的连通性探测会失败。这是修掉 SSRF 缺口的代价，但用户侧看不到原因。另：拨号守卫在有代理配置时会放行代理地址本身（否则本地代理用户整体不可用），此时目标主机的私网判定回到 URL 层的逐跳校验。
   7. **本轮经核实判定「不是缺陷、有意为之」的两处，记录以免后人重复投入：** ① 批量覆盖按「与推断集合不相等」计数、而单卡「覆盖为推断档位」只在确有档位会被删除时露出——这是 `MODEL-MANAGEMENT-PLAN.md` 10.11 的刻意设计（两处入口的判据本就不同），不是实现漂移；② DSH 写端 `dshCapabilityModalities` 对未知的 text 写真是有意的放宽（写端非空集合必含 text、读端忠实照读，往返用例已锁）。
 
-- [ ] **26. 迁移到 DSH 后模型没有思考强度：DSH 写入路径用能力表兜底档位（阶段 G，2026-10-16 已裁定，待实施）**
+- [x] **26. 迁移到 DSH 后模型没有思考强度：DSH 写入路径用能力表兜底档位（阶段 G，2026-10-16 裁定 / 2026-10-17 完成）**
   症状：把 ZCode 的 provider 迁移到 DSH 后，DSH 里选择模型时**没有「推理等级」**（整行不显示）。
   根因：DSH 的档位只有两个来源——模型节点显式声明 `reasoningEfforts`，或**路由 key 与模型 id 同时命中 pi-ai 内置目录**（`dsh-llm-pi-ai`：`resolveModelReasoning` 省略字段即 `reasoning: base?.reasoning ?? false`，而手写路由的 catalog 恒为空）；且 DSH 客户端 UI **故意没有**任何推理档位控件（`dsh-client-ui-settings-models`，`reasoningEfforts` 在客户端代码里零命中），所以 APM 不写，用户在 DSH 里补不回来。APM 侧迁移原样投递源卡片，而 **ZCode 的档位来自它自带规则表，用户自己的 `provider_config.json` 里常常没有 `reasoningLevel.values`**，于是写出去的是一个「完全没有推理信息」的模型。
-  修法（用户已裁定）：`dshModelToRaw` 在「卡片无档位且无显式开关」时用 `LookupModelCapabilityForSite` 兜底写出 `reasoningEfforts`；门控跟随既有「自动补全」开关（core 侧策略 + app 三处推送）；只补空缺、绝不写 `reasoningEfforts: false`；覆盖**所有 DSH 写入路径**（不只迁移）。细则、实测表与副作用见 `MODEL-MANAGEMENT-PLAN.md` 10.12。
-  副作用：开关打开时，任何一次保存都会给「配置里没有档位的模型」补上档位，即使用户这次没碰那张卡。
+  修法（已实施）：`dshModelToRaw`（DSH 两条写入路径的唯一模型出口，第二参数由没人用的 kind 改为 `baseURL`）在「卡片完全没有推理信息」这一支用 `LookupModelCapabilityForSite` 兜底写出 `reasoningEfforts`；门控跟随既有「自动补全」开关（新增 core 级策略 `internal/core/dsh_level_fallback.go`，`app.go` 的 `Startup` / `GetOptions` / `SetAutoFillLimits` 三处推送，**默认关闭即与改动前逐字节一致**）；**只补空缺**——显式开/关、卡片已有档位、节点里已声明的推理键（含 `reasoningEfforts: false`）一律不动；推断只有 off 或为空时一个键都不写，绝不写 `false`，也不写单数键 `reasoningEffort`。实施期为防误判补了一条守卫：**`RawCfg` 里已有 `reasoningEfforts`/`reasoningEffort` 键就不参与**（`false` 在读卡时不置显式开关位，只按原条件会被当成空缺而覆盖用户的声明）。
+  副作用（已接受）：开关打开时，任何一次保存都会给「配置里没有档位的模型」补上档位，即使用户这次没碰那张卡；卡片与写盘会短暂不一致，可用既有的「采纳推断档位」把同一组档位显式落到卡片上（本轮不在保存前隐式改卡片）。
+  验证：`go test ./...`（新增 3 个用例：翻译表 / 8 条门控表 / profile patch 端到端）、`go vet ./...`、三条 `--check` 全绿；细则与实施记录见 `MODEL-MANAGEMENT-PLAN.md` 10.12。覆盖范围是两条 pi-ai 路由写入路径（0.1/0.2 的 `llm-pi-ai.providers`）与跨 Agent 迁移；0.1 旧式顶层 `provider:` 布局不经模型编码出口，未覆盖。
   证据：asar 实证 + 探针 `internal/core/zz_dsh_reasoning_probe_test.go`（可重跑，`-run TestDshReasoningProbeFromZCodeCards -v`）。
-  确诊法（需人工，本轮未做实证）：在 APM 的 DSH provider 编辑器里看该模型的「思考」开关与档位候选是否为空；或看 `$DSH_HOME/profiles/<desktop|web>/cordis.patch.yml` 里模型节点有没有 `reasoningEfforts`。
-  待人工：开关打开 → 保存 → DSH 模型选择器出现「推理等级」行且档位与能力表一致；迁移场景端到端同上（需真实窗口与真实网关）。
+  待人工（本轮未做）：开关打开 → 保存 → DSH 模型选择器出现「推理等级」行且档位与能力表一致；迁移场景端到端同上（需真实窗口与真实网关）。用户的源配置里究竟有没有 `reasoningLevel.values` 仍未实证（不读用户配置是硬约束）。
 
 - [ ] **27. 自填档位词被白名单静默滤光，连带迁移丢掉整个档位集合（2026-10-16 记录，待独立评估）**
   「允许自填推理档位」关闭（默认）时，读卡会把不在 `ZCodeVariantSet` 白名单里的档位名整条丢掉（`internal/core/cards.go:509`/`:524`）；若一个模型的档位**全是**自填名，卡片就退化成「无推理信息」，迁移到 DSH 后思考与档位一起消失（探针实测：源 `values: ["thinking","ultra"]` → DSH 侧无任何推理键）。
@@ -179,6 +180,16 @@
 - [ ] **28. 只有 off 的源档位集合被写成 `reasoningEfforts: false`（2026-10-16 记录，待独立评估）**
   源档位集合只有 `disabled`/`none`（即该模型唯一可表达的状态就是「不思考」）时，DSH 侧落地为 `reasoningEfforts: false`，而 `false` 在 DSH 里是「**显式声明非推理模型**」（`deepseek.go` 的 `dshHasNonOffEffort` 退化分支：DSH 的 zod 不允许只含 off 的字典，必须至少一个非 off 档）。
   需要裁定的问题：这种源语义在 DSH 侧该落成 `false`（非推理模型，语义上接近「只有关闭档」）还是**一个键都不写**（= 未知）。涉及 `deepseek.go:836-843` 的退化分支与「兜底不得冒充用户声明」这条原则，需单列评估。
+
+- [ ] **29. 导入页「手动添加模型」不参与自动勾选（阶段 H 残留，2026-10-17）**
+  阶段 H 让拉取模型与「自动匹配」按能力表自动勾选支持的推理档位与能力位，但导入页的「手动添加模型」（`ImportPage.vue` 的 `onAddModel`）走的是**本地拼卡片 + 只补 `_vendor` / `_supported_levels`** 的轻量路径（`fetchVendorMeta`），因此手工敲进去的 ID 卡片上档位与能力位仍全为空。改成走 `BuildSingleCard`（`api.BuildSingleCard` 已存在，返回完整卡片）即可与拉取路径一致；不过它同时会把 ctx/out 与 `capabilities` 一并带上，需先确认「手动添加」是否希望自动补全长度（当日志意识上它与拉取同属「新增模型」，倾向一致）。
+  与第 23 项残留③同源（站点上下文缺口：`BuildSingleCard` 不传 baseURL/apiType，站点层档位拿不到），建议同轮处理。
+
+- [ ] **30. DSH 写端两条残留：`modelOverrides` 里的 compat 未过滤；自填档位名让整份配置解析失败（2026-10-17 记录，待裁定）**
+  第 10.15 项修复把「模型级 + 路由级 compat 按 wire protocol 过滤」做掉了，另有两处同族缺口留在门外：
+  ① **`modelOverrides` 透传**：`deepSeekRouteExtras` 会把 ZCode 侧 `options.modelOverrides`（受控模型覆盖字典）原样透传到路由上，里面每个模型的 `compat` 会被 DSH 用**同一套按协议的判定**校验——一个协议错位的键就会让那些模型被判不可服务。目前只过滤了模型节点与路由级两处，`modelOverrides` 未过滤（来源多为早先 DSH 往返或手写，触发面小但同型）。
+  ② **自填档位名写进 `reasoningEfforts` 会让整份配置在 schema 解析期失败**：DSH 的 `reasoningEfforts` 是 `z.dict(z.union([z.string(), z.const(null)]), z.union(THINKING_LEVELS))`，**字典键被限死在固定 7 档**。本机用 DSH 自带 schemastery 复刻该 schema 实测：写入 `very-high` ⇒ `expected false | {...7 档}: string but got {...}`，即 `Config()` 直接抛错——比「模型被丢掉」更严重（llm-pi-ai 整条不可用）。而「允许自填推理档位」打开时 `dshEffortForWrite` 会保留自填名并写进去（阶段 C 的既定行为，`variant_policy_test.go` 的两条用例锁着）。
+  需要裁定：② 是「DSH 侧永远只写 7 档（自填档位在 DSH 无法表达，卡片保留、写盘丢弃）」还是「保持现状并在开关打开时给 DSH 目标加显式警告」。倾向前者——它把「写端绝不产生 schema 拒收的配置」这条不变量补齐，代价是撤销阶段 C 在 DSH 分支上的放宽；改动面 `deepseek.go` 的档位写端 + 两条既有用例 + 10.1.3/10.12 的文档口径。
 
 - [ ] **6. 还原点页筛选与分组**
   按 Agent/操作类型/日期过滤；加「清理孤立条目」按钮（顺带解决 1 的存量污染）；回滚前给差异预览（改了哪个文件、几个提供商）。
@@ -200,10 +211,11 @@
   桌面应用没有任何全局快捷键，连搜索都要鼠标点。
   进展（2026-10-14，随 UI 批次落地）：已部分完成——`Ctrl+S` 保存当前提供商（脏态才拦截，保留 HTTP 明文确认门）、提供商搜索框 `Esc` 清空；命令面板（原 B12）按约定不做。剩余：全局快捷键体系与 `Ctrl+K` 命令面板仍未做。
 
-- [x] **15. 新建提供商的自动保存与「重新获取」报错**（2026-10-14 完成）
+- [x] **15. 新建提供商的自动保存与「重新获取」报错**（2026-10-14 完成；2026-10-17 自动保存语义重做）
   症状：新建提供商后直接点「自动/手动重新获取」报「提供商「x」不存在」；根因是 `createProvider` 把未落盘的新提供商当成「已保存基线」，`isDirty` 恒为 false——既让所有离开守卫放行（切卡片/切 Agent/关窗时静默丢失），也让后端按 ID 查不到。
-  修法（前后端各一层，互为兜底）：① 前端引入 `isPersisted`，脏判定改为「未落盘 ∨ 与基线不一致」，离开弹窗对未落盘的新提供商改用更重的丢弃警告；② 新增 `useAutoSave`（debounce 1.2s + 最小间隔 5s 合并连续改动 + 单飞 + 静默失败），选项页可关闭，自动写入标记 `_operation=auto_save`，还原点清理优先淘汰这类低价值点；③ 需要「提供商已存在」的操作（自动/手动重新获取、钥匙串关联）先经 `ensurePersisted()` 落盘；④ 后端 `RefreshProviderModels` 在带 Base URL 覆盖时容忍「尚未保存」，无覆盖时维持原报错。
-  残留：自动保存仍会让还原点增长（已靠合并与最小间隔压住）；关窗恰逢 debounce 窗口内可能丢最后一次改动。
+  修法（前后端各一层，互为兜底）：① 前端引入 `isPersisted`，脏判定改为「未落盘 ∨ 与基线不一致」，离开弹窗对未落盘的新提供商改用更重的丢弃警告；② 新增 `useAutoSave`（现在只在 `flush()` 时落盘，单飞 + 静默失败，见下方修订），选项页可关闭，自动写入标记 `_operation=auto_save`，还原点清理优先淘汰这类低价值点；③ 需要「提供商已存在」的操作（自动/手动重新获取、钥匙串关联）先经 `ensurePersisted()` 落盘；④ 后端 `RefreshProviderModels` 在带 Base URL 覆盖时容忍「尚未保存」，无覆盖时维持原报错。
+  **修订记录（2026-10-17，用户裁定「只在阻塞/退出操作时落盘」）**：旧自动保存是「停止输入 1.2s 后落盘、连续改动按 5s 最小间隔合并」，代价是编辑中途填错的参数会**立刻覆盖磁盘上的旧值**，用户还没点保存、上次的正确配置就被写掉，「放弃更改」无从回滚。现在 `frontend/src/composables/useAutoSave.ts` 删掉整个后台调度器（`watch(isDirty)` + 防抖 + 最小间隔 + `start`/`stop` + `pending` 状态），只保留 `flush()`；写入时机＝离开页面／切换提供商／切换 Agent／安装更新／退出应用，**编辑期间一个字节都不写盘**。顺带修掉「✕ 退出丢数据」：`AppTopbar.vue` 的关闭按钮此前直接 `Quit()`（脏数据静默丢失），现改走 `leaveDirty()` / `requestLeave()` 守卫。选项页开关文案改为「离开或退出时自动保存改动」（三语），描述说明「编辑过程中不写盘、填错不会覆盖旧值、『放弃更改』随时能回滚」。详见 `CHANGELOG.md` 2.1.1-pre「修复」首条。
+  原「残留」两条随之作废：还原点不再随连续输入增长（只在离开/退出时落一次盘）；「关窗恰逢 debounce 窗口丢最后一次改动」已由退出守卫修复。
 
 - [x] **16. 版本号统一为单一真源**（2026-10-14 完成）
   症状：版本号散在 9 个文件（`main.go`/`constants.go`/`wails.json`/`package.json`/`package-lock.json`×2/`package.json.md5`/`AppSidebar.vue`/`README.md`×3），发版要手工逐处改，易漏。

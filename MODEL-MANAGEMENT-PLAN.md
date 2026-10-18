@@ -1,6 +1,7 @@
 # 模型能力 / 思考档位 / 厂商分组 — 规划文档
 
-> 状态：**v6（阶段 A / B / C / D 全部完成并各自通过独立审查，2026-10-14）**。
+> 状态：**v7（阶段 A / B / C / D / E / F / G / H 全部完成，2026-10-17）**。在 v6 的四阶段之上，后续增量是阶段 E（能力维度补齐）、阶段 F（档位补全/覆盖，含一轮 UI 修订）、阶段 G（DSH 写端用能力表兜底档位）与阶段 H（导入/自动匹配时自动勾选支持的思考强度与能力位），分别见 10.10 / 10.11 / 10.12 / 10.13。
+> v6 当时的记录（2026-10-14）：阶段 A / B / C / D 全部完成并各自通过独立审查。
 > v5 关键补充：阶段 B 的匹配语义已用真实数据端到端仿真确认——ZCode 是**全串锚定 `^(?:...)$` + 大小写不敏感**、**逐字段覆盖**（不是取首条命中）、`deepseek-v4.1-flash` 内建即有条目（详见 4.0 / 4.0b）。阶段 C 的「自适应档位 + 高级自填开关」已完成，并补修了 DSH 读/写不对称（见 5.1 / 5.2）。阶段 D 的厂商分组视图已完成（见 6.1）。
 > 历史更正：A-7 的修法被实测推翻——`config.enabled` 是「模型是否在列表中启用」，**不是**思考开关（详见 A-7 语义节）。
 
@@ -533,8 +534,23 @@ image/video 映射成 `supportsImage`/`supportsVideo`，注释明写「不推断
   `supportsAdditionalTools` 等——它们只能来自内嵌 catalog。
 - ⇒ DSH 可写入的能力仅：`input`（收敛到 text/image）、`compat.supportsStrictMode`、`compat.supportsTemperature`。
   工具调用 / 联网搜索 / 中段 system **在 DSH 配置层无法表达**（仍进中立层供展示与给别的 harness 用）。
+- **两个 compat 键各绑定一个 wire protocol（2026-10-17 更正，此前本节漏记）**：`COMPAT_GATES` 的 27 键里只有
+  disposition 为 `"offer"` 的才可写，且**按协议分门**——`supportsTemperature` 只在 `anthropic-messages`
+  offer，`supportsStrictMode` 只在 `openai-completions` / `openai-responses`(含 azure、codex) /
+  `bedrock-converse-stream` offer（**不在 anthropic 上**）；其余 20 余键（`supportsStore`、`maxTokensField`、
+  `thinkingFormat`…）只在 `openai-completions` / `openai-responses` 上 offer。判定分两级：
+  词汇级（该键在所有协议里都 withhold／不存在，如 `supportsToolSearch`）与**协议级**
+  （`resolveModelCompat` 里 `if (gate?.[field] !== "offer") invalid(...)`）。
+  **模型级不一致 = 该模型名必是错的**：deferred 解析下模型被直接丢掉（只留 `catalogError`），
+  strict 解析（配置写入 / 插件的 `internal/config` 守卫）下整份 llm-pi-ai 配置更新抛错。
+  修复与实测报错见 10.15。
+- **`reasoningEfforts` 的字典键被 schema 限死在固定 7 档**：`z.dict(z.union([z.string(), z.const(null)]),
+  z.union(THINKING_LEVELS))`——写入第 8 个档位名会让**整份配置在 schema 解析期失败**（本机用 DSH 自带
+  schemastery 复刻该 schema 实测：`very-high` ⇒ `expected false | {...7 档}: string but got {...}`）。
+  现有「允许自填推理档位」开关打开时写端会保留自填名，属待裁定残留（`TODO.md` 第 30 项）。
 - **现存缺陷（本轮顺带修）**：`internal/core/deepseek.go:635-639` 把 `card.RawCfg["modalities"]["input"]`
   **原样不过滤**搬进 DSH `input`；一旦含 video/pdf/audio 会被 DSH 的 schema 拒绝。必须收敛。
+  （同一处历史缺陷的第二型——compat 键不看协议——见 10.15。）
 
 #### 10.1.4 opencode 能力面（`opencode_schema.json`）
 
@@ -601,7 +617,7 @@ Capabilities *ModelCapabilities `json:"capabilities,omitempty"`
 | harness | 映射（只写真；键不存在则省略） | 明确不写 |
 |---|---|---|
 | ZCode v2 | `inputFormat.supports{Text,Image,Video,Audio,Pdf}`、`outputFormat.supportsText`、`supportsToolCall`、`supportsJsonSchemaOutput`、`supportsNativeWebSearch`、`supportsMidConversationSystem` | `null`、`false`、`enabled`、`requiresMfjsToolSchema`、`optionSpecs.*.map` |
-| DSH | `input` ← `InputModalities ∩ {text,image}`（**空则整键省略**，不留空数组）；`compat.supportsStrictMode` ← StructuredOutput；`compat.supportsTemperature` ← Temperature | catalog-only compat 键；工具调用 / 联网搜索 / 中段 system（DSH 配置层无法表达） |
+| DSH | `input` ← `InputModalities ∩ {text,image}`（**空则整键省略**，不留空数组）；`compat.supportsStrictMode` ← StructuredOutput（**仅 openai-completions / openai-responses 路由**）；`compat.supportsTemperature` ← Temperature（**仅 anthropic-messages 路由**）；既有 compat 键按同一协议白名单过滤后保留 | catalog-only compat 键；**协议不接受的 compat 键**（见 10.1.3 / 10.15）；工具调用 / 联网搜索 / 中段 system（DSH 配置层无法表达） |
 | opencode | `modalities{input,output}`（全词表）、`attachment`、`tool_call`、`temperature` | — |
 
 落点文件：ZCode v2 在 `internal/zcodeprovider/convert.go`（`modelRuleFromLegacy`）与 `internal/core/backend_zcode_v2.go`；
@@ -683,7 +699,7 @@ toolCall、jsonSchemaOutput、nativeWebSearch、midConversationSystem）；仍**
   `temperature`。需在开发者机跑**一次** `--update-snapshot`（联网）重裁快照；此后 `--check` 仍完全离线幂等。
 - **编码决策**：新增**并列产物** `internal/core/capability_features_gen.go`（`map[string]string`，值形如
   `text,image|text|1-0--1`，flags 固定顺序 `t(oolCall) j(sonSchema) w(ebSearch) m(idConv) a(ttachment) T(emperature)`，
-  每字符 `1`/`0`/`-`），**不动**现有 2305 行 `ctx|out|levels` 与它「恰好三段、fail-closed」的解析器及测试。
+  每字符 `1`/`0`/`-`），**不动**现有 2312 行 `ctx|out|levels` 与它「恰好三段、fail-closed」的解析器及测试。
   理由：零风险、`--check` diff 最小、旧解析契约不破。只收录「有能力的 id」。
 
 **`internal/core/model_overrides.go`**：条目可选带 features 列，供手工纠偏。
@@ -894,6 +910,8 @@ i18n 新键（`level.*`，三语齐全、零 emoji）：`level.batchLabel` / `le
 
 （后果提示：关掉该开关的用户从此也会看到「档位自适应」的弱化显示与批量档位操作的支持性提示——这正是阶段 C1 的设计意图，此前只是被开关误伤。）
 
+**2026-10-17 补充（阶段 H，见 10.13）**：上面「拉取路径 `Variants: nil`」这一前提已不再成立——现在 `Variants` 会按同一组支持档位自动勾选，且因为它会被写进配置，**它**受开关门控。`_supported_levels` 本身仍然无条件填写：展示与种子归它，写值归 `Variants`，两者不再混为一谈。同轮的开关文案改为「导入时自动补全模型参数」。
+
 **同轮的第二处后端口径修正（provider 自报档位 ⇒ 支持思考）**：`cards.go:82-86` 先按能力表/关键词算 `reasoning`，再算 `levels`（provider 优先）。当 provider 在 `/models` 里自报了档位、而模型 id 既不在离线目录/内建正则里、名字也不命中关键词表时，卡片会同时得到 `reasoning=false` 与 `_supported_levels=["low","high"]`——即「列出了可选档位却声明不支持思考」，前端据此禁用思考开关，新的档位补全也会把它当作「用户的显式决定」跳过。现在在算出 `levels` 后补一条：provider **自报**档位含非 off 档且 `metaReasoning` 未给出显式判定时，`reasoning = true`（判据抽成 `infer.go` 的 `hasNonOffLevel`，与能力表推断同口径；provider 显式声明过思考支持态时绝不覆盖）。这是阶段 A「零 `true→false` 回归、允许 `false→true` 修正」同一方向的改动，测试见 `TestBuildModelCardsForSiteReasoning` 末尾新增的四组断言。
 
 #### 10.10.5 实施分工（三个 agent，文件所有权互不重叠）
@@ -954,11 +972,12 @@ export function applyLevels(card: ModelCard, levels: string[]): void // 不变�
 export function joinLevels(items: string[], lang: UiLang): string    // 中/日顿号、其它逗号（确认清单与悬浮提示共用）
 export function useLevelFill(source: () => ModelCard[], lang: Ref<UiLang>): {
   overwrite: Ref<boolean>            // 动作方向（默认 false，不持久化——破坏性方向不该被粘住）
-  targetCount: ComputedRef<number>   // 当前方向下会被处理的模型数（0 时页面禁用按钮）
   summary: ComputedRef<string>       // 现成文案：「可补 N 个模型」/「将覆盖 N 个模型」/「N 个模型未开启思考…」
   fill: () => Promise<void>          // 覆盖路径先 await uiConfirm，取消即什么都不做
 }
 ```
+
+**2026-10-17 修订（人工反馈：不要灰）**：`targetCount` 不再导出，按钮也不再按它禁用。此前「可处理数为 0 ⇒ 禁用」让按钮随筛选、卡片思考开关与方向切换忽明忽暗，读起来像功能坏了；更要紧的是它抹掉了唯一能解释门控的时刻——「这批模型思考没开」「能力表没推断出档位」本来就只有点击后那句 toast 说得清。现在页面只在 `filteredCards.length === 0`（无可见模型，点了必然是静默空操作）时禁用，与同行「按能力表补全」按钮同口径；可处理数为 0 时点击由 `fill()` 说明原因，且**文案与方向同口径**：并入用 `level.batchNone`，覆盖用新增的 `level.batchNoneOverwrite`（说「没有可补全的档位」会让人以为点错了按钮）。门控命中时仍是 `level.batchNoneReasoning`。
 
 **同轮的两处体验修正**：① 一个都处理不了时不再只说「无补项」，而是说出最常见的原因（「N 个模型尚未开启思考，本操作只在思考已开启时生效」）——门控是隐性的，点了没反应必须能知道为什么；② 「采纳推断档位」的悬浮提示改为列出**本次会并入的档位**，而不是只给模型名。
 
@@ -966,7 +985,7 @@ export function useLevelFill(source: () => ModelCard[], lang: Ref<UiLang>): {
 
 **验证**：`cd frontend && npm run build`（含 `vue-tsc --noEmit`）通过；i18n 自检 475 键三语齐全、代码引用的 423 键全部命中、词典零 emoji；**无后端改动、不触碰任何写盘路径**，因此 `go test ./...` 不受影响。**待人工**：浅/深色两套主题目测新批量行与合并后的卡片块；勾选覆盖 → 确认明细与实际删除一致；覆盖后保存 → 重载 `variants` / `default_variant` 与推断集合一致（DSH 侧 `reasoningEfforts` 非空）；无 off 档模型的思考开关变灰且悬浮提示正确；覆盖写盘后确实生成了还原点（`PrepareChange` 链路，本次未验证）。
 
-### 10.12 阶段 G（拟定）：DSH 写入路径用能力表兜底档位（2026-10-16，用户已裁定，**尚未实施**）
+### 10.12 阶段 G：DSH 写入路径用能力表兜底档位（2026-10-16 裁定，2026-10-17 实施完成）
 
 **触发**：人工反馈——「把 ZCode 的 provider 迁移到 DSH 后，DSH 里选择模型时没有思考强度」。
 
@@ -993,7 +1012,7 @@ export function useLevelFill(source: () => ModelCard[], lang: Ref<UiLang>): {
 
 **用户裁定（2026-10-16）**：① 改代码，用能力表兜底；② 兜底覆盖**所有 DSH 写入路径**（不只迁移）；③ 门控**跟随既有「自动补全」开关**，不新增开关；④ 两个同源缺陷（自填档位词被白名单滤光、只有 off 的集合写成 `reasoningEfforts: false`）记 `TODO.md` **独立评估**，不塞进本轮。
 
-**落地设计（待实施）**
+**落地设计**
 
 - **出口**：`internal/core/deepseek.go` 的 `dshModelToRaw` —— DSH 两条写入路径（legacy settings 的 `deepSeekUpsertEntry`、profile patch 的 `deepSeekBuildEntry`）的唯一模型编码出口。
 - **触发条件（严格）**：`card.RawReasoningEnabled == nil && !card.Reasoning && len(card.Variants) == 0`。显式关闭（`RawReasoningEnabled == false`）与已有档位的卡片一律不参与——兜底**只补空缺**，绝不改判用户的选择，也不追加/修正既有集合。
@@ -1009,10 +1028,155 @@ export function useLevelFill(source: () => ModelCard[], lang: Ref<UiLang>): {
 2. **卡片与写盘会短暂不一致**：卡片按读入的配置展示（无档位），保存后配置里出现了档位（重载可见）。可选缓解是保存前把推断档位落到卡片（复用 `useLevelFill` 的「采纳推断档位」），或维持现状——**留待实施时裁定**。
 3. **只动了 DSH 侧**：ZCode 自己有内建规则表、opencode 未评估，症状只在 DSH 出现，本轮不扩散。
 
+**实施记录（2026-10-17）**
+
+- **出口与签名。** `dshModelToRaw(card ModelCard, baseURL string)`：第二参数原本是没人使用的 kind 串，现在改为 provider 的 baseURL，两个调用点（`deepSeek_store.go` 的 `deepSeekBuildEntry` 两处）改传 `baseURL`；既有测试调用点一并把 `"openai-compatible"` 换成 `""`（该串此前就被忽略，站点层对非绝对 URL 恒不命中，因此行为不变）。
+- **触发条件（比原设计多一条守卫）。** 除 `card.RawReasoningEnabled == nil && !card.Reasoning && len(card.Variants) == 0` 外，实施时补上 **「`card.RawCfg` 里已经有 `reasoningEfforts` / `reasoningEffort` 键时不参与」**。原因：`reasoningEfforts: false` 在读卡时表现为 `RawReasoningEnabled == nil`（布尔值不是字典，读端不置显式开关位），只按原条件会被误判成「空缺」而用推断字典覆盖掉用户「显式声明非推理模型」的声明；`{off:null, ultra:ultra}` 这类白名单外集合同理（读端会在放宽开关关闭时把它滤成空集合）。判据因此收敛为「**只有整个键不存在才算未声明**」。
+- **取值与写出。** `dshEffortsFromCapability(LookupModelCapabilityForSite(card.ModelID, baseURL, "").ReasoningLevels)`：复用 `dshEffortForWrite` 的白名单与拼法（`enabled→high`、`disabled/none/nothink→off`），只在结果非空且含非 off 档时写 `reasoningEfforts`；不写 `reasoningEffort`；任何情况下都不写 `false`。
+- **门控。** 新增 `internal/core/dsh_level_fallback.go`（`SetDshLevelFallbackAllowed` / `DshLevelFallbackAllowed`，照 `variant_policy.go` 的 `sync.RWMutex` + 裸 bool 写法，包级零值 = 关闭）；`internal/app/app.go` 三处推送：`Startup()`（与 `SetCustomVariantsAllowed` 并列）、`GetOptions()`（界面读到开关时 core 必已就绪）、`SetAutoFillLimits()`（**此前只落盘不推 core，本次一并补上**）。
+- **测试。** 全部加在既有文件 `internal/core/deepseek_reasoning_test.go`（按本文档纪律不另开平行文件）：`TestDshEffortsFromCapabilityTranslation`（档位→字典翻译表，含「只有 off ⇒ nil」「白名单外词被滤光 ⇒ nil」）、`TestDshLevelFallbackGuards`（8 条门控表：开关关闭 / 显式关闭仍为 `false` / 显式开启不追加 / 已有档位不修正 / 节点已声明 `false` 原样保留 / 节点已有字典原样保留 / 能力表无档位不写 / 兜底不写单数键）、`TestDshLevelFallbackThroughProfilePatch`（走真实 profile patch 的 `Upsert` + `Write` 再读回，开关打开补出档位、关闭时一个键都不写）。既有 `dsh_profile_test.go` 的 `TestDeepSeekMergeKeepsUnchangedModelNode` 等用例的占位 id 是 `acme-1`/`demo`，能力表无档位，因此**无需改写**即与兜底语义兼容；`TestTableDrivenEfforts...` 等同族用例在默认关闭下逐字节不变。
+- **验证（2026-10-17）。** `go build ./...`、`go test ./...`（6 包全绿，含新增 3 个用例）、`go vet ./...`、三条 `--check`（version / model-catalog / ability-catalog）全部通过；改动文件经 CRLF 归一后 `gofmt` 无差异。**本轮未跑** `wails build` 与前端构建（无前端改动）。
+- **两处待裁定的落实。** ① 副作用 1（保存即补档位）**接受**——这正是「覆盖所有 DSH 写入路径」的裁定本身；② 副作用 2（卡片与写盘短暂不一致）**维持现状**，缓解入口复用既有的「采纳推断档位」（`useLevelFill`，阶段 F），用户可一键把同一组档位显式落到卡片上，本轮不在保存前隐式改写卡片。
+- **仍未做。** `internal/core/zz_dsh_reasoning_probe_test.go`（调查探针，仓库里仍是未跟踪文件）未并入本阶段，`TODO.md` 第 27/28 项两个同源缺陷也仍是待独立评估状态（探针是它们的可重跑证据）。
+- **「所有 DSH 写入路径」的确切范围。** 覆盖到的是两条 pi-ai 路由写入路径（0.1/0.2 的 `llm-pi-ai.providers`，共用 `deepSeekBuildEntry` → `dshModelToRaw`）与跨 Agent 迁移（经目标 store 的 `Upsert`，即同样两条）。**未覆盖** 0.1 旧式顶层 `provider:` 布局——那里的模型节点是原样并存的配置对象、不经过模型编码出口，本轮未对它做兜底（该布局是否消费 `reasoningEfforts` 未实证，且 DSH 0.2 只会把 0.1 配置导入一次）。
+
 **未验证 / 待人工**
 
 - 真实 DSH 窗口复测：开关打开 → 保存 → DSH 模型选择器出现「推理等级」行且档位与能力表一致；ZCode→DSH 迁移端到端同上（需真实窗口与真实网关，`AGENTS.md` 禁止代读用户配置）。
 - 用户的源配置里究竟有没有 `optionSpecs.reasoningLevel.values`：本轮只推出「大概率没有」这一结论，**未能实证**（不读用户配置是硬约束），确诊方法写在 `TODO.md` 第 26 项。
+
+### 10.13 阶段 H：导入 / 自动匹配时自动勾选支持的思考强度与能力位（2026-10-17）
+
+**触发**：人工反馈——「为什么没有在导入新供应商、按能力表补全、自动匹配的时候，自动勾选支持的思考强度和支持的能力？」
+
+**现状实测（探针 `internal/core/zz_autofill_probe_test.go`，临时文件，结论已固化进 `TestBuildModelCardsForSiteAutoChecksLevels`）**
+
+| 路径 | 能力位（`capabilities`） | 思考强度（`variants`） |
+|---|---|---|
+| 拉取模型 / `BuildModelCardsForSite(autoFill=true)` | **已勾选**（= provider 自报 ∪ 能力表推断） | **空的**——卡片上「思考」开关是开的，档位胶囊一个都没勾 |
+| 拉取模型 / `autoFill=false` | 只有 provider 自报（通常为空） | 空的 |
+| 「自动匹配」`ApplyModelPresetsForSite` | 只补空缺（已勾选） | **完全不碰** |
+| 「按能力表补全」`useCapabilityFill` | **并入**（只增不减；2026-10-17 前是「只填整块空缺的方向」，见 10.14） | 不碰（档位有独立的补全/覆盖按钮，见 10.11） |
+
+即：**缺的只有思考强度这一侧**。原因是设计上的有意留白：拉取路径把 `Variants` 留 nil，由写盘侧 `DefaultVariantsFor` 回落成写死的 `{off,high,max}`——这也正是 10.12 副作用 2「卡片与写盘短暂不一致」的镜像面（卡片上空的、写出去有）。而那个兜底集合对 `glm-5.3` 这类档位集不含 off 的模型（能力表 `[low,high,max]`）会凭空写一个 off，等于**静默声明「可以关闭思考」**。10.10.3 的批量补全按钮是当时的缓解，但它要求用户先点一下，且「导入新供应商」这条最常见的路径上没人会去点。
+
+**落地设计**
+
+- **A. 拉取路径（`internal/core/cards.go` `BuildModelCardsForSite`）**：思考已开（`reasoning == true`）且解析出的档位里有非 off 档时，把**同一组档位**（provider 自报优先、能力表兜底）写进 `Variants`，`DefaultVariant` 取 `PickDefaultVariant`。于是卡片上勾着的就是将要写进配置的档位。
+- **开关口径**：`Variants` 会被写进配置，因此与 ctx/out、capabilities 同属「自动补全」开关的管辖范围（`_supported_levels` 只做展示与种子，照旧与开关无关，10.10.4 不变）。开关关闭 ⇒ 卡片保持原样（写盘仍走 `DefaultVariantsFor`，与改动前逐字节一致）。开关文案随之从「导入时自动补全上下文与输出长度」改为「导入时自动补全模型参数」（三语），否则用户无从知道卡片上那些已勾选的项从哪来。
+- **B. 「自动匹配」（`ApplyModelPresetsForSite`）**：对上一步之外还空的卡片补同一组档位——**只补空缺**：判据是 `Reasoning == true && len(Variants) == 0`。判据不用「没有非 off 档」是因为非空集合一律不碰更保守（`["off"]` + 思考已开虽自相矛盾，但删掉它是实打实的改动，只能走 10.11 那个要先确认的「覆盖」动作）。取值优先用卡片上的 `_supported_levels`（与界面展示的弱化/勾选同源），卡片没带时回落本次求值的能力表档位。已有的 ctx/out 覆盖语义、能力位只补空缺语义、`filled` 只统计 ctx/out 全部不变。
+- **C. 不动的部分**：能力位三侧本来就已勾选，保持一致；「按能力表补全」**不**顺手补档位（档位有独立的补全/覆盖按钮，10.11 已论证两者不该合并）；显式关闭思考的卡片、档位来源完全没有的模型一律不勾（绝不凭空发明档位）。
+- **与 10.10.2 两条「不采用」候选的关系（重要，别当成自相矛盾）**：
+  - 候选 C（设置页新增「导入时自动按能力表填档位」开关）仍**不采用**：本轮复用既有「自动补全」开关，不新增开关。原否决理由里的「用户无法逐模型审阅」也被消掉了——档位是**在卡片上**勾出来的，用户导入前就能逐个模型看/改，而候选 C 那条路径是「开关一开，写盘时静默补」，两者不是同一件事。
+  - 候选 B（并入「自动匹配」按钮）的否决理由是「该按钮对 ctx/out 是**覆盖**语义，两种语义混在一个按钮里会把覆盖误用到档位上」。这条理由在本轮被**正面处理**而不是绕过：档位走独立的 `len(Variants) == 0` 判据（只填空集，绝不覆盖非空集合，也绝不删档位），并且明确不写进 `filled`（用户看到的「已为 N 个模型填充上下文/输出长度」仍只讲 ctx/out）。另一条理由「会静默把推断档位写进配置」在**空集合**这一档站不住：此时写盘本来就会回落 `DefaultVariantsFor` 的写死三档，写的是推断值还是写死的默认值只是**准不准**的差别，不是「写不写」的差别。
+  - 候选 B 若将来允许覆盖非空集合，则必须回到 10.10.2 的否决结论（那才是真正的「把覆盖语义误用到用户数据上」）。
+- **测试**：`internal/core/cards_meta_test.go` 的 `TestBuildModelCardsForSiteAutoChecksLevels`（7 条表驱动 + 写盘副作用对照：开关开 ⇒ 写出支持集合，开关关 ⇒ 写 `DefaultVariantsFor`）、`internal/core/presets_features_test.go` 的 `TestApplyModelPresetsFillsMissingLevels`（6 条表驱动 + 默认档位落在集合内）。全部加在既有文件里，不另开平行文件。
+- **验证**：`go test ./...`、`go vet ./...`、三条 `--check`、`frontend && npm run build`（i18n 改动）。**未做**：真实窗口目测（需真实网关，`AGENTS.md` 禁止代读用户配置）——见下。
+- **仍未覆盖**：导入页「手动添加模型」（`ImportPage.vue` 的 `onAddModel`）走的是本地拼卡片 + 只补 `_vendor` / `_supported_levels` 的轻量路径，因此手工敲进去的 ID 不会自动勾选档位与能力位；改成走 `BuildSingleCard` 即可一致，但属另一轮（与 10.10.7 第 3 条同源：站点上下文缺口）。
+
+### 10.14 阶段 E3 修订：能力批量对齐档位的双方向模型（2026-10-17，人工反馈）
+
+本节取代 10.4 关于批量栏的第 3 条的**语义部分**（多选 + 按钮的落点不变）与 10.13 对照表里「按能力表补全」那一行的口径；10.1–10.3、10.5–10.13 其余内容不受影响。
+
+**触发**：人工反馈——「能力表明明标了 GLM-5.3 Flash 支持视频 / PDF（卡片上那些虚线的『推断支持』胶囊），但没默认勾选；点了补全也不勾，还回一句『没有可补全的能力位（能力表未推断出空缺项）』。是不是该做一个覆盖的复选框，而不是只能补全？」
+
+**根因（三条，同一处判定的连带）**
+
+1. `useCapabilityFill.fill()` 的门控是 `if ((next[dir.key] || []).length > 0) continue`——**只要某个模态方向已有任意值**（例如存量配置里写着的 `input_modalities: ["text"]`），整个方向就被跳过，绝不并入。于是"能力表推断出 image/video/pdf"这件事对批量补全完全不可见。
+2. 生成多选选项的 `bitIds()` **没有**这条门控，于是把「输入 图片 / 视频 / PDF」当作可补位列进下拉（还带计数）；用户在多选里勾了它们再点补全，走的仍是上面那条 `continue`——**选项撒谎了**。
+3. 「一处都没补上」时的文案写的是「能力表未推断出空缺项」，把「我没做这件事」说成了「能力表没数据」。
+
+三条叠加出的现象就是反馈里的那一幕。真正能干这件事的入口本是卡片上的「采纳推断」（`adoptModalities`，语义就是并入），但它只覆盖单卡，用户也没走到。
+
+**为什么方向会有值**：这属于三态语义的正常状态——键存在就等于「该方向的完整集合已确认」（`cap.emptyHint`）。早期 autoFill 按当时的能力表（或 provider 自报）写下的 `["text"]` 就是一次这样的确认。因此根因不是"表没数据"，而是**批量动作当时只有「填整块空缺」这一种语义**，既不是并入也不是覆盖，与档位侧的双方向模型（10.11）不一致。
+
+**用户裁定（2026-10-17）**：把能力批量**对齐档位的双方向模型**。布尔位取主会话建议的 (a)——**覆盖只作用于模态集合；布尔位在两个方向下都只补不删。**
+
+**落地设计**
+
+- **并入（默认方向）＝只增不减**：模态方向写 `当前集合 ∪ 推断集合`（按规范序重建），布尔位写「推断为真 且 当前未确认」的 `true`。**关键差异是并集而不是"只补缺位"**：只要该方向有推断值就整组并入，因此绝不会把「推断未列出的模态」伪造成「确认不支持」（这正是原先"整组采纳、不做半填"要防的），而用户确认过、能力表不认可的模态原样保留。存量 `["text"]` ⇒ 一次点击得到 `["text","image","video","pdf"]`，即反馈里期望的行为。
+- **覆盖（勾选「覆盖已有能力位」）＝替换**：只处理与推断集合**不相等的模态方向**（含"只有多余模态"这类无缺位的卡片），直接置为推断集合；**推断为空的方向一律跳过**——置空等于删掉用户确认过的整组模态，而"能力表没说"不是"不支持"（与档位侧"推断集合只有 off 就不覆盖"同源）。破坏性 ⇒ 必须过 `uiConfirm`（`danger`）并在明细里列出将删除的模态。
+- **布尔位不参与覆盖**：三态里"能力表没声明真"≠"假"，删掉用户勾过的布尔键等于抹掉已确认的能力。要补的布尔位在并入方向下补。
+- **多选在覆盖方向下不适用**（页面禁用该 `n-select`，`chosen` 整体忽略选择）：覆盖的判据是"方向与推断不等"，不是"哪些位可补"，留一个会被忽略的控件只会重演 10.11 第 1 条那种"你选的和你得到的不一样"。**并入方向下多选保留**——能力位是十几个离散位，"只补输入模态、先不确认布尔位"仍可精确表达（同 10.11 的保留理由：字段形状不同，不为形式一致而删）。
+- **计数与原因**：新增 `summary`（`cap.batchCount` / `cap.batchCountOverwrite`；一个都处理不了时按方向给 `cap.batchNone` / `cap.batchNoneOverwrite`），与档位侧同口径；按钮仍只在 `filteredCards.length === 0` 时禁用，可处理数为 0 不禁用（点击由 `fill()` 说原因），与 10.11 的 2026-10-17 修订一致。
+
+**接口**
+
+```ts
+export function useCapabilityFill(source: () => ModelCard[], lang: Ref<UiLang>): {
+  picked: Ref<string[]>                                    // 并入方向的多选（覆盖方向下被忽略）
+  options: ComputedRef<{ label: string; value: string }[]>  // 可补位（带计数）
+  overwrite: Ref<boolean>                                  // 方向开关（默认并入、不持久化）
+  summary: ComputedRef<string>                             // 现成文案（计数 / 无可处理的原因）
+  fill: () => Promise<void>                                // 覆盖路径先 await uiConfirm，取消即什么都不做
+}
+```
+
+内部两个判定**同源不合并**（与档位侧的 `fillableLevels` / `overwriteLevels` 关系一致）：`mergePlan`（并入，`bits > 0` 才返回）与 `overwritePlan`（覆盖，与推断集合不相等才返回），共用 `inferredModalities` / `currentModalities` 两份取值。`bitIds`（多选选项）的判据「推断为真且当前未确认」在并入语义下正好就是"可补位"，因此不再需要额外的门控修正。
+
+**i18n 变更**：改写 `cap.batchHint`（并入口径）、`cap.batchArrayNote`（"整组并入"）、`cap.batchNone`（真实原因）；新增 11 键：`cap.batchFillOverwrite` / `cap.batchOverwriteToggle` / `cap.batchCount` / `cap.batchCountOverwrite` / `cap.batchHintOverwrite` / `cap.batchOverwriteTitle` / `cap.batchOverwriteBody` / `cap.batchRemoved` / `cap.batchOverwriteConfirm` / `cap.batchDoneBodyOverwrite` / `cap.batchNoneOverwrite`（三语齐全、零 emoji）。删 0 键。
+
+**验证（2026-10-17）**：`cd frontend && npm run build`（含 `vue-tsc --noEmit`）通过；i18n 自检 491 键三语齐全、代码引用的 435 键全部命中、词典零 emoji；**无后端改动、不触碰任何写盘路径**，因此 `go test ./...` 不受影响。**待人工**：浅 / 深色两套主题目测新的能力批量行；存量 `["text"]` 的卡片点「按能力表补全」⇒ 模态胶囊勾上 image/video/pdf 且不丢 text；勾选覆盖 ⇒ 确认明细与实际删除一致、且布尔位未被改动；覆盖后保存 → 重载的 `capabilities` 与推断集合一致。
+
+**与 10.13 候选 B 结论的关系（别当成自相矛盾）**：10.13 否决的是「把**覆盖**语义混进按钮而不加区分」，理由是不加区分会被误用；本节的做法是**把方向做成显式开关并给破坏性方向加确认**，因此那条否决理由在这里被正面处理掉，而不是绕过。另外 10.13 那条"档位走独立的 `len(Variants) == 0` 判据"的保守边界不受影响——能力侧不存在"清空整组"的写入路径。
+
+### 10.15 DSH compat 键必须按 wire protocol 门控（2026-10-17，人工实测报错）
+
+本节修正 10.2.3 表格里 DSH 那一行、并补全 10.1.3 漏记的一条事实（协议级 compat 门）。10.1–10.14 其余内容不受影响。
+
+**触发**：人工反馈——「勾了视觉能力保存后 DSH 里模型仍说没有视觉；今天新增的 provider `stepfun` 在 APM 里加进 DSH 后 DSH 里没出现」，随后给出 DSH 的原文报错：
+
+```text
+llm-pi-ai: provider "stepfun" model "step-3.7-flash" sets compat "supportsTemperature",
+but its api is "openai-completions", which does not take it; that switch exists on
+anthropic-messages, and "openai-completions" offers supportsStore, supportsDeveloperRole,
+supportsReasoningEffort, ... supportsStrictMode, cacheControlFormat, supportsLongCacheRetention
+```
+
+**根因**：10.2.3 的映射只抄了「哪两个键与能力位对应」，没抄「这两个键各属于哪个协议」。写端（`dshModelToRaw`）此前完全不看路由的 `api`：卡片上 `temperature` 为真就写 `compat.supportsTemperature`，`structured_output` 为真就写 `compat.supportsStrictMode`。而 DSH 的 `COMPAT_GATES` 是按协议分门的（只有 disposition `"offer"` 才可写）：
+
+| compat 键 | DSH 接受的 api |
+|---|---|
+| `supportsTemperature` | 仅 `anthropic-messages` |
+| `supportsStrictMode` | `openai-completions` / `openai-responses`(含 azure、codex) / `bedrock-converse-stream`（**不含 anthropic**） |
+| 其余 20 余键（`supportsStore`、`maxTokensField`、`thinkingFormat`…） | 仅 `openai-completions` / `openai-responses` |
+
+判定分两级（`assertOfferedCompatFields` 之后、`resolveModelCompat` 的模型级循环
+`if (gate?.[field] !== "offer") invalid(provider, 'model "…" sets compat "…", but its api is "…"')`）：
+**模型级不一致 = 这个模型名必是错的** ⇒ deferred 解析下模型被直接丢掉（只留一条 `catalogError`），
+strict 解析（DSH 自己的配置写入 / 插件的 `internal/config` 守卫）下**整份 llm-pi-ai 配置更新抛错**。
+两条现象因此同源：新 provider 的模型被判不可服务 ⇒ provider 在 DSH 里「不出现」；同一次写入里的能力改动
+（视觉 = `input`，模型条目被丢连 `input` 一起丢；或整个更新被拒）⇒ 视觉勾选不生效。
+规模上这不是个例：生成的能力表 2327 条里 `temperature` 位为真的有 **1185 条**，只要跑过
+「按能力表补全能力位」，openai-compatible 路由的模型就会被写上这个键。
+
+**修复（`internal/core/deepseek.go` + `deepseek_store.go`）**
+
+- 新增 `dshOfferedCompatKeys`：逐字抄 DSH 的 `COMPAT_GATES` 里 `"offer"` 的键，只列 APM 可能写出的三个 api
+  （`openai-completions` / `openai-responses` / `anthropic-messages`）；`dshCompatKeyOffered` 查询，
+  **认不出的 api 一律 fail-closed 返回 false**（宁可少写一个键，也不写出让整条路由被拒的配置）。
+- 新增 `dshCompatForWrite(existing, caps, api)`：模型节点与路由级共用。既有 compat 键**按协议白名单过滤后保留**
+  （合法键连同其显式 `false` 原样保留——那是设置，不是 APM 的推断），再按能力位补两个键（**各自只在 offer 时补**）；
+  结果为空则整键省略（不写空对象 / `null`）。过滤顺带承担「修掉历史写入留下的协议错位键」的职责。
+- `dshModelToRaw` 的签名从 `(card, baseURL)` 改为 `(card, baseURL, api)`：**不给默认值**，让「协议」在每一处
+  调用点显式可见（`deepSeekBuildEntry` 用 `apiForDeepSeekKind(uiKind)` 算，两条 llm-pi-ai 路径共用它）。
+- 路由级 compat（来自 ZCode 侧 `options.compat` 透传或 DSH 原条目）走同一道门：`dshMergeCompat` 合并后过滤，
+  空则整键省略——路由级 DSH 还多一道「至少有一个模型说这个协议」的检查，同样会被 `invalid()` 拒。
+- 读端**刻意不对称、不加门**（同 `input` 的读/写不对称口径）：`dshCapabilitiesFromModel` 照读配置里出现的
+  compat 事实供展示与别的 harness 使用；协议错位的键读回来会显示为已勾选，**保存一次即被写端清掉**（这正是修复动作）。
+- 未覆盖（记入 `TODO.md` 第 30 项）：`modelOverrides` 透传里的 compat 未过滤；`reasoningEfforts` 的字典键
+  被 schema 限死在固定 7 档，而「允许自填推理档位」打开时写端会保留自填名（本机用 DSH 自带 schemastery
+  复刻 schema 实测：`very-high` ⇒ 整份配置解析失败）。
+
+**回归位**：`TestDshCompatIsGatedByWireProtocol`（三个协议各一条 + 既有键过滤 + 空则省略 + 未知协议 fail-closed）、
+`TestDshRouteCompatIsFilteredByProtocol`（路由级）。原来把错误行为锁死的 `TestDshCompatOnlyAddsTwoKnownCapabilityKeys`
+（断言 `supportsToolSearch` / `supportsStrictTools` 被原样保留）已按新契约重写：那两个键在 openai-completions 上
+**必须被丢掉**。
+
+**验证（2026-10-17）**：`go test ./...` 全绿（六个包）、`go vet ./internal/core` 通过；改动文件的 gofmt
+按「CRLF 归一后比对」核对无差异。**待人工**：在 APM 里重存那个 stepfun provider（或对模型取消勾选「温度」），
+保存后 DSH 侧的错误应消失、模型重新可选；然后确认勾选「图片」保存后 DSH 能贴图。
+
 
 ## 附录 A：证据与未能独立验证的事项
 

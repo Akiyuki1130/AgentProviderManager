@@ -280,9 +280,20 @@ function verifyManifest(dir) {
 // 每条模型的能力来源信息：
 //   ctx/out 为 0 表示未知；levels 为原样档位串（可能为空数组）；
 //   features 是能力位集合（input 模态 + compat 白名单布尔位；pi-ai 不表达输出模态）。
+// pi-ai 目录的模型键现在带「模型类型」前缀（`chat:` / `image:` / `classifier:`），且每条记录
+// 自带显式的裸 `id`：
+//   `"chat:amazon.nova-2-lite-v1:0": { "id": "amazon.nova-2-lite-v1:0", "type": "chat", … }`
+// 本表的索引必须是**用户配置与 API 响应里出现的模型 id**——`chat:` 只是目录内部的键前缀，
+// 所以取记录自己的 `id`；旧格式（键即裸 id、无 `type` 字段）照旧走键。注意 `id` 自身可能含
+// 冒号（`amazon.nova-2-lite-v1:0`），因此「键前缀」只在字形恰好是已知类型时才当类型看。
+// 非对话模型（image / classifier）不进本表：它们的 ctx 与档位语义跟对话模型不是一回事，
+// 而旧数据里只有对话模型，收进来等于凭空扩面。
+const PI_KEY_TYPES = new Set(['chat', 'image', 'classifier'])
+
 function extractPiAI(dir) {
   const out = []
   let skippedNoProvider = 0
+  let skippedNonChat = 0
   const names = Object.keys(dir)
     .filter((n) => n.endsWith('.json') && n !== '.manifest.json')
     .sort()
@@ -297,8 +308,20 @@ function extractPiAI(dir) {
     for (const apiKey of Object.keys(parsed)) {
       const models = parsed[apiKey]
       if (!models || typeof models !== 'object') continue
-      for (const [rawID, m] of Object.entries(models)) {
+      for (const [rawKey, m] of Object.entries(models)) {
         if (!m || typeof m !== 'object') continue
+        const colon = rawKey.indexOf(':')
+        const keyType = colon > 0 ? rawKey.slice(0, colon).toLowerCase() : ''
+        const prefixed = PI_KEY_TYPES.has(keyType)
+        const declaredType =
+          typeof m.type === 'string' && m.type !== '' ? m.type.toLowerCase() : prefixed ? keyType : ''
+        if (declaredType && declaredType !== 'chat') {
+          skippedNonChat++
+          continue
+        }
+        const explicitID = typeof m.id === 'string' ? m.id.trim() : ''
+        const modelID = explicitID !== '' ? explicitID : prefixed ? rawKey.slice(colon + 1) : rawKey
+        if (modelID === '') continue
         const provider = String(m.provider || '').toLowerCase()
         if (!provider) skippedNoProvider++
         const ctx = mdInt(m.contextWindow)
@@ -312,7 +335,7 @@ function extractPiAI(dir) {
             .filter((s) => typeof s === 'string' && s !== '')
         }
         out.push({
-          id: rawID.toLowerCase(),
+          id: modelID.toLowerCase(),
           provider: provider || name.replace(/\.json$/, ''),
           ctx,
           out: out2,
@@ -323,7 +346,7 @@ function extractPiAI(dir) {
       }
     }
   }
-  return { entries: out, skippedNoProvider }
+  return { entries: out, skippedNoProvider, skippedNonChat }
 }
 
 // extractPiFeatures 从一条 pi-ai 模型记录抽能力位：`input[]` 是输入模态的**正向声明**，
@@ -746,6 +769,8 @@ function generate(chosen, facts, stats) {
     `//   1. DSH pi-ai 离线目录 ${facts.piDir}`,
     `//      manifest structureHash: ${facts.manifestHash}（manifest generatedAt ${facts.manifestGeneratedAt}）`,
     `//      已按 manifest 的 SHA-256 逐文件校验 ${facts.verifiedFiles} 个 provider 文件。`,
+    '//      表索引取每条记录自己的 `id` 字段（目录里的键带 `chat:` / `image:` / `classifier:`',
+    '//      类型前缀，那是目录内部的命名，配置与 API 响应里都没有），且只收 `chat` 类型的记录。',
     `//   2. models.dev ${facts.snapshotSource}`,
     `//      快照拉取时刻 ${facts.snapshotFetchedAt}；快照位于 ${SNAPSHOT_REL}`,
     `//      （快照是裁剪后的 {providerId: {modelId: {context,output,reasoning,levels}}}）。`,
@@ -808,6 +833,8 @@ function generateFeatures(table, facts, stats, tally) {
     `//   1. DSH pi-ai 离线目录 ${facts.piDir}`,
     `//      manifest structureHash: ${facts.manifestHash}（manifest generatedAt ${facts.manifestGeneratedAt}）`,
     `//      已按 manifest 的 SHA-256 逐文件校验 ${facts.verifiedFiles} 个 provider 文件。`,
+    '//      表索引取每条记录自己的 `id` 字段（目录键带 `chat:` / `image:` / `classifier:` 类型',
+    '//      前缀，配置与 API 响应里都没有），且只收 `chat` 类型的记录；',
     '//      只取 input[]（模态）与 compat 的**显式白名单**三键：supportsStrictMode（结构化输出）、',
     '//      supportsTemperature（温度）、supportsMidConvoSystemMessages（中段 system）；其余 compat 键',
     '//      一律不映射（宁可少不可错）。',
@@ -952,6 +979,9 @@ const summary = () => {
   console.log(`冲突丢弃：${stats.conflicts}，无信息跳过：${stats.empty}${stats.backtickFallback ? `，反引号退化：${stats.backtickFallback}` : ''}`)
   console.log(`来源分布（前 10）：${top.map(([p, n]) => `${p}:${n}`).join(' ')}`)
   console.log(`pi-ai manifest 校验：${checked} 个文件全部通过（structureHash ${facts.manifestHash}）`)
+  if (pi.skippedNonChat > 0) {
+    console.log(`pi-ai 非对话记录跳过：${pi.skippedNonChat} 条（image / classifier，不进本表）`)
+  }
   // 能力位表：逐位计数（一个 id 可以同时点亮多位），用于人工核对覆盖率。
   console.log(`能力位表条数：${featureTable.size}（候选条目 pi-ai ${featureStats.piCandidates}、models.dev ${featureStats.mdCandidates}；`
     + `无能力位跳过 ${featureStats.skippedEmpty}；仅 pi-ai ${featureStats.piOnly}、两层都有 ${featureStats.both}、仅 models.dev ${featureStats.mdOnly}）`)
