@@ -4,4 +4,4 @@ package core
 
 // AppVersion 是应用版本号，唯一真源为仓库根目录的 VERSION 文件。
 // 修改 VERSION 后运行 `node scripts/sync-version.mjs` 重新生成。
-const AppVersion = "2.1.1-pre"
+const AppVersion = "2.1.2"
