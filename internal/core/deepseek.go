@@ -94,6 +94,68 @@ func dshEffortForRead(value string) (string, bool) {
 	return dshEffortForWrite(value)
 }
 
+// dshFallbackEfforts 是阶段 G 的能力表兜底：卡片完全没有推理信息、能力表又确实给出
+// 了档位时，返回一组可写的 reasoningEfforts；其余情况一律返回 nil（调用方因此什么
+// 都不写，行为与兜底之前逐字节一致）。
+//
+// 触发条件刻意严格——兜底只补空缺，绝不改判用户的选择：
+//   - 「允许 DSH 档位兜底」策略关闭（默认）时不参与；
+//   - 卡片有显式开关（RawReasoningEnabled 非 nil）时不参与：显式关闭要落成
+//     reasoningEfforts: false，显式开启要按用户选的档位写；
+//   - 卡片已有档位时不参与：既不追加也不修正既有集合；
+//   - 模型节点里已经有 reasoningEfforts / reasoningEffort 键时不参与：那里的任何值
+//     都是**声明**（尤其是 `reasoningEfforts: false` = 显式声明非推理模型），只有
+//     整个键不存在才是「未声明」。
+func dshFallbackEfforts(card ModelCard, baseURL string) map[string]interface{} {
+	if !DshLevelFallbackAllowed() {
+		return nil
+	}
+	if card.RawReasoningEnabled != nil || card.Reasoning || len(card.Variants) > 0 {
+		return nil
+	}
+	if strings.TrimSpace(card.ModelID) == "" {
+		return nil
+	}
+	// card.RawCfg 为 nil 时按下标读取是安全的（nil map 的读返回零值）。
+	if _, declared := card.RawCfg["reasoningEfforts"]; declared {
+		return nil
+	}
+	if _, declared := card.RawCfg["reasoningEffort"]; declared {
+		return nil
+	}
+	return dshEffortsFromCapability(LookupModelCapabilityForSite(card.ModelID, baseURL, "").ReasoningLevels)
+}
+
+// dshEffortsFromCapability 把能力表推断出的档位集合翻成 DSH 的 reasoningEfforts 字典，
+// 复用写端的白名单与拼法（enabled→high、disabled/none/nothink→off）。
+//
+// 只有「非空且至少含一个非 off 档」时才返回字典，否则返回 nil：兜底是 APM 的**推断**，
+// 不能冒充 DSH 的「显式声明非推理模型」（reasoningEfforts: false），也不能写一个只含
+// off 的字典——DSH 的 zod 要求非空字典必须声明至少一个非 off 档位。
+//
+// 不产出单数键 reasoningEffort：推断不替用户挑默认档位，交给 DSH 的 provider 默认。
+func dshEffortsFromCapability(levels []string) map[string]interface{} {
+	if len(levels) == 0 {
+		return nil
+	}
+	re := map[string]interface{}{}
+	for _, v := range levels {
+		lv, ok := dshEffortForWrite(v)
+		if !ok {
+			continue
+		}
+		if lv == "off" {
+			re["off"] = nil
+		} else {
+			re[lv] = lv
+		}
+	}
+	if !dshHasNonOffEffort(re) {
+		return nil
+	}
+	return re
+}
+
 func isYAMLPath(path string) bool {
 	low := strings.ToLower(path)
 	return strings.HasSuffix(low, ".yaml") || strings.HasSuffix(low, ".yml")
@@ -469,9 +531,113 @@ func dshInputModalities(card ModelCard) []string {
 // supportsOpenAIGrammarTools / supportsAdditionalTools 等）会被 DSH 的
 // assertOfferedCompatFields 拒绝，一个都不能写；工具调用 / 原生联网搜索 / 对话中途 system
 // 在 DSH 的配置层无法表达，因此也不落键（见 10.1.3）。
+//
+// 注意这两个键**还各自绑定一个 wire protocol**，见 dshOfferedCompatKeys：写端必须再过一道
+// 协议门，否则 DSH 会判该模型不可服务。
 var dshCompatCapabilityKeys = []apmCapabilityKeyMap{
 	{"supportsStrictMode", "structured_output"},
 	{"supportsTemperature", "temperature"},
+}
+
+// dshOfferedCompatKeys 是 DSH **每个 wire protocol 在配置侧真正接受**的 compat 键白名单，
+// 逐字抄自 @deepseek-ai/dsh-llm-pi-ai 的 COMPAT_GATES 里 disposition 为 "offer" 的字段
+// （实证：`COMPLETIONS_COMPAT_GATE` / `RESPONSES_COMPAT_GATE` / anthropic 分支）。
+//
+// 为什么必须有这道门（2026-10-17 实测报错）：
+//
+//	llm-pi-ai: provider "stepfun" model "step-3.7-flash" sets compat "supportsTemperature",
+//	but its api is "openai-completions", which does not take it; that switch exists on
+//	anthropic-messages, and "openai-completions" offers supportsStore, ... supportsLongCacheRetention
+//
+// DSH 的判定分两级（`assertOfferedCompatFields` 之后、`resolveModelCompat` 里的模型级循环）：
+//   - **词汇级**：compatProtocols(field) 为空（该键在所有协议里都是 "withhold"，或干脆不存在，
+//     例如 supportsToolSearch）→ 报「not configurable here」；
+//   - **协议级**：该键被别的协议 offer、但**不是本模型解析出的 api** offer 的 → 报
+//     「which does not take it」。模型级不一致 = 这个模型名必是错的 → `invalid()`：
+//     deferred 解析下该模型被**直接丢掉**（只留一条 catalogError），strict 解析
+//     （配置写入 / 插件 internal/config 守卫）下**整份 llm-pi-ai 配置更新抛错**。
+//
+// 只列 APM 可能写出的三个 api：KindToConfig 只产出这三种（见 apiForDeepSeekKind）。
+// DSH 的 `bedrock-converse-stream` 也 offer supportsStrictMode，但 APM 写不出来，不列。
+var dshOfferedCompatKeys = map[string][]string{
+	"openai-completions": {
+		"supportsStore",
+		"supportsDeveloperRole",
+		"supportsReasoningEffort",
+		"supportsUsageInStreaming",
+		"supportsFinishReason",
+		"maxTokensField",
+		"requiresToolResultName",
+		"requiresAssistantAfterToolResult",
+		"requiresThinkingAsText",
+		"requiresReasoningContentOnAssistantMessages",
+		"thinkingFormat",
+		"chatTemplateKwargs",
+		"chatTemplateArgs",
+		"supportsThinkingTokenBudget",
+		"thinkingTokenBudgetField",
+		"vllmPriority",
+		"supportsStrictMode",
+		"cacheControlFormat",
+		"supportsLongCacheRetention",
+	},
+	"openai-responses": {
+		"supportsDeveloperRole",
+		"supportsMaxOutputTokens",
+		"supportsStrictMode",
+		"supportsLongCacheRetention",
+	},
+	"anthropic-messages": {
+		"supportsEagerToolInputStreaming",
+		"supportsLongCacheRetention",
+		"supportsCacheControlOnTools",
+		"supportsTemperature",
+		"forceAdaptiveThinking",
+		"allowEmptySignature",
+		"supportsStrictTools",
+	},
+}
+
+// dshCompatKeyOffered 判断某 compat 键是否被该 api 接受。api 认不出（空串或未来新增协议）
+// 一律返回 false——fail-closed：宁可少写一个键，也不写出让整条路由被 DSH 拒收的配置。
+func dshCompatKeyOffered(api, key string) bool {
+	for _, known := range dshOfferedCompatKeys[strings.TrimSpace(api)] {
+		if known == key {
+			return true
+		}
+	}
+	return false
+}
+
+// dshCompatForWrite 生成一条 DSH 路由/模型节点最终的 compat 值：既有键按协议白名单过滤，
+// 再按卡片能力位补上 APM 管理的两个键（**只在该协议 offer 时才补**）。结果为空返回 nil，
+// 调用方据此整键省略（不写空对象，也不写 null）。
+//
+// 三态语义不变：能力位未知/假一律不补键；补写只补 true，绝不写 false。
+// 既有键的原值（含显式 false）原样保留——那是用户/上游写下的设置，不是 APM 的推断；
+// 但**该协议不接受**的键会被丢掉：留着它们只会让 DSH 判这条路由/这个模型不可服务，
+// 丢掉是唯一能让配置生效的写法（这也是「修掉历史写入留下非法键」的唯一入口）。
+func dshCompatForWrite(existing interface{}, caps *ModelCapabilities, api string) map[string]interface{} {
+	out := map[string]interface{}{}
+	if m, ok := existing.(map[string]interface{}); ok {
+		for key, value := range m {
+			if dshCompatKeyOffered(api, key) {
+				out[key] = value
+			}
+		}
+	}
+	if caps != nil {
+		if caps.StructuredOutput != nil && *caps.StructuredOutput && dshCompatKeyOffered(api, "supportsStrictMode") {
+			out["supportsStrictMode"] = true
+		}
+		if caps.Temperature != nil && *caps.Temperature && dshCompatKeyOffered(api, "supportsTemperature") {
+			out["supportsTemperature"] = true
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // dshCapabilitiesFromModel 从 DSH 模型节点反向读出已知为真的能力位：
@@ -482,6 +648,12 @@ var dshCompatCapabilityKeys = []apmCapabilityKeyMap{
 //
 // 只读真值：false / null / 读不出的形状一律不写（false 会被当成「显式不支持」，
 // 而 APM 的中立层只有「已知为真」与「未知」两态）。
+//
+// 与写端**刻意不对称**（同 dshReadInputModalities 的口径）：读端不做协议门控，把 compat 里
+// 出现的事实照读进中立层——它只是「配置里写了什么」的记录，供展示与别的 harness 使用；
+// 而写端（dshModelToRaw）必须按 api 过滤，因为 DSH 会拒收协议不接受的键。
+// 代价：一条手写的、协议错位的 compat 键读回来会显示为「已勾选」，保存一次后被写端清掉
+// （这正是要的修复动作），重读即回到未勾选。
 func dshCapabilitiesFromModel(modelCfg map[string]interface{}) map[string]interface{} {
 	compat, _ := modelCfg["compat"].(map[string]interface{})
 	flags := apmTrueCapabilityFlags(compat, dshCompatCapabilityKeys)
@@ -736,7 +908,14 @@ func DeepSeekSaveProviderInConfigWithMerge(path string, cfg map[string]interface
 	return writeDeepSeekConfig(path, cfg, fingerprint)
 }
 
-func dshModelToRaw(card ModelCard, _ string) map[string]interface{} {
+// dshModelToRaw 是 DSH 模型节点编码的唯一出口（0.1 的 llm-pi-ai 段与 0.2 的 profile
+// patch 共用）。baseURL 是本 provider 的路由地址，只用于能力表兜底与站点规则求值
+// （DSH 侧没有 ZCode 的 api.type，站点规则一律按 apiType 未知处理）。
+//
+// api 是本路由的 wire protocol（apiForDeepSeekKind 的结果）：DSH 的 compat 键按协议分门，
+// 写端必须据此过滤（见 dshOfferedCompatKeys / dshCompatForWrite）。**不传 api 就不是合法调用**，
+// 由调用方一律显式给出——宁可编译期要参数，也不给一个会静默写出非法配置的默认值。
+func dshModelToRaw(card ModelCard, baseURL, api string) map[string]interface{} {
 	m := deepCopyMap(card.RawCfg)
 	if m == nil {
 		m = map[string]interface{}{}
@@ -765,29 +944,18 @@ func dshModelToRaw(card ModelCard, _ string) map[string]interface{} {
 	} else {
 		delete(m, "input")
 	}
-	// compat：只补两个 DSH 配置侧允许的能力键，并与既有 compat **合并**（不整块替换，
-	// 其它键——包括 headers/timeoutMs 之类无关项——原样保留）。
-	// 只写真：未知与假一律不写键，catalog-only 的 compat 键一个都不写（见 10.1.3）。
+	// compat：按本路由的协议做白名单过滤（见 dshOfferedCompatKeys），再补两个与能力位对应
+	// 的键（supportsStrictMode ← 结构化输出、supportsTemperature ← 温度），二者同样只在
+	// 该协议 offer 时才写。过滤是必须的：DSH 的 assertOfferedCompatFields / resolveModelCompat
+	// 会拒收「协议不接受的 compat 键」，一个非法键足以让这个模型被判不可服务
+	// （deferred 解析下模型被丢掉，strict 解析下整份配置更新抛错）。
+	// 只写真：未知与假一律不补键，catalog-only / 协议错位的键一个都不留（见 10.1.3）。
 	// 工具调用 / 原生联网搜索 / 对话中途 system 在 DSH 配置层无法表达，只留在中立层。
-	if caps := card.Capabilities; caps != nil {
-		addCompat := map[string]interface{}{}
-		if caps.StructuredOutput != nil && *caps.StructuredOutput {
-			addCompat["supportsStrictMode"] = true
-		}
-		if caps.Temperature != nil && *caps.Temperature {
-			addCompat["supportsTemperature"] = true
-		}
-		if len(addCompat) > 0 {
-			// m 是 card.RawCfg 的深拷贝（deepCopyMap 走 JSON 往返），就地改写不会影响卡片。
-			compat, _ := m["compat"].(map[string]interface{})
-			if compat == nil {
-				compat = map[string]interface{}{}
-			}
-			for k, v := range addCompat {
-				compat[k] = v
-			}
-			m["compat"] = compat
-		}
+	// m 是 card.RawCfg 的深拷贝（deepCopyMap 走 JSON 往返），就地改写不会影响卡片。
+	if compat := dshCompatForWrite(m["compat"], card.Capabilities, api); len(compat) > 0 {
+		m["compat"] = compat
+	} else {
+		delete(m, "compat")
 	}
 	delete(m, "id")
 	delete(m, "name")
@@ -862,6 +1030,15 @@ func dshModelToRaw(card ModelCard, _ string) map[string]interface{} {
 		// 卡片没有任何推理信息（既非显式关闭，也没有档位）：此时不能写
 		// reasoningEfforts: false——那是 DSH 的“显式关闭推理”标记，会把原本
 		// 没有推理信息的模型静默关掉推理。保持 RawCfg 里已有的推理键不动。
+		//
+		// 阶段 G 的能力表兜底（见 MODEL-MANAGEMENT-PLAN.md 10.12）：DSH 的「推理等级」
+		// 只在模型节点声明了 reasoningEfforts 时才渲染，而 APM 写出的都是手写路由、
+		// 拿不到 pi-ai 内置目录，ZCode 的档位又常常只存在于 ZCode 自己的内建规则表里，
+		// 于是同一个模型迁到 DSH 后一个档位都没有，DSH 里也没有任何入口能补。
+		// 兜底只补这个空缺：显式开/关、已有档位、节点里已声明的推理键一律不动。
+		if re := dshFallbackEfforts(card, baseURL); len(re) > 0 {
+			m["reasoningEfforts"] = re
+		}
 	}
 	if card.Context != nil || card.Output != nil {
 		ctx := ParseTokens(card.Context)

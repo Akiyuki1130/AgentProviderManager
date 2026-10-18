@@ -80,6 +80,7 @@ func (a *App) Startup(ctx context.Context) {
 	core.SetHTTPAllowed(a.httpEnabled())
 	core.SetPrivateHostsAllowed(a.privateHostsAllowed())
 	core.SetCustomVariantsAllowed(a.customVariantsEnabled())
+	core.SetDshLevelFallbackAllowed(a.autoFillLimits())
 }
 
 func (a *App) Shutdown(_ context.Context) {}
@@ -817,6 +818,9 @@ func (a *App) GetAutoFillLimits() interface{} {
 	return true
 }
 
+// SetAutoFillLimits 保存「自动补全」开关，并同步进 core。
+// 该开关同时门控 DSH 写端的能力表档位兜底（阶段 G），因此与
+// SetCustomVariantsEnabled 同一写法：先落盘，成功后把策略推给 core。
 func (a *App) SetAutoFillLimits(v bool) map[string]interface{} {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -825,6 +829,7 @@ func (a *App) SetAutoFillLimits(v bool) map[string]interface{} {
 	if !a.saveSettings(settings) {
 		return map[string]interface{}{"success": false, "error": "自动补全设置保存失败"}
 	}
+	core.SetDshLevelFallbackAllowed(v)
 	return map[string]interface{}{"success": true}
 }
 
@@ -864,6 +869,9 @@ func (a *App) GetOptions() map[string]interface{} {
 	// GetOptions 是前台启动后必调的第一个聚合读接口，在此把策略同步进 core，
 	// 保证“界面已读到该开关”时 core 的放宽策略也一定就绪（默认 false）。
 	core.SetCustomVariantsAllowed(customVariants)
+	// 同理：「自动补全」既是拉取模型时的补全开关，也是 DSH 写端的档位兜底门控
+	// （阶段 G），必须在界面读到它时就已经生效。
+	core.SetDshLevelFallbackAllowed(autoFill)
 	return map[string]interface{}{
 		"theme":                   theme,
 		"language":                lang,

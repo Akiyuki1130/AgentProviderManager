@@ -46,7 +46,7 @@ func dshWriteNode(variants []string, defaultVariant string) map[string]interface
 		ModelID: "demo", Name: "demo", Reasoning: true,
 		Variants: variants, DefaultVariant: defaultVariant,
 		RawCfg: map[string]interface{}{},
-	}, "openai-compatible")
+	}, "", dshTestAPI)
 }
 
 func dshEffortsOf(t *testing.T, node map[string]interface{}) map[string]interface{} {
@@ -219,7 +219,7 @@ func TestDshEffortsConstraintMutualExclusion(t *testing.T) {
 		Variants: dshAllEfforts, DefaultVariant: "high",
 		RawCfg: map[string]interface{}{},
 	}
-	node := dshModelToRaw(enabledCard, "openai-compatible")
+	node := dshModelToRaw(enabledCard, "", dshTestAPI)
 	efforts := dshEffortsOf(t, node)
 	if len(efforts) == 0 {
 		t.Fatal("非空字典不得为空")
@@ -245,7 +245,7 @@ func TestDshEffortsConstraintMutualExclusion(t *testing.T) {
 		ModelID: "demo", Reasoning: true, RawReasoningEnabled: &disabled,
 		Variants: dshAllEfforts, RawCfg: map[string]interface{}{},
 	}
-	offNode := dshModelToRaw(offCard, "openai-compatible")
+	offNode := dshModelToRaw(offCard, "", dshTestAPI)
 	if offNode["reasoningEfforts"] != false {
 		t.Fatalf("显式关闭应写 false：%#v", offNode["reasoningEfforts"])
 	}
@@ -284,7 +284,7 @@ func TestDshApplyExplicitReasoningOffJoint(t *testing.T) {
 	if card.RawReasoningEnabled == nil || *card.RawReasoningEnabled {
 		t.Fatalf("应读出显式关闭：%#v", card.RawReasoningEnabled)
 	}
-	node := dshModelToRaw(card, "openai-compatible")
+	node := dshModelToRaw(card, "", dshTestAPI)
 	if node["reasoningEfforts"] != false {
 		t.Fatalf("显式关闭最终应写成 false：%#v", node["reasoningEfforts"])
 	}
@@ -338,5 +338,247 @@ func TestDshSevenEffortsPersistThroughStore(t *testing.T) {
 	}
 	if len(data) == 0 {
 		t.Fatal("写入为空")
+	}
+}
+
+// ---- 阶段 G：DSH 写端用能力表兜底推理档位（MODEL-MANAGEMENT-PLAN.md 10.12）----
+//
+// 背景：DSH 的「推理等级」只在模型节点声明了 reasoningEfforts 时才渲染，而 APM 写出的
+// 都是手写路由（拿不到 pi-ai 内置目录），ZCode 的档位又常常只存在于 ZCode 自己的内建
+// 规则表里——于是迁移过去的模型一个档位都没有，DSH 里也没有入口能补。兜底在写端用能力表
+// 补这个空缺，且**只补空缺**：显式开/关、已有档位、节点里已声明的推理键一律不动。
+//
+// 每个用例都用 t.Cleanup 把全局开关还原为默认 false，避免污染其它测试。
+
+// setDshLevelFallbackForTest 设置兜底开关并在用例结束时还原为默认 false。
+func setDshLevelFallbackForTest(t *testing.T, on bool) {
+	t.Helper()
+	SetDshLevelFallbackAllowed(on)
+	t.Cleanup(func() { SetDshLevelFallbackAllowed(false) })
+}
+
+// TestDshEffortsFromCapabilityTranslation 锁住「能力表档位 → reasoningEfforts 字典」的
+// 翻译：复用写端的白名单与拼法，且永不出产 DSH 拒绝的形态（空字典 / 只含 off 的字典）。
+func TestDshEffortsFromCapabilityTranslation(t *testing.T) {
+	cases := []struct {
+		name   string
+		levels []string
+		want   map[string]interface{}
+	}{
+		{
+			name:   "7 档全集",
+			levels: dshAllEfforts,
+			want: map[string]interface{}{
+				"off": nil, "minimal": "minimal", "low": "low", "medium": "medium",
+				"high": "high", "xhigh": "xhigh", "max": "max",
+			},
+		},
+		{
+			name:   "无 off 的子集原样保留",
+			levels: []string{"low", "high", "max"},
+			want:   map[string]interface{}{"low": "low", "high": "high", "max": "max"},
+		},
+		{
+			name:   "ZCode 的 enabled 折成 high",
+			levels: []string{"off", "enabled"},
+			want:   map[string]interface{}{"off": nil, "high": "high"},
+		},
+		{name: "只有 off 时一个键都不写", levels: []string{"off"}, want: nil},
+		{name: "空集合不写", levels: nil, want: nil},
+		{name: "白名单外的词被滤光后为空", levels: []string{"thinking", "ultra"}, want: nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := dshEffortsFromCapability(tc.levels)
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("dshEffortsFromCapability(%v) = %#v，期望 %#v", tc.levels, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestDshLevelFallbackGuards 覆盖兜底的门控：只有「卡片完全没有推理信息、模型节点里也没有
+// 推理键、且能力表确实给出档位」时才写 reasoningEfforts。
+func TestDshLevelFallbackGuards(t *testing.T) {
+	disabled, enabled := false, true
+	noLevels := map[string]interface{}{"off": nil, "low": "low", "high": "high", "max": "max"}
+	cases := []struct {
+		name    string
+		allowed bool
+		card    ModelCard
+		// wantEfforts 为 nil 表示节点里不应出现 reasoningEfforts 键。
+		wantEfforts interface{}
+	}{
+		{
+			name:        "开关打开且卡片无任何推理信息：按能力表补档位",
+			allowed:     true,
+			card:        ModelCard{ModelID: "deepseek-v4-flash", RawCfg: map[string]interface{}{}},
+			wantEfforts: noLevels,
+		},
+		{
+			name:        "开关关闭：行为与兜底之前逐字节一致",
+			allowed:     false,
+			card:        ModelCard{ModelID: "deepseek-v4-flash", RawCfg: map[string]interface{}{}},
+			wantEfforts: nil,
+		},
+		{
+			name:        "显式关闭仍是 DSH 的 false 标记",
+			allowed:     true,
+			card:        ModelCard{ModelID: "deepseek-v4-flash", RawReasoningEnabled: &disabled, RawCfg: map[string]interface{}{}},
+			wantEfforts: false,
+		},
+		{
+			name:        "显式开启按用户选的档位写，不追加",
+			allowed:     true,
+			card:        ModelCard{ModelID: "deepseek-v4-flash", Reasoning: true, RawReasoningEnabled: &enabled, Variants: []string{"off", "medium", "high"}, RawCfg: map[string]interface{}{}},
+			wantEfforts: map[string]interface{}{"off": nil, "medium": "medium", "high": "high"},
+		},
+		{
+			name:        "卡片已有档位：既不追加也不修正",
+			allowed:     true,
+			card:        ModelCard{ModelID: "deepseek-v4-flash", Reasoning: true, Variants: []string{"high"}, RawCfg: map[string]interface{}{}},
+			wantEfforts: map[string]interface{}{"high": "high"},
+		},
+		{
+			name:        "节点已声明 reasoningEfforts: false：原样保留（不冒充推断）",
+			allowed:     true,
+			card:        ModelCard{ModelID: "deepseek-v4-flash", RawCfg: map[string]interface{}{"reasoningEfforts": false}},
+			wantEfforts: false,
+		},
+		{
+			name:        "节点已有档位字典：原样保留",
+			allowed:     true,
+			card:        ModelCard{ModelID: "deepseek-v4-flash", RawCfg: map[string]interface{}{"reasoningEfforts": map[string]interface{}{"off": nil, "ultra": "ultra"}}},
+			wantEfforts: map[string]interface{}{"off": nil, "ultra": "ultra"},
+		},
+		{
+			name:        "能力表未给出档位：一个键都不写",
+			allowed:     true,
+			card:        ModelCard{ModelID: "acme-1", RawCfg: map[string]interface{}{}},
+			wantEfforts: nil,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			setDshLevelFallbackForTest(t, tc.allowed)
+			node := dshModelToRaw(tc.card, "https://api.example.com/v1", dshTestAPI)
+			got, has := node["reasoningEfforts"]
+			if tc.wantEfforts == nil {
+				if has {
+					t.Fatalf("不应写入 reasoningEfforts：%#v", got)
+				}
+			} else {
+				if !has {
+					t.Fatalf("reasoningEfforts 缺失，期望 %#v", tc.wantEfforts)
+				}
+				if !reflect.DeepEqual(got, tc.wantEfforts) {
+					t.Fatalf("reasoningEfforts = %#v，期望 %#v", got, tc.wantEfforts)
+				}
+			}
+			// 兜底不产出单数键：推断不替用户挑默认档位，交给 DSH 的 provider 默认。
+			if _, has := node["reasoningEffort"]; has {
+				t.Fatalf("兜底不得写单数键 reasoningEffort：%#v", node["reasoningEffort"])
+			}
+		})
+	}
+}
+
+// TestDshLevelFallbackThroughProfilePatch 走真实写盘路径（profile patch 的 Upsert）验证
+// 「覆盖所有 DSH 写入路径」：legacy settings 与 profile patch 共用同一个模型编码出口，
+// 因此这里锁住 profile 一侧即可；开关打开时补档位，关闭时一个键都不写。
+func TestDshLevelFallbackThroughProfilePatch(t *testing.T) {
+	const text = `- id: llm-pi-ai
+  name: '@deepseek-ai/dsh-llm-pi-ai'
+  config:
+    providers:
+      demo:
+        api: openai-completions
+        baseURL: https://api.example.com/v1
+        models:
+          - id: deepseek-v4-flash
+            contextWindow: 1000
+`
+	cases := []struct {
+		name    string
+		allowed bool
+		want    bool
+	}{
+		{name: "开关打开：补出推理档位", allowed: true, want: true},
+		{name: "开关关闭：一个键都不写", allowed: false, want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			setDshLevelFallbackForTest(t, tc.allowed)
+			home := t.TempDir()
+			t.Setenv("DSH_HOME", home)
+			path := DeepSeekDesktopProfilePatch()
+			writeDSHProfile(t, path, text)
+			backend, err := GetBackend(string(AgentDeepSeek), path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			doc, fingerprint, err := backend.ReadWithFingerprint(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			payload := ProviderPayload{
+				"id":               "demo",
+				"name":             "Demo",
+				"kind":             "openai-compatible",
+				"base_url":         "https://api.example.com/v1",
+				"api_key_required": false,
+				"cards":            []ModelCard{{ModelID: "deepseek-v4-flash", Context: 1000}},
+			}
+			merged, err := backend.Store(doc).Upsert(doc, "demo", payload, SaveOptions{MergeModels: true})
+			if err != nil {
+				t.Fatalf("Upsert: %v", err)
+			}
+			if err := backend.Write(path, merged, fingerprint); err != nil {
+				t.Fatalf("Write: %v", err)
+			}
+
+			// 从落盘内容里读回模型节点，避免依赖内存中的文档。
+			reread, err := backend.Read(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			providers, err := dshEffectiveProviders(reread)
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw, _ := providers["demo"].(map[string]interface{})
+			if raw == nil {
+				t.Fatal("provider 未读回")
+			}
+			var node map[string]interface{}
+			models, _ := raw["models"].([]interface{})
+			for _, value := range models {
+				mm, _ := value.(map[string]interface{})
+				if mm != nil && mm["id"] == "deepseek-v4-flash" {
+					node = mm
+				}
+			}
+			if node == nil {
+				t.Fatal("模型节点未读回")
+			}
+			got, has := node["reasoningEfforts"]
+			if !tc.want {
+				if has {
+					t.Fatalf("开关关闭时不应写入 reasoningEfforts：%#v", got)
+				}
+				return
+			}
+			// 期望值直接取自能力表：用例锁的是「写端确实按能力表补」，而不是把表里的
+			// 具体档位再抄一遍（表是构建期生成的，抄一遍只会让两处一起漂移）。
+			want := dshEffortsFromCapability(
+				LookupModelCapabilityForSite("deepseek-v4-flash", "https://api.example.com/v1", "").ReasoningLevels,
+			)
+			if len(want) == 0 {
+				t.Fatal("能力表未给出 deepseek-v4-flash 的档位，本用例失去意义")
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("reasoningEfforts = %#v，期望 %#v（能力表推断）", got, want)
+			}
+		})
 	}
 }

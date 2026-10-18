@@ -154,7 +154,7 @@ func TestDshModelToRawCustomSwitch(t *testing.T) {
 			ModelID: "demo", Name: "demo", Reasoning: true,
 			Variants: []string{"off", "very-high"}, DefaultVariant: "very-high",
 			RawCfg: map[string]interface{}{},
-		}, "openai-compatible")
+		}, "", dshTestAPI)
 		efforts, ok := node["reasoningEfforts"].(map[string]interface{})
 		if !ok {
 			t.Fatalf("reasoningEfforts 不是字典：%#v", node["reasoningEfforts"])
@@ -173,7 +173,7 @@ func TestDshModelToRawCustomSwitch(t *testing.T) {
 			ModelID: "demo", Name: "demo", Reasoning: true,
 			Variants: []string{"off", "very-high"}, DefaultVariant: "very-high",
 			RawCfg: map[string]interface{}{},
-		}, "openai-compatible")
+		}, "", dshTestAPI)
 		efforts, _ := node["reasoningEfforts"].(map[string]interface{})
 		if _, exists := efforts["very-high"]; exists {
 			t.Fatalf("关闭时不应保留自定义档位：%#v", efforts)
@@ -192,7 +192,7 @@ func TestDshCustomEffortReadWriteSymmetry(t *testing.T) {
 		ModelID: "demo", Name: "demo", Reasoning: true,
 		Variants: []string{"off", "medium", "very-high"}, DefaultVariant: "very-high",
 		RawCfg: map[string]interface{}{},
-	}, "openai-compatible")
+	}, "", dshTestAPI)
 	efforts, ok := node["reasoningEfforts"].(map[string]interface{})
 	if !ok {
 		t.Fatalf("reasoningEfforts 不是字典：%#v", node["reasoningEfforts"])

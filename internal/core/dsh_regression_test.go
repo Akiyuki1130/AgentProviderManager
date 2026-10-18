@@ -180,7 +180,7 @@ func TestDeepSeekCredentialsWriteUpgradesLegacyFormat(t *testing.T) {
 // 已按新行为更新。
 func TestDshReasoningEffortsPreservesAllSevenVariants(t *testing.T) {
 	card := ModelCard{ModelID: "demo", Reasoning: true, Variants: []string{"off", "minimal", "low", "medium", "high", "xhigh", "max"}, RawCfg: map[string]interface{}{"_dsh_raw": map[string]interface{}{}}}
-	raw := dshModelToRaw(card, "openai-compatible")
+	raw := dshModelToRaw(card, "", dshTestAPI)
 	efforts, ok := raw["reasoningEfforts"].(map[string]interface{})
 	if !ok {
 		t.Fatalf("reasoningEfforts=%#v", raw["reasoningEfforts"])
@@ -216,7 +216,7 @@ func TestDshReasoningEffortsPreservedFromZCodeCard(t *testing.T) {
 	if !card.Reasoning || !reflect.DeepEqual(card.Variants, []string{"off", "low", "medium", "high", "xhigh", "max"}) {
 		t.Fatalf("card reasoning state lost: %+v", card)
 	}
-	raw := dshModelToRaw(card, "openai-compatible")
+	raw := dshModelToRaw(card, "", dshTestAPI)
 	efforts, ok := raw["reasoningEfforts"].(map[string]interface{})
 	if !ok {
 		t.Fatalf("reasoningEfforts missing for non-native source: %#v", raw)
@@ -240,7 +240,7 @@ func TestDshReasoningEffortsPreserveEnabledAndSingleVariant(t *testing.T) {
 		RawReasoningEnabled: &enabled,
 		Variants:            []string{"high"},
 		RawCfg:              map[string]interface{}{"_opencode_raw": map[string]interface{}{}},
-	}, "openai-compatible")
+	}, "", dshTestAPI)
 	efforts, ok := raw["reasoningEfforts"].(map[string]interface{})
 	if !ok || efforts["high"] != "high" {
 		t.Fatalf("single supported effort was not preserved: %#v", raw["reasoningEfforts"])
@@ -253,7 +253,7 @@ func TestDshReasoningEffortsPreserveEnabledAndSingleVariant(t *testing.T) {
 		RawReasoningEnabled: &disabled,
 		Variants:            []string{"off", "high", "max"},
 		RawCfg:              map[string]interface{}{},
-	}, "openai-compatible")
+	}, "", dshTestAPI)
 	if raw["reasoningEfforts"] != false {
 		t.Fatalf("disabled reasoning state was not preserved: %#v", raw["reasoningEfforts"])
 	}

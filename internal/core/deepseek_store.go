@@ -203,6 +203,7 @@ func deepSeekRouteExtras(opts map[string]interface{}) map[string]interface{} {
 //
 // 读卡走 CfgToCardForSite 并带上本 provider 的 baseURL；DSH 侧没有 ZCode 的 api.type，
 // apiType 一律传空串（限定 apiType 的站点规则因此不参与，fail-closed）。
+// 同一对（baseURL、空 apiType）也交给 dshModelToRaw，供能力表兜底补档位（阶段 G）。
 func deepSeekBuildEntry(providerID string, providerCfg map[string]interface{}, existing map[string]interface{}, mergeModels bool, takenEnvNames map[string]string) (entry map[string]interface{}, envName, apiKey string) {
 	entry = map[string]interface{}{}
 	if existing != nil {
@@ -217,6 +218,9 @@ func deepSeekBuildEntry(providerID string, providerCfg map[string]interface{}, e
 	modelsMap, _ := providerCfg["models"].(map[string]interface{})
 	kind, _ := providerCfg["kind"].(string)
 	uiKind := ConfigKindToUIKind(kind, baseURL)
+	// 本路由的 wire protocol：模型节点的 compat 与路由级 compat 都要按它过滤
+	// （DSH 的 compat 键按协议分门，写错一档就会让整条路由/该模型被判不可服务）。
+	api := apiForDeepSeekKind(uiKind)
 
 	// 保留原有的模型顺序；新卡片按 ID 排序后追加，保证结果确定。
 	ordered := make([]interface{}, 0, len(modelsMap))
@@ -237,7 +241,7 @@ func deepSeekBuildEntry(providerID string, providerCfg map[string]interface{}, e
 				}
 				continue
 			}
-			encoded := dshModelToRaw(CfgToCardForSite(mid, next, baseURL, ""), uiKind)
+			encoded := dshModelToRaw(CfgToCardForSite(mid, next, baseURL, ""), baseURL, api)
 			if mergeModels {
 				// 合并语义以旧节点为基座叠加本次提交的字段：目标里未被本次提交
 				// 涉及的键（目标独有字段）得以保留，与 legacy 的
@@ -260,7 +264,7 @@ func deepSeekBuildEntry(providerID string, providerCfg map[string]interface{}, e
 	sort.Strings(ids)
 	for _, mid := range ids {
 		mm, _ := modelsMap[mid].(map[string]interface{})
-		ordered = append(ordered, dshModelToRaw(CfgToCardForSite(mid, mm, baseURL, ""), uiKind))
+		ordered = append(ordered, dshModelToRaw(CfgToCardForSite(mid, mm, baseURL, ""), baseURL, api))
 	}
 	// APM 内部模型键（_apm_capabilities / _dsh_raw / _off_alias 等）只服务于卡片往返，
 	// 绝不落盘。dshModelToRaw 已经删掉自己产出的两个键，但合并语义下的 overlayModelNode
@@ -293,13 +297,42 @@ func deepSeekBuildEntry(providerID string, providerCfg map[string]interface{}, e
 	// 明文 apiKey 一律清掉：凭据只经 apiKeyEnv 落到 .credentials.yaml。旧条目里可能
 	// 残留明文（entry 以旧节点为基座），在清空 Key 时更不能留着——否则密钥继续躺在 patch 里。
 	delete(entry, "apiKey")
-	entry["api"] = apiForDeepSeekKind(uiKind)
+	entry["api"] = api
 	// 透传 headers 等 pi-ai 路由支持的字段（来自 ZCode 侧 options 或 DSH 原条目）。
 	for k, v := range deepSeekRouteExtras(opts) {
+		if k == "compat" {
+			continue
+		}
 		entry[k] = v
+	}
+	// 路由级 compat 与模型级同一条门（DSH 的 assertOfferedCompatFields 对 route 与 model
+	// 两处都跑，且路由级还多一道「至少有一个模型说这个协议」的检查）：取「原条目已有 + 本次
+	// options 带来的」合并结果，按本路由协议过滤后写回；过滤后为空则整键省略。
+	// 过滤同时承担「修掉历史写入留下的协议错位键」的职责——那些键会让 DSH 直接拒收这份配置。
+	// 路由没有卡片能力位，因此 caps 传 nil（只做白名单过滤，不补键）。
+	if compat := dshCompatForWrite(dshMergeCompat(entry["compat"], opts["compat"]), nil, api); len(compat) > 0 {
+		entry["compat"] = compat
+	} else {
+		delete(entry, "compat")
 	}
 	entry["models"] = ordered
 	return entry, envName, apiKey
+}
+
+// dshMergeCompat 把 options 里带来的 compat 并到条目已有的 compat 之上（后者为基座，
+// 前者覆盖同名键）。两边都拿不到映射时返回 nil。
+func dshMergeCompat(existing, incoming interface{}) map[string]interface{} {
+	out := map[string]interface{}{}
+	for _, value := range []interface{}{existing, incoming} {
+		m, _ := value.(map[string]interface{})
+		for k, v := range m {
+			out[k] = v
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // overlayModelNode 把重建的模型节点叠加到旧节点上（合并语义）：

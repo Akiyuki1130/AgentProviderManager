@@ -8,6 +8,12 @@ import (
 	"testing"
 )
 
+// dshTestAPI 是绝大多数 DSH 写端用例的协议上下文：APM 写 DSH 路由时最常产出的一档
+// （openai-compatible 网关）。它之所以是显式实参而不是 dshModelToRaw 的默认值，是因为
+// **compat 键按协议分门**（见 dshOfferedCompatKeys）——把协议藏进默认值就会让「某个键在
+// 这个协议下根本不许写」的断言失去意义。需要 anthropic / responses 语义的用例直接写字面量。
+const dshTestAPI = "openai-completions"
+
 func TestValidateBaseURL(t *testing.T) {
 	SetHTTPAllowed(false)
 	t.Cleanup(func() { SetHTTPAllowed(false) })
@@ -424,7 +430,7 @@ func TestNativeProviderFormats(t *testing.T) {
 
 	dsh := map[string]interface{}{"id": "r1", "name": "R1", "contextWindow": 128000, "maxTokens": 4096, "reasoningEfforts": map[string]interface{}{"off": nil, "high": "high"}}
 	card := CfgToCard("r1", ConvertDeepSeekModel("r1", dsh, "openai-compatible"))
-	out := dshModelToRaw(card, "openai-compatible")
+	out := dshModelToRaw(card, "", dshTestAPI)
 	if out["contextWindow"] != 128000 || out["maxTokens"] != 4096 {
 		t.Fatalf("limits lost: %#v", out)
 	}

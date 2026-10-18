@@ -17,7 +17,7 @@ import (
 // TestDshInputModalitiesConvergeToDSHWordList 锁住 DSH 写端的收敛缺陷修复：
 // DSH 的模型级 input 只接受 text/image，其余模态必须被收敛掉，交集为空则整键省略。
 func TestDshInputModalitiesConvergeToDSHWordList(t *testing.T) {
-	write := func(card ModelCard) map[string]interface{} { return dshModelToRaw(card, "openai-compatible") }
+	write := func(card ModelCard) map[string]interface{} { return dshModelToRaw(card, "", dshTestAPI) }
 
 	t.Run("video/pdf/audio 被收敛掉", func(t *testing.T) {
 		raw := write(ModelCard{ModelID: "demo", RawCfg: map[string]interface{}{
@@ -125,7 +125,7 @@ func TestDshInputModalitiesAlwaysIncludeText(t *testing.T) {
 		raw := dshModelToRaw(ModelCard{
 			ModelID:      "demo",
 			Capabilities: &ModelCapabilities{InputModalities: []string{"image"}},
-		}, "openai-compatible")
+		}, "", dshTestAPI)
 		got := apmModalityWords(raw["input"])
 		if !reflect.DeepEqual(got, []string{"text", "image"}) {
 			t.Fatalf("input = %v, want [text image]（写 [image] 等于声明不接受文本输入）", got)
@@ -136,7 +136,7 @@ func TestDshInputModalitiesAlwaysIncludeText(t *testing.T) {
 		raw := dshModelToRaw(ModelCard{
 			ModelID:      "demo",
 			Capabilities: &ModelCapabilities{InputModalities: []string{"image", "pdf"}},
-		}, "openai-compatible")
+		}, "", dshTestAPI)
 		got := apmModalityWords(raw["input"])
 		if !reflect.DeepEqual(got, []string{"text", "image"}) {
 			t.Fatalf("input = %v, want [text image]（DSH 只接受 text/image）", got)
@@ -152,7 +152,7 @@ func TestDshInputModalitiesAlwaysIncludeText(t *testing.T) {
 		raw := dshModelToRaw(ModelCard{
 			ModelID:      "demo",
 			Capabilities: &ModelCapabilities{InputModalities: []string{"pdf"}},
-		}, "openai-compatible")
+		}, "", dshTestAPI)
 		if got, ok := raw["input"]; ok {
 			t.Fatalf("卡片模态只有 pdf 时交集为空，必须整键省略（不留空数组），实际 %#v", got)
 		}
@@ -202,7 +202,7 @@ func TestDshInputModalitiesAlwaysIncludeText(t *testing.T) {
 			t.Fatalf("卡片读回的能力位 = %+v, want input_modalities [image]", card.Capabilities)
 		}
 		// 第二步：写回 —— 写端保证非空集合必含 text，于是变成 [text,image]（放宽，非收窄）。
-		written := dshModelToRaw(card, "openai-compatible")
+		written := dshModelToRaw(card, "", dshTestAPI)
 		if got := apmModalityWords(written["input"]); !reflect.DeepEqual(got, []string{"text", "image"}) {
 			t.Fatalf("写回 input = %v, want [text image]（这是有意为之的放宽）", got)
 		}
@@ -211,7 +211,7 @@ func TestDshInputModalitiesAlwaysIncludeText(t *testing.T) {
 		if again.Capabilities == nil || !reflect.DeepEqual(again.Capabilities.InputModalities, []string{"text", "image"}) {
 			t.Fatalf("二次读回的能力位 = %+v, want input_modalities [text image]", again.Capabilities)
 		}
-		if got := apmModalityWords(dshModelToRaw(again, "openai-compatible")["input"]); !reflect.DeepEqual(got, []string{"text", "image"}) {
+		if got := apmModalityWords(dshModelToRaw(again, "", dshTestAPI)["input"]); !reflect.DeepEqual(got, []string{"text", "image"}) {
 			t.Fatalf("二次写回 input = %v, want [text image]（放宽一次后稳定）", got)
 		}
 	})
@@ -220,52 +220,109 @@ func TestDshInputModalitiesAlwaysIncludeText(t *testing.T) {
 		first := dshModelToRaw(ModelCard{
 			ModelID:      "demo",
 			Capabilities: &ModelCapabilities{InputModalities: []string{"image"}},
-		}, "openai-compatible")
+		}, "", dshTestAPI)
 		inter := ConvertDeepSeekModel("demo", first, "openai-compatible")
 		card := CfgToCard("demo", inter)
 		if card.Capabilities == nil || !reflect.DeepEqual(card.Capabilities.InputModalities, []string{"text", "image"}) {
 			t.Fatalf("卡片读回的能力位 = %+v, want input_modalities [text image]", card.Capabilities)
 		}
-		if got := apmModalityWords(dshModelToRaw(card, "openai-compatible")["input"]); !reflect.DeepEqual(got, []string{"text", "image"}) {
+		if got := apmModalityWords(dshModelToRaw(card, "", dshTestAPI)["input"]); !reflect.DeepEqual(got, []string{"text", "image"}) {
 			t.Fatalf("二次写入 input = %v, want [text image]（往返必须稳定）", got)
 		}
 	})
 }
 
-// TestDshCompatOnlyAddsTwoKnownCapabilityKeys 锁住 compat 的写入口径：
-// 只补 supportsStrictMode / supportsTemperature 两个键（只写真），且与既有 compat 合并。
-func TestDshCompatOnlyAddsTwoKnownCapabilityKeys(t *testing.T) {
-	t.Run("只补两个键且与既有 compat 合并", func(t *testing.T) {
-		raw := dshModelToRaw(ModelCard{
-			ModelID: "demo",
-			Capabilities: &ModelCapabilities{
-				StructuredOutput: featureBool(true),
-				Temperature:      featureBool(true),
-			},
-			RawCfg: map[string]interface{}{"compat": map[string]interface{}{
-				"supportsStrictTools": true,
-				"supportsToolSearch":  false,
-			}},
-		}, "openai-compatible")
+// TestDshCompatIsGatedByWireProtocol 锁住 compat 的写入口径：**按路由协议过滤**，
+// 只在该协议 offer 的键里保留既有值，再补 APM 管理的两个能力键（各自也只在 offer 时补）。
+//
+// 这条门是 2026-10-17 实测缺陷的回归位：此前写端不看协议，只要卡片上 temperature 为真就写
+// compat.supportsTemperature，而 DSH 只在 anthropic-messages 上 offer 它，于是 openai-completions
+// 路由上的模型被判不可服务，DSH 报
+//
+//	llm-pi-ai: provider "stepfun" model "step-3.7-flash" sets compat "supportsTemperature",
+//	but its api is "openai-completions", which does not take it; ...
+//
+// deferred 解析下该模型被直接丢掉，strict 解析（配置写入 / internal/config 守卫）下整份
+// llm-pi-ai 配置更新抛错——即「新 provider 不出现、能力改动不生效」。
+func TestDshCompatIsGatedByWireProtocol(t *testing.T) {
+	both := &ModelCapabilities{
+		StructuredOutput: featureBool(true),
+		Temperature:      featureBool(true),
+	}
+
+	t.Run("openai-completions：只留 supportsStrictMode，温度被丢弃", func(t *testing.T) {
+		raw := dshModelToRaw(ModelCard{ModelID: "demo", Capabilities: both, RawCfg: map[string]interface{}{}}, "", "openai-completions")
 		compat, ok := raw["compat"].(map[string]interface{})
 		if !ok {
 			t.Fatalf("compat 缺失：%#v", raw["compat"])
 		}
-		if compat["supportsStrictMode"] != true || compat["supportsTemperature"] != true {
-			t.Fatalf("两个能力键都应为 true：%#v", compat)
+		if compat["supportsStrictMode"] != true {
+			t.Errorf("openai-completions 接受 supportsStrictMode，应写 true：%#v", compat)
 		}
-		if compat["supportsStrictTools"] != true || compat["supportsToolSearch"] != false {
-			t.Fatalf("既有 compat 键与值必须原样保留（合并而非整块替换）：%#v", compat)
+		if _, exists := compat["supportsTemperature"]; exists {
+			t.Fatalf("openai-completions 不接受 supportsTemperature，写了会让该模型被判不可服务：%#v", compat)
 		}
-		expected := []string{"supportsStrictMode", "supportsTemperature", "supportsStrictTools", "supportsToolSearch"}
-		for key := range compat {
-			if !containsStr(expected, key) {
-				t.Errorf("出现了未预期的 compat 键 %q（catalog-only 键会被 DSH 拒绝）", key)
+	})
+
+	t.Run("openai-responses：同样只留 supportsStrictMode", func(t *testing.T) {
+		raw := dshModelToRaw(ModelCard{ModelID: "demo", Capabilities: both, RawCfg: map[string]interface{}{}}, "", "openai-responses")
+		compat, _ := raw["compat"].(map[string]interface{})
+		if compat["supportsStrictMode"] != true {
+			t.Errorf("openai-responses 接受 supportsStrictMode：%#v", compat)
+		}
+		if _, exists := compat["supportsTemperature"]; exists {
+			t.Fatalf("openai-responses 不接受 supportsTemperature：%#v", compat)
+		}
+	})
+
+	t.Run("anthropic-messages：只留 supportsTemperature，strictMode 被丢弃", func(t *testing.T) {
+		raw := dshModelToRaw(ModelCard{ModelID: "demo", Capabilities: both, RawCfg: map[string]interface{}{}}, "", "anthropic-messages")
+		compat, ok := raw["compat"].(map[string]interface{})
+		if !ok {
+			t.Fatalf("compat 缺失：%#v", raw["compat"])
+		}
+		if compat["supportsTemperature"] != true {
+			t.Errorf("anthropic-messages 接受 supportsTemperature，应写 true：%#v", compat)
+		}
+		if _, exists := compat["supportsStrictMode"]; exists {
+			t.Fatalf("anthropic-messages 不接受 supportsStrictMode（它只有 supportsStrictTools）：%#v", compat)
+		}
+	})
+
+	t.Run("既有 compat 按协议过滤：合法键原样保留、非法键与 catalog-only 键被丢掉", func(t *testing.T) {
+		raw := dshModelToRaw(ModelCard{
+			ModelID: "demo",
+			RawCfg: map[string]interface{}{"compat": map[string]interface{}{
+				// openai-completions offer：原值（含显式 false）原样保留
+				"supportsReasoningEffort": true,
+				"maxTokensField":          "max_completion_tokens",
+				"supportsStore":           false,
+				// 协议错位：只在 anthropic 上 offer
+				"supportsStrictTools": true,
+				"supportsTemperature": true,
+				// catalog-only（withhold）：任何协议都不许写
+				"supportsToolSearch":      false,
+				"supportsAdditionalTools": true,
+			}},
+		}, "", "openai-completions")
+		compat, ok := raw["compat"].(map[string]interface{})
+		if !ok {
+			t.Fatalf("compat 缺失：%#v", raw["compat"])
+		}
+		if compat["supportsReasoningEffort"] != true || compat["maxTokensField"] != "max_completion_tokens" {
+			t.Errorf("本协议 offer 的既有键必须原样保留：%#v", compat)
+		}
+		if v, exists := compat["supportsStore"]; !exists || v != false {
+			t.Errorf("既有键的显式 false 也要保留（那是设置，不是推断）：%#v", compat)
+		}
+		for _, key := range []string{"supportsStrictTools", "supportsTemperature", "supportsToolSearch", "supportsAdditionalTools"} {
+			if _, exists := compat[key]; exists {
+				t.Errorf("该协议不接受 %q，必须丢掉（留着会让 DSH 拒收这个模型）：%#v", key, compat)
 			}
 		}
 	})
 
-	t.Run("未知/假一律不写 compat", func(t *testing.T) {
+	t.Run("未知/假一律不写 compat；过滤后为空则整键省略", func(t *testing.T) {
 		raw := dshModelToRaw(ModelCard{
 			ModelID: "demo",
 			Capabilities: &ModelCapabilities{
@@ -273,11 +330,67 @@ func TestDshCompatOnlyAddsTwoKnownCapabilityKeys(t *testing.T) {
 				NativeWebSearch:  featureBool(true),
 			},
 			RawCfg: map[string]interface{}{},
-		}, "openai-compatible")
+		}, "", dshTestAPI)
 		if got, ok := raw["compat"]; ok {
 			t.Fatalf("没有已知为真的 compat 能力时不应写 compat：%#v", got)
 		}
+
+		// 只有协议错位的键：过滤后为空 ⇒ 整键省略（不写空对象）。
+		raw = dshModelToRaw(ModelCard{
+			ModelID: "demo",
+			RawCfg:  map[string]interface{}{"compat": map[string]interface{}{"supportsTemperature": true}},
+		}, "", "openai-completions")
+		if got, ok := raw["compat"]; ok {
+			t.Fatalf("过滤后为空必须整键省略（不写空对象/ null）：%#v", got)
+		}
 	})
+
+	t.Run("认不出的协议一律 fail-closed：一个 compat 键都不写", func(t *testing.T) {
+		raw := dshModelToRaw(ModelCard{
+			ModelID:      "demo",
+			Capabilities: both,
+			RawCfg:       map[string]interface{}{"compat": map[string]interface{}{"supportsStrictMode": true}},
+		}, "", "")
+		if got, ok := raw["compat"]; ok {
+			t.Fatalf("协议未知时不得写 compat（宁可少写也不写出 DSH 会拒收的配置）：%#v", got)
+		}
+	})
+}
+
+// TestDshRouteCompatIsFilteredByProtocol 锁住**路由级** compat 的同一道门：
+// 路由级 compat 来自 ZCode 侧 options 或 DSH 原条目的透传，DSH 对 route 与 model 两处都跑
+// assertOfferedCompatFields，路由级还多一道「至少有一个模型说这个协议」的检查，
+// 因此同样必须按本路由协议过滤。
+func TestDshRouteCompatIsFilteredByProtocol(t *testing.T) {
+	entry, _, _ := deepSeekBuildEntry("stepfun", map[string]interface{}{
+		"name": "Stepfun",
+		"kind": KindToConfig["openai-compatible"],
+		"options": map[string]interface{}{
+			"baseURL": "https://api.stepfun.example.invalid/v1",
+			// 路由级 compat：合法的留下，协议错位/ catalog-only 的丢掉。
+			"compat": map[string]interface{}{
+				"supportsReasoningEffort": true,
+				"supportsTemperature":     true,
+				"supportsToolSearch":      true,
+			},
+		},
+		"models": map[string]interface{}{
+			"step-3.7-flash": map[string]interface{}{"id": "step-3.7-flash"},
+		},
+	}, nil, false, nil)
+
+	if entry["api"] != "openai-completions" {
+		t.Fatalf("api = %v，want openai-completions", entry["api"])
+	}
+	compat, _ := entry["compat"].(map[string]interface{})
+	if compat["supportsReasoningEffort"] != true {
+		t.Errorf("本协议 offer 的路由级 compat 必须保留：%#v", compat)
+	}
+	for _, key := range []string{"supportsTemperature", "supportsToolSearch"} {
+		if _, exists := compat[key]; exists {
+			t.Errorf("路由级 %q 在 openai-completions 上必须被丢掉：%#v", key, compat)
+		}
+	}
 }
 
 // TestConvertDeepSeekModelReadsCapabilities 锁住 DSH 读端：input 与 compat 里可配置的两个
@@ -325,14 +438,14 @@ func TestConvertDeepSeekModelReadsCapabilities(t *testing.T) {
 		ModelID:      "demo",
 		Capabilities: &ModelCapabilities{StructuredOutput: featureBool(true)},
 		RawCfg:       map[string]interface{}{},
-	}, "openai-compatible")
+	}, "", dshTestAPI)
 	writeCompat, _ := writeCaps["compat"].(map[string]interface{})
 	if writeCompat["supportsStrictMode"] != true {
 		t.Fatalf("卡片能力位应落成 compat.supportsStrictMode：%#v", writeCaps["compat"])
 	}
 
 	// 往返：DSH 节点 -> 内部形态 -> 卡片 -> DSH 节点，input 保真。
-	round := dshModelToRaw(CfgToCard("demo", inter), "openai-compatible")
+	round := dshModelToRaw(CfgToCard("demo", inter), "", dshTestAPI)
 	if got := apmModalityWords(round["input"]); !reflect.DeepEqual(got, []string{"text", "image"}) {
 		t.Fatalf("往返后 input = %v, want [text image]", got)
 	}
