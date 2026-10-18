@@ -196,14 +196,18 @@ function overwritePlan(cards: ModelCard[]): OverwritePlan {
  *
  * - `overwrite`：方向开关。`false` = 并入（只增不减），`true` = 覆盖（以推断集合替换）。
  *   **默认 false，且不持久化**——破坏性方向不该被粘住；
- * - `targetCount`：当前方向下会被处理的模型数（0 时页面禁用按钮）；
  * - `summary`：计数提示文案（含"一个都处理不了"的原因），页面直接渲染，逻辑只此一处；
  * - `fill()`：执行动作。覆盖模式下先过 `uiConfirm`（danger + 列出将删除的档位），
  *   用户取消则什么都不做；一处也没处理时明确说原因，不伪装成功。
+ *
+ * **按钮不按计数禁用**（2026-10-17 人工反馈）：可处理的模型数为 0 时按钮照常可点，
+ * 由 `fill()` 的 info toast 说明原因。此前的「可处理数为 0 ⇒ 禁用」让按钮随筛选范围、
+ * 卡片思考开关与方向切换忽明忽暗，读起来像"这个功能坏了"；而"点了没反应"与"点了告诉你
+ * 为什么"的差别，恰恰是本功能的两个隐性门控（思考未开、能力表没数据）最需要说清楚的地方。
+ * 页面只在「可见卡片为 0」时禁用——那一点必然是静默空操作，与同一行的能力补全按钮同口径。
  */
 export function useLevelFill(source: () => ModelCard[], lang: Ref<UiLang>): {
   overwrite: Ref<boolean>
-  targetCount: ComputedRef<number>
   summary: ComputedRef<string>
   fill: () => Promise<void>
 } {
@@ -215,17 +219,25 @@ export function useLevelFill(source: () => ModelCard[], lang: Ref<UiLang>): {
   const overwriteCount = computed(() => source().filter((c) => overwriteLevels(c) !== null).length)
   const blockedCount = computed(() => source().filter(blockedByReasoning).length)
 
-  const targetCount = computed(() => (overwrite.value ? overwriteCount.value : fillableCount.value))
+  /**
+   * 「一个都处理不了」的文案：门控是隐性的，必须说出原因，而且**与当前方向同口径**
+   * ——覆盖模式说"没有需要覆盖的档位"，不要说"补全"（此时按钮上写的就是"覆盖"）。
+   * `blocked` 是这批卡片里「因思考未开被挡下」的数量，`> 0` 时它才是真正的原因。
+   */
+  function noneText(blocked: number): string {
+    if (blocked > 0) return t('level.batchNoneReasoning', lang.value).replace('{n}', String(blocked))
+    return t(overwrite.value ? 'level.batchNoneOverwrite' : 'level.batchNone', lang.value)
+  }
 
   const summary = computed(() => {
-    if (targetCount.value > 0) {
+    const target = overwrite.value ? overwriteCount.value : fillableCount.value
+    if (target > 0) {
       const key = overwrite.value ? 'level.batchCountOverwrite' : 'level.batchCount'
-      return t(key, lang.value).replace('{n}', String(targetCount.value))
+      return t(key, lang.value).replace('{n}', String(target))
     }
     // 一个都处理不了时把原因说出来：最常见的原因是这批模型思考没开（门控），
     // 而不是"能力表没数据"，两者对用户的下一步动作完全不同。
-    if (blockedCount.value > 0) return t('level.batchNoneReasoning', lang.value).replace('{n}', String(blockedCount.value))
-    return t('level.batchNone', lang.value)
+    return noneText(blockedCount.value)
   })
 
   async function fill(): Promise<void> {
@@ -235,9 +247,7 @@ export function useLevelFill(source: () => ModelCard[], lang: Ref<UiLang>): {
     if (overwrite.value) {
       const plan = overwritePlan(list)
       if (plan.models === 0) {
-        push('info', t('level.batchLabel', lang.value), plan.blocked > 0
-          ? t('level.batchNoneReasoning', lang.value).replace('{n}', String(plan.blocked))
-          : t('level.batchNone', lang.value))
+        push('info', t('level.batchLabel', lang.value), noneText(plan.blocked))
         return
       }
       const detailParts: string[] = []
@@ -294,9 +304,7 @@ export function useLevelFill(source: () => ModelCard[], lang: Ref<UiLang>): {
     }
     // 一处也没补上时明确说「无补项」并给出最常见的原因，不伪装成功
     if (models === 0) {
-      push('info', t('level.batchLabel', lang.value), blocked > 0
-        ? t('level.batchNoneReasoning', lang.value).replace('{n}', String(blocked))
-        : t('level.batchNone', lang.value))
+      push('info', t('level.batchLabel', lang.value), noneText(blocked))
       return
     }
     push(
@@ -306,5 +314,5 @@ export function useLevelFill(source: () => ModelCard[], lang: Ref<UiLang>): {
     )
   }
 
-  return { overwrite, targetCount, summary, fill }
+  return { overwrite, summary, fill }
 }

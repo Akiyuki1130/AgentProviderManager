@@ -60,21 +60,23 @@ const dict: Record<string, Record<UiLang, string>> = {
     en: 'Off by default. When enabled, localhost, 127.0.0.1, LAN IPs and other private/reserved hosts are allowed (e.g. local model servers); only enable for trusted services',
     ja: '既定ではオフ。有効にすると localhost・127.0.0.1・LAN IP などのプライベート/予約アドレス（ローカルモデルサーバーなど）にアクセスできます。信頼できるサービスのみ有効にしてください',
   },
+  // 2026-10-17：该开关的管辖范围从「上下文与输出长度」扩大到**所有会被写进配置的推断值**
+  // （含推理档位与能力位），文案必须同步，否则用户无从知道卡片上那些已勾选的项从哪来。
   'options.autofill': {
-    zh: '导入时自动补全上下文与输出长度',
-    en: 'Auto-fill context & output length on import',
-    ja: 'インポート時にコンテキストと出力長を自動入力',
+    zh: '导入时自动补全模型参数',
+    en: 'Auto-fill model settings on import',
+    ja: 'インポート時にモデル設定を自動入力',
   },
   'options.autofillDesc': {
-    zh: '获取模型时若未返回上下文/输出长度，则按常见模型预设自动填写',
-    en: 'When fetching models, fill missing context/output from common-model presets',
-    ja: 'モデル取得時にコンテキスト/出力長が無ければ、一般的なモデル設定から自動入力します',
+    zh: '获取模型时按内建能力表自动填写：上下文/输出长度（提供方未返回时）、已知支持的推理档位与能力位；已填写的值一律不覆盖',
+    en: 'When fetching models, fill from the built-in capability table: context/output length (when the provider returns none), the supported reasoning tiers, and known capabilities. Existing values are kept',
+    ja: 'モデル取得時に内蔵能力表から自動入力します：コンテキスト/出力長（プロバイダが返さない場合）、対応する推論レベル、確認できた機能。入力済みの値は上書きしません',
   },
-  'options.autoSave': { zh: '自动保存提供商改动', en: 'Auto-save provider edits', ja: 'プロバイダーの変更を自動保存' },
+  'options.autoSave': { zh: '离开或退出时自动保存改动', en: 'Auto-save edits when leaving or quitting', ja: '離れるときや終了時に変更を自動保存' },
   'options.autoSaveDesc': {
-    zh: '编辑提供商后停顿片刻自动保存，连续改动会合并；关闭后仅在点击「保存提供商」时写入配置文件',
-    en: 'Save provider edits automatically after a short pause, merging rapid changes; when off, the config file is written only when you click Save',
-    ja: 'プロバイダーの編集後、少し間を置いて自動保存します（連続した変更はまとめます）。オフの場合は「保存」をクリックしたときのみ書き込みます',
+    zh: '只在离开页面、切换提供商／Agent、安装更新或退出应用这些「不保存就会丢失」的时刻写入配置文件，静默完成、不弹窗；编辑过程中不写盘，因此填错的参数不会覆盖旧值，「放弃更改」随时能回滚到上一次保存。关闭后，这些时刻会弹窗询问是否保存。',
+    en: 'Writes the config file only at moments where your edits would otherwise be lost — leaving the page, switching provider/agent, installing an update, or quitting — silently and without a dialog. Nothing is written while you edit, so a mistyped value never overwrites the old one and Reset can always roll back to the last save. When off, those moments open a save prompt instead.',
+    ja: 'ページ離脱・プロバイダー／Agent の切り替え・更新のインストール・アプリ終了など「保存しないと失われる」タイミングでのみ設定ファイルに書き込みます（静かに実行し、ダイアログは出しません）。編集中は書き込まないため、入力ミスが古い値を上書きすることはなく、「変更を破棄」でいつでも最後の保存状態に戻せます。オフの場合は、これらのタイミングで保存確認のダイアログが出ます。',
   },
   'options.intensity': {
     zh: '模型思考默认全部强度',
@@ -727,14 +729,14 @@ const dict: Record<string, Record<UiLang, string>> = {
   },
   'cap.batchFill': { zh: '按能力表补全', en: 'Fill from capability table', ja: '能力表から補完' },
   'cap.batchHint': {
-    zh: '批量作用于当前筛选出的可见模型；只补空缺，已有值不覆盖；未选择任何位即补全全部可补项',
-    en: 'Applies to the currently filtered (visible) models; only empty bits are filled and existing values are kept; with nothing selected, everything fillable is filled',
-    ja: '現在表示中のモデルに適用されます。未設定の項目のみを補完し、既存の値は上書きしません。何も選択しない場合は補完可能な項目をすべて補完します',
+    zh: '补全＝把能力表推断的能力位并入，只增不减、不删除已有值；作用于当前筛选出的可见模型；未选择任何位即处理全部可补项',
+    en: 'Fill merges the inferred capability bits in (add-only, nothing is ever removed); applies to the currently filtered (visible) models; with nothing selected, everything fillable is filled',
+    ja: '補完は推定された機能を追加のみで統合します（既存は削除しません）。現在表示中のモデルに適用され、何も選択しない場合は補完可能な項目をすべて補完します',
   },
   'cap.batchArrayNote': {
-    zh: '模态是整体集合：选中其中一位即整组采纳该方向的推断值',
-    en: 'Modalities are a whole set: picking one bit adopts the inferred set for that direction',
-    ja: 'モダリティは集合単位です。1 つ選ぶとその方向の推定セット全体を採用します',
+    zh: '模态是整体集合：选中其中一位即整组并入该方向的推断值',
+    en: 'Modalities are a whole set: picking one bit merges the inferred set for that direction',
+    ja: 'モダリティは集合単位です。1 つ選ぶとその方向の推定セット全体を統合します',
   },
   'cap.batchDoneTitle': { zh: '能力补全完成', en: 'Capability fill complete', ja: '機能の補完が完了しました' },
   'cap.batchDoneBody': {
@@ -743,9 +745,40 @@ const dict: Record<string, Record<UiLang, string>> = {
     ja: '{n} 個のモデルに {m} 件の機能を補完しました',
   },
   'cap.batchNone': {
-    zh: '没有可补全的能力位（能力表未推断出空缺项）',
-    en: 'Nothing to fill (the capability table inferred no missing bits)',
-    ja: '補完できる機能はありません（能力表が未設定項目を推定できませんでした）',
+    zh: '没有可补全的能力位（能力表未推断出可补位，或推断位都已存在）',
+    en: 'Nothing to fill (the capability table inferred no fillable bits, or every inferred bit is already present)',
+    ja: '補完できる機能はありません（能力表が補完可能な項目を推定できない、または推定された項目がすべて既に存在します）',
+  },
+  // 能力位的「覆盖」方向（与档位侧 level.batchFillOverwrite 同款的并入 / 覆盖双方向模型，
+  // 见 MODEL-MANAGEMENT-PLAN 10.14）：并入是默认方向（只增不减），覆盖是破坏性动作——
+  // 把模态方向替换为推断集合、删除推断里没有的模态，因此必须过 uiConfirm；布尔位不参与覆盖
+  // （三态里「能力表没声明真」不等于「假」，删掉用户勾过的键等于抹掉已确认的能力）。
+  'cap.batchFillOverwrite': { zh: '按能力表覆盖能力位', en: 'Replace capabilities from the capability table', ja: '能力表の機能で上書き' },
+  'cap.batchOverwriteToggle': { zh: '覆盖已有能力位', en: 'Replace existing capabilities', ja: '既存の機能を上書き' },
+  'cap.batchCount': { zh: '可补 {n} 个模型', en: '{n} model(s) can be filled', ja: '{n} 件のモデルを補完できます' },
+  'cap.batchCountOverwrite': { zh: '将覆盖 {n} 个模型', en: '{n} model(s) will be replaced', ja: '{n} 件のモデルを上書きします' },
+  'cap.batchHintOverwrite': {
+    zh: '覆盖＝以推断的模态集合替换该方向，会删除推断里没有的模态（写前会确认）；布尔位只补不删，不受覆盖影响',
+    en: 'Replace sets each modality direction to the inferred set and deletes the modalities it does not list (confirmed before writing); boolean bits are only ever added, never removed',
+    ja: '上書きは推定されたモダリティ集合で置き換え、推定にないモダリティを削除します（書き込み前に確認）。真偽値の機能は追加のみで、削除されません',
+  },
+  'cap.batchOverwriteTitle': { zh: '用推断能力覆盖？', en: 'Replace with inferred capabilities?', ja: '推定機能で上書きしますか？' },
+  'cap.batchOverwriteBody': {
+    zh: '将把 {n} 个模型的模态集合替换为能力表推断结果，推断里没有的模态会被删除。此改动随保存写入配置。',
+    en: 'The modality sets of {n} model(s) will be replaced by the inferred result; modalities it does not list are deleted. The change is written to the config on save.',
+    ja: '{n} 件のモデルのモダリティ集合を推定結果で置き換えます。推定にないモダリティは削除され、保存時に設定へ書き込まれます。',
+  },
+  'cap.batchRemoved': { zh: '删除模态：{list}', en: 'Removed modalities: {list}', ja: '削除するモダリティ：{list}' },
+  'cap.batchOverwriteConfirm': { zh: '覆盖', en: 'Replace', ja: '上書き' },
+  'cap.batchDoneBodyOverwrite': {
+    zh: '已为 {n} 个模型覆盖模态，删除 {m} 个模态',
+    en: 'Replaced modalities across {n} model(s), removing {m}',
+    ja: '{n} 件のモデルのモダリティを上書きし、{m} 件を削除しました',
+  },
+  'cap.batchNoneOverwrite': {
+    zh: '没有需要覆盖的模态（推断的模态集合与现有值一致，或能力表未推断出模态）',
+    en: 'Nothing to replace (the inferred modality sets already match the current values, or the capability table inferred no modalities)',
+    ja: '上書きが必要なモダリティはありません（推定集合が現在の値と一致、または能力表がモダリティを推定できません）',
   },
   // 阶段 F：档位（推理 / 思考等级）批量动作。档位是**整体集合字段**（`variants` 是完整声明集合），
   // 因此文案的一等口径是「并入（只增不减）」与「覆盖（替换、会删档位）」两个方向，而不是
@@ -795,6 +828,13 @@ const dict: Record<string, Record<UiLang, string>> = {
     zh: '没有可补全的档位（能力表未推断出档位，或推断出的档位都已存在）',
     en: 'Nothing to fill (the capability table inferred no levels, or every inferred tier is already present)',
     ja: '補完できるレベルはありません（能力表がレベルを推定できない、または推定されたレベルがすべて既に存在します）',
+  },
+  // 覆盖方向的「无可处理」文案与并入分开：此时按钮上写的是「覆盖」，回一句「没有可补全的
+  // 档位」会让人以为点错了按钮。语义差异只在原因的后半句（覆盖的判据是「与推断集合不等」）。
+  'level.batchNoneOverwrite': {
+    zh: '没有需要覆盖的档位（推断结果与现有档位一致，或能力表未推断出档位）',
+    en: 'Nothing to replace (the inferred tiers already match the current set, or the capability table inferred no levels)',
+    ja: '上書きが必要なレベルはありません（推定結果が現在のレベルと一致、または能力表がレベルを推定できません）',
   },
   'level.batchNoneReasoning': {
     zh: '没有可处理的档位：{n} 个模型尚未开启思考，本操作只在思考已开启时生效',

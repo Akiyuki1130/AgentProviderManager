@@ -122,12 +122,14 @@
           <span class="batch-group-label">{{ t('import.variantTiers', lang) }}</span>
           <span v-for="v in variantOpts" :key="v" class="pill" :class="{ unsupported: tierAllUnsupported(v) }" role="button" tabindex="0" @click="batchToggleVariant(v)" @keydown.enter.prevent="batchToggleVariant(v)" @keydown.space.prevent="batchToggleVariant(v)">{{ v }}</span>
           <!-- 阶段 F 修订：档位补全并入本行（它编辑的正是左边这组胶囊），并新增「覆盖」方向开关；
-               按钮文案与配色随方向变化——覆盖是破坏性动作，不能与并入长得一样。 -->
+               按钮文案与配色随方向变化——覆盖是破坏性动作，不能与并入长得一样。
+               只在「可见卡片为 0」时禁用（那一点必然是静默空操作，与同行的能力补全同口径）；
+               可处理数为 0 时不禁用——点击由 useLevelFill 说明原因，灰按钮读起来像功能坏了。 -->
           <n-button
             size="small"
             :type="levelOverwrite ? 'error' : 'primary'"
             ghost
-            :disabled="filteredCards.length === 0 || levelTargetCount === 0"
+            :disabled="filteredCards.length === 0"
             @click="onFillLevels"
           ><template #icon><n-icon :component="SparklesOutline" /></template>{{ levelOverwrite ? t('level.batchFillOverwrite', lang) : t('level.batchFill', lang) }}</n-button>
           <label class="check batch-item">
@@ -156,8 +158,10 @@
           <n-button size="small" type="primary" ghost :loading="autoMatchLoading" :disabled="filteredCards.length === 0" @click="onAutoMatchLimits">{{ t('import.autoMatch', lang) }}</n-button>
           <span class="batch-hint">{{ t('import.autoMatchHint', lang) }}</span>
         </div>
-        <!-- 阶段 E3：能力行——多选只列当前可见模型里「可补全」的能力位（带计数），
-             按钮按能力表补全空缺位（已有值一律不覆盖）。结果只落在卡片上，随导入载荷提交。 -->
+        <!-- 阶段 E3：能力行——多选只列当前可见模型里「可补全」的能力位（带计数）。
+             并入（默认）＝把推断值只增不减地并入，已有值一个也不删；勾选「覆盖已有能力位」
+             切到破坏性方向：以推断的模态集合替换该方向、会删除推断里没有的模态（写前确认），
+             此时多选不适用故禁用。结果只落在卡片上，随导入载荷提交。 -->
         <div class="batch-row batch-row--wrap">
           <span class="batch-group-label">{{ t('cap.batchLabel', lang) }}</span>
           <n-select
@@ -168,12 +172,25 @@
             multiple
             clearable
             :max-tag-count="1"
+            :disabled="capOverwrite"
             style="width: 200px"
             size="small"
           />
-          <n-button size="small" type="primary" ghost :disabled="filteredCards.length === 0" @click="onFillCapabilities"><template #icon><n-icon :component="SparklesOutline" /></template>{{ t('cap.batchFill', lang) }}</n-button>
-          <span class="batch-hint">{{ t('cap.batchHint', lang) }}</span>
-          <span class="batch-hint">{{ t('cap.batchArrayNote', lang) }}</span>
+          <n-button
+            size="small"
+            :type="capOverwrite ? 'error' : 'primary'"
+            ghost
+            :disabled="filteredCards.length === 0"
+            @click="onFillCapabilities"
+          ><template #icon><n-icon :component="SparklesOutline" /></template>{{ capOverwrite ? t('cap.batchFillOverwrite', lang) : t('cap.batchFill', lang) }}</n-button>
+          <label class="check batch-item">
+            <input type="checkbox" v-model="capOverwrite" :aria-label="t('cap.batchOverwriteToggle', lang)" />
+            <span class="check-mark" />
+            <span>{{ t('cap.batchOverwriteToggle', lang) }}</span>
+          </label>
+          <span class="batch-hint">{{ capOverwrite ? t('cap.batchHintOverwrite', lang) : t('cap.batchHint', lang) }}</span>
+          <span v-if="!capOverwrite" class="batch-hint">{{ t('cap.batchArrayNote', lang) }}</span>
+          <span class="batch-hint">{{ capSummary }}</span>
         </div>
       </div>
       <div class="list-scroll">
@@ -495,19 +512,26 @@ async function batchSetDefault(v: string) {
 function applyBatchLimit(field: 'context' | 'output') { const val = field === 'context' ? batchContext.value : batchOutput.value; for (const c of filteredCards.value) (c as Record<string, unknown>)[field] = val }
 
 // ---- 阶段 E3：能力批量行 ----
-// 选项生成 / 计数 / 只补空缺 / 失效选择收敛 / 汇报都在 useCapabilityFill（两页同一实现）；
+// 选项生成 / 计数 / 并入 / 覆盖 / 确认 / 汇报都在 useCapabilityFill（两页同一实现）；
 // 作用域与其它批量行一致：当前筛选出的可见模型。结果只落在卡片的 capabilities 上，
-// 由两页既有的卡片载荷（保存 / 导入）提交，不新增接口、不直接写盘。
-const { picked: capBits, options: capBitOptions, fill: onFillCapabilities } = useCapabilityFill(() => filteredCards.value, lang)
+// 由两页既有的卡片载荷（保存 / 导入）提交，不新增接口、不直接写盘。`overwrite` 是动作方向
+// 开关（默认并入＝只增不减、不持久化），`summary` 是计数/原因的现成文案（逻辑只此一处）。
+const {
+  picked: capBits,
+  options: capBitOptions,
+  overwrite: capOverwrite,
+  summary: capSummary,
+  fill: onFillCapabilities,
+} = useCapabilityFill(() => filteredCards.value, lang)
 
 // ---- 阶段 F 修订：档位并入「推理档位」行 ----
 // 计数 / 并入 / 覆盖 / 确认 / 汇报都在 useLevelFill（两页同一实现）；作用域与其它批量行一致：
 // 当前筛选出的可见模型。结果只落在卡片的 variants / default_variant 上，由两页既有的卡片载荷
 // （保存 / 导入）提交，不新增接口、不直接写盘。`overwrite` 是动作方向开关（默认并入、不持久化），
-// `targetCount` 供按钮禁用，`summary` 是计数/原因的现成文案（逻辑只此一处）。
+// `summary` 是计数/原因的现成文案（逻辑只此一处）。按钮不按计数禁用：可处理数为 0 时点击由
+// `fill()` 用同一个 `summary` 口径说明原因（灰按钮会让人以为功能坏了）。
 const {
   overwrite: levelOverwrite,
-  targetCount: levelTargetCount,
   summary: levelSummary,
   fill: onFillLevels,
 } = useLevelFill(() => filteredCards.value, lang)

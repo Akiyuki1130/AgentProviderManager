@@ -65,6 +65,7 @@ import { NButton, NIcon, NSelect } from 'naive-ui'
 import { CloseOutline, DocumentTextOutline, DownloadOutline, FolderOpenOutline, RemoveOutline, ResizeOutline, ServerOutline, SquareOutline } from '@vicons/ionicons5'
 import { WindowIsMaximised, WindowMinimise, WindowToggleMaximise, Quit } from '../../wailsjs/runtime/runtime'
 import { useSettingStore } from '../stores/setting'
+import { leaveDirty, requestLeave } from '../stores/leaveGuard'
 import { t } from '../i18n'
 
 const settingStore = useSettingStore()
@@ -131,6 +132,12 @@ function onTopbarDblclick() {
 }
 
 function closeWindow() {
+  // 退出是「不保存就丢」的操作：先过未保存守卫（自动保存开启则静默落盘后退出，
+  // 关闭或写不进去时弹窗询问）。
+  if (leaveDirty()) {
+    void requestLeave(() => { Quit() })
+    return
+  }
   Quit()
 }
 

@@ -155,12 +155,14 @@
                 <span v-for="v in variantOpts" :key="v" class="batch-pill" :class="{ unsupported: tierAllUnsupported(v) }" role="button" tabindex="0" @click="batchToggleVariant(v)" @keydown.enter.prevent="batchToggleVariant(v)" @keydown.space.prevent="batchToggleVariant(v)">{{ v }}</span>
                 <!-- 阶段 F 修订：档位补全并入本行——它编辑的正是左边这组胶囊，放在同一行才看得出关系
                      （旧版把它单独放在批量栏最下面，与「推理档位」分成两处、两个名字）。
-                     按钮文案与配色随方向开关变化：覆盖是破坏性动作，不能与并入长得一样。 -->
+                     按钮文案与配色随方向开关变化：覆盖是破坏性动作，不能与并入长得一样。
+                     只在「可见卡片为 0」时禁用（那一点必然是静默空操作，与同行的能力补全同口径）；
+                     可处理数为 0 时不禁用——点击由 useLevelFill 说明原因，灰按钮读起来像功能坏了。 -->
                 <n-button
                   size="small"
                   :type="levelOverwrite ? 'error' : 'primary'"
                   ghost
-                  :disabled="filteredCards.length === 0 || levelTargetCount === 0"
+                  :disabled="filteredCards.length === 0"
                   @click="onFillLevels"
                 ><template #icon><n-icon :component="SparklesOutline" /></template>{{ levelOverwrite ? t('level.batchFillOverwrite', lang) : t('level.batchFill', lang) }}</n-button>
                 <label class="check batch-item">
@@ -186,8 +188,10 @@
                 <n-button size="small" type="primary" ghost :loading="autoMatchLoading" :disabled="filteredCards.length === 0" @click="onAutoMatchLimits">自动匹配</n-button>
                 <span class="batch-hint">具体以提供商为准，自动数据仅供参考</span>
               </div>
-              <!-- 阶段 E3：能力行——多选只列当前可见模型里「可补全」的能力位（带计数），
-                   按钮按能力表补全空缺位（已有值一律不覆盖）。结果只落在卡片上，由既有保存载荷提交。 -->
+              <!-- 阶段 E3：能力行——多选只列当前可见模型里「可补全」的能力位（带计数）。
+                   并入（默认）＝把推断值只增不减地并入，已有值一个也不删；勾选「覆盖已有能力位」
+                   切到破坏性方向：以推断的模态集合替换该方向、会删除推断里没有的模态（写前确认），
+                   此时多选不适用故禁用。结果只落在卡片上，由既有保存载荷提交。 -->
               <div class="batch-row batch-row--wrap">
                 <span class="batch-group-label">{{ t('cap.batchLabel', lang) }}</span>
                 <n-select
@@ -198,12 +202,25 @@
                   multiple
                   clearable
                   :max-tag-count="1"
+                  :disabled="capOverwrite"
                   style="width: 200px"
                   size="small"
                 />
-                <n-button size="small" type="primary" ghost :disabled="filteredCards.length === 0" @click="onFillCapabilities"><template #icon><n-icon :component="SparklesOutline" /></template>{{ t('cap.batchFill', lang) }}</n-button>
-                <span class="batch-hint">{{ t('cap.batchHint', lang) }}</span>
-                <span class="batch-hint">{{ t('cap.batchArrayNote', lang) }}</span>
+                <n-button
+                  size="small"
+                  :type="capOverwrite ? 'error' : 'primary'"
+                  ghost
+                  :disabled="filteredCards.length === 0"
+                  @click="onFillCapabilities"
+                ><template #icon><n-icon :component="SparklesOutline" /></template>{{ capOverwrite ? t('cap.batchFillOverwrite', lang) : t('cap.batchFill', lang) }}</n-button>
+                <label class="check batch-item">
+                  <input type="checkbox" v-model="capOverwrite" :aria-label="t('cap.batchOverwriteToggle', lang)" />
+                  <span class="check-mark" />
+                  <span>{{ t('cap.batchOverwriteToggle', lang) }}</span>
+                </label>
+                <span class="batch-hint">{{ capOverwrite ? t('cap.batchHintOverwrite', lang) : t('cap.batchHint', lang) }}</span>
+                <span v-if="!capOverwrite" class="batch-hint">{{ t('cap.batchArrayNote', lang) }}</span>
+                <span class="batch-hint">{{ capSummary }}</span>
               </div>
             </div>
             <TransitionGroup name="list" tag="div" class="list-scroll">
@@ -758,19 +775,26 @@ function applyBatchLimit(field: 'context' | 'output') {
 }
 
 // ---- 阶段 E3：能力批量行 ----
-// 选项生成 / 计数 / 只补空缺 / 失效选择收敛 / 汇报都在 useCapabilityFill（两页同一实现）；
+// 选项生成 / 计数 / 并入 / 覆盖 / 确认 / 汇报都在 useCapabilityFill（两页同一实现）；
 // 作用域与其它批量行一致：当前筛选出的可见模型。结果只落在卡片的 capabilities 上，
-// 由两页既有的卡片载荷（保存 / 导入）提交，不新增接口、不直接写盘。
-const { picked: capBits, options: capBitOptions, fill: onFillCapabilities } = useCapabilityFill(() => filteredCards.value, lang)
+// 由两页既有的卡片载荷（保存 / 导入）提交，不新增接口、不直接写盘。`overwrite` 是动作方向
+// 开关（默认并入＝只增不减、不持久化），`summary` 是计数/原因的现成文案（逻辑只此一处）。
+const {
+  picked: capBits,
+  options: capBitOptions,
+  overwrite: capOverwrite,
+  summary: capSummary,
+  fill: onFillCapabilities,
+} = useCapabilityFill(() => filteredCards.value, lang)
 
 // ---- 阶段 F 修订：档位并入「推理档位」行 ----
 // 计数 / 并入 / 覆盖 / 确认 / 汇报都在 useLevelFill（两页同一实现）；作用域与其它批量行一致：
 // 当前筛选出的可见模型。结果只落在卡片的 variants / default_variant 上，由两页既有的卡片载荷
 // （保存 / 导入）提交，不新增接口、不直接写盘。`overwrite` 是动作方向开关（默认并入、不持久化），
-// `targetCount` 供按钮禁用，`summary` 是计数/原因的现成文案（逻辑只此一处）。
+// `summary` 是计数/原因的现成文案（逻辑只此一处）。按钮不按计数禁用：可处理数为 0 时点击由
+// `fill()` 用同一个 `summary` 口径说明原因（灰按钮会让人以为功能坏了）。
 const {
   overwrite: levelOverwrite,
-  targetCount: levelTargetCount,
   summary: levelSummary,
   fill: onFillLevels,
 } = useLevelFill(() => filteredCards.value, lang)
@@ -1009,7 +1033,9 @@ async function onKeychainUnlink() {
 }
 
 // ---- 自动保存 ----
-// 自动保存的预检：返回非 null 表示本轮不宜自动写入，值是给用户看的暂停原因。
+// 只在「不保存就会阻塞或退出」的时刻落盘（见 registerManageGuard / requestLeave），
+// 编辑过程中不写盘，因此填错的参数不会立刻覆盖磁盘上的旧值，「放弃更改」始终能回滚。
+// 预检：返回非 null 表示本次不宜自动写入，值是给用户看的暂停原因；
 // 只做「静默也无法成功」的检查——空 Base URL、非法 ID、未确认的 http 明文。
 function autoSavePreflight(): string | null {
   const f = editForm.value
@@ -1030,7 +1056,7 @@ const autoSave = useAutoSave({
   },
 })
 
-// 自动保存状态行文案：把调度器状态翻成一行安静的提示，不弹 toast 打扰输入。
+// 自动保存状态行文案：把落盘状态翻成一行安静的提示，不弹 toast 打扰输入。
 const autoSaveLabel = computed(() => {
   if (!settingStore.autoSave) return ''
   const st = autoSave.status.value
@@ -1070,7 +1096,8 @@ function onGlobalKeydown(e: KeyboardEvent) {
   if (!e.repeat && isDirty.value && !saving.value) onSaveProvider()
 }
 onMounted(() => {
-  // 自动保存的 flush 与调度器共用单飞锁，因此优先用它；autoFlush 决定能否「静默落盘、不弹窗」。
+  // 自动保存只在离开守卫里落盘一次（编辑过程中不写盘），因此没有调度器要启动，
+  // 只需把 flush 挂给守卫；autoFlush 决定能否「静默落盘、不弹窗」。
   registerManageGuard({
     isDirty: () => isDirty.value,
     isUnsavedNew: () => isUnsavedNew.value,
@@ -1080,14 +1107,12 @@ onMounted(() => {
     // flush 内部会 await 在途写入并做单飞，因此只需判断自动保存是否开启。
     autoFlush: () => settingStore.autoSave,
   })
-  autoSave.start()
   void loadProviders()
   void loadKeychainLinks()
   window.addEventListener('agent-changed', onAgentChanged)
   window.addEventListener('keydown', onGlobalKeydown)
 })
 onUnmounted(() => {
-  autoSave.stop()
   registerManageGuard(null)
   window.removeEventListener('agent-changed', onAgentChanged)
   window.removeEventListener('keydown', onGlobalKeydown)

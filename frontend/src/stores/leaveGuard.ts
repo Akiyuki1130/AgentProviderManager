@@ -17,7 +17,7 @@ export interface ManageGuard {
   save: () => Promise<boolean>
   /** 放弃当前改动 */
   discard: () => void
-  /** 自动保存落盘（与调度器共用单飞锁）；返回是否真的写入成功 */
+  /** 自动保存落盘（单飞）：返回是否真的写入成功 */
   flush?: () => Promise<boolean>
   /** 自动保存是否开启：开启时才允许「先静默落盘、不弹窗」这条快路径 */
   autoFlush?: () => boolean
