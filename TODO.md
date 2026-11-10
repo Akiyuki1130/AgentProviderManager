@@ -187,7 +187,7 @@
   阶段 H 让拉取模型与「自动匹配」按能力表自动勾选支持的推理档位与能力位，但导入页的「手动添加模型」（`ImportPage.vue` 的 `onAddModel`）走的是**本地拼卡片 + 只补 `_vendor` / `_supported_levels`** 的轻量路径（`fetchVendorMeta`），因此手工敲进去的 ID 卡片上档位与能力位仍全为空。改成走 `BuildSingleCard`（`api.BuildSingleCard` 已存在，返回完整卡片）即可与拉取路径一致；不过它同时会把 ctx/out 与 `capabilities` 一并带上，需先确认「手动添加」是否希望自动补全长度（当日志意识上它与拉取同属「新增模型」，倾向一致）。
   与第 23 项残留③同源（站点上下文缺口：`BuildSingleCard` 不传 baseURL/apiType，站点层档位拿不到），建议同轮处理。
    修法（已实施）：core 新增 `BuildSingleCardForSite(modelID, autoFill, baseURL, apiType)`（`internal/core/cards.go`，`BuildSingleCard` 转调它并传空站点，既有调用方行为逐字段不变），内部走与拉取路径同一个 `BuildModelCardsForSite`；app 新增同签名绑定（`internal/app/app.go`），前端 `api.BuildSingleCardForSite` 复用既有 `normalizeApiType`。导入页 `onAddModel` 传当前表单的 Base URL 与协议类型，管理页传 `editForm` 的 base_url/kind（`select` 仍按页面语义取 true/false）；绑定失败或异常时退回原来的轻量推断路径，不阻塞手动添加。因此手工输入的 ID 现在与拉取结果一样带上 ctx/out、能力位、站点级档位与默认勾选。
-   验证：`internal/core/cards_single_site_test.go`（空站点与 `BuildSingleCard` 逐字段相等；带站点与 `BuildModelCardsForSite` 同口径；空 ID 报错）、`go test ./...`、`npm run build`。
+   验证：`internal/core/cards_single_site_test.go`（空站点与 `BuildSingleCard` 逐字段相等；带站点与 `BuildModelCardsForSite` 同口径；空 ID 报错）、`go test ./...`、`npm run build`。已随 2.2.0 发布。
 
 - [x] **30. DSH 写端两条残留：`modelOverrides` 里的 compat 未过滤；自填档位名让整份配置解析失败（2026-10-17 记录，2026-11-10 按 lead 裁定修复）**
   第 10.15 项修复把「模型级 + 路由级 compat 按 wire protocol 过滤」做掉了，另有两处同族缺口留在门外：
@@ -229,7 +229,7 @@
 
 ## 已完成 — OMP（PI Agent）第三 harness（2026-11-10）
 
-方案、缺口清单（G1–G23）、决策（D1–D18）与 P0/P1 验收见 `PI-AGENT-COMPAT-PLAN.md`（已提交，作为设计记录保留）。下列七项同日全部落地，`go build` / `go vet` / `go test ./...` / `npm run build` 与三条 `--check` 全绿。
+方案、缺口清单（G1–G23）、决策（D1–D18）与 P0/P1 验收见 `PI-AGENT-COMPAT-PLAN.md`（已提交，作为设计记录保留）。下列七项同日全部落地，`go build` / `go vet` / `go test ./...` / `npm run build` 与三条 `--check` 全绿，随 **2.2.0（2026-11-10）** 发布；发布记录见 `CHANGELOG.md` 的「2.2.0」章节。
 
 - [x] **31. P0 地基：YAML 备份后缀判定 + 测试**：`isYAMLPath` 现在先按固定词表（`.bak_<ts>`/`.snapshot_<ts>`/`.restore_*`/`.removed_<ts>`/`.tmp_*`/`.apm-update-*`/`.apm-backup-*`）循环剥离后缀再判定，`RestoreBackup`/`validateRestoreContent` 复用同一判定；解析收敛到唯一入口 `parseDeepSeekConfigBytes`；`internal/core/config_restore_format_test.go` 覆盖 27 条后缀表与 DSH YAML 还原端到端；`AllAgents()` 断言 2 → 3。
 - [x] **32. P1 文档层包** `internal/ompprovider`：`yaml.Node` 节点级写入（注释/键序/`!command` 标签保留）、apiKey 三形态原样保留且永不执行、写前 `ModelsFile.Validate`（omp 解析失败仍退 0）、`.json`-only 只读（G1）、引用保护（G6/G14）、`config.yml` modelRoles（G18）。约 2100 行，只依赖 `gopkg.in/yaml.v3`，不 import `internal/core`。
@@ -237,7 +237,7 @@
 - [x] **34. P1 core 横切**：`FormatOMP`/`FormatOMPConfig` 与 `set_default_model` 还原点、恢复 omp-config 不切目标路径、`DetectConfigLocationsForAgent("omp")`（`PI_CONFIG_DIR`/`PI_CODING_AGENT_DIR`/`OMP_PROFILE`/`PI_PROFILE`）、`ConfigProviderSummaryForAgent` 的 §9.1 嗅探、`ProbeProviderRequest`/`FetchModelsWithOptions`（不执行 `!command`、跨主机剥认证头）、迁移与备份的 OMP 规范化投影。
 - [x] **35. P1 app 绑定**：`internal/app/app_omp.go`（路径适配、G18 嗅探、opts 解析、`GetOMPModelRoles`/`SetOMPModelRole`、`guardedTargetPath`）；`FetchModels` 三参带 headers/kind/auth_header；只读保存前置拦截（`READ_ONLY`）；ZCode 专属绑定 omp guard；导出/迁移的 skipped 与 warnings 透出；第 21 项兜底写入改走 `core.StripAPMInternalModelKeys`。
 - [x] **36. P1 前端**：harness 切换、管理/导入/迁移/还原点页、默认模型卡片、只读与 needsMigration 横幅、六档 effort、omp 能力位门控（只 text/image、隐藏自填档位与 output）、`_api_key_touched` 与明文 Key 确认、skipped/warnings 渲染；zh/en/ja 文案齐备，`npm run build` 通过。
-- [x] **37. 文档收口**：README 中英双语（支持表、PI Agent 段、已知限制、安全、仓库结构）、AGENTS.md（隐私路径 `.omp`、依赖方向、omp 写前校验与三条硬边界）、CHANGELOG「未发布」章节；`PI-AGENT-COMPAT-PLAN.md` 提交。
+- [x] **37. 文档收口**：README 中英双语（支持表、PI Agent 段、已知限制、安全、仓库结构）、AGENTS.md（隐私路径 `.omp`、依赖方向、omp 写前校验与三条硬边界）、CHANGELOG 2.2.0 章节；`PI-AGENT-COMPAT-PLAN.md` 提交。
 
 ## P3 — 长期方向
 

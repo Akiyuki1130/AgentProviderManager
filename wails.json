@@ -12,7 +12,7 @@
   "info": {
     "companyName": "AgentProviderManager",
     "productName": "Agent Provider Manager",
-    "productVersion": "2.1.2",
+    "productVersion": "2.2.0",
     "copyright": "Copyright (c) 2026 AgentProviderManager",
     "comments": "Manage third-party model providers for multiple agents"
   }

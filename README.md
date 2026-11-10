@@ -1,4 +1,4 @@
-# Agent Provider Manager 2.1.2
+# Agent Provider Manager 2.2.0
 
 > 一个面向 Windows 的多 Agent 模型提供商管理器：用一个原生桌面界面管理 ZCode、DeepSeek Harness 与 PI Agent 的 provider、模型、API Key、备份和迁移。（OpenCode 入口已在应用内隐藏，暂不适配。）
 >
@@ -66,7 +66,7 @@ PI Agent（oh-my-pi，命令行 `omp`）把 provider 放在 agent 目录的 `mod
 
 #### 方式 A：下载 Release
 
-1. 在 GitHub Releases 下载 `AgentProviderManager-2.1.2-windows-amd64.zip`。
+1. 在 GitHub Releases 下载 `AgentProviderManager-2.2.0-windows-amd64.zip`。
 2. 解压到用户有执行权限的目录。
 3. 确认系统已安装 Microsoft Edge WebView2 Runtime；Wails 桌面窗口依赖 WebView2。
 4. 启动 `AgentProviderManager.exe`。程序不会自动上传配置，也不会自动修改未选择的 Agent 文件。
@@ -248,7 +248,7 @@ The product is currently **Windows-only**. It uses Wails and WebView2, and the W
 
 #### Download a Release
 
-1. Download `AgentProviderManager-2.1.2-windows-amd64.zip` from GitHub Releases.
+1. Download `AgentProviderManager-2.2.0-windows-amd64.zip` from GitHub Releases.
 2. Extract it to a directory where you have execute permission.
 3. Install Microsoft Edge WebView2 Runtime if it is not already present.
 4. Run `AgentProviderManager.exe`.

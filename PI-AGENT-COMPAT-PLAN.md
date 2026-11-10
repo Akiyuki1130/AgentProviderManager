@@ -1,7 +1,7 @@
 # PI Agent（oh-my-pi）兼容设计与决策
 
-- 文档状态：P1 已实现并交付（2026-11-10）；实现清单与验收记录见 `TODO.md` 的「已完成 — OMP」一节与 `CHANGELOG.md` 的「未发布」章节。本文档保留为设计与决策记录
-- 适用基线：AgentProviderManager 2.1.2
+- 文档状态：P1 已实现并交付（2026-11-10）；实现清单与验收记录见 `TODO.md` 的「已完成 — OMP」一节与 `CHANGELOG.md` 的 2.2.0 章节。本文档保留为设计与决策记录
+- 适用基线：AgentProviderManager 2.2.0（设计基线 2.1.2）
 - 目标客户端：PI Agent / oh-my-pi（CLI 名 `omp`）
 - 本机验证版本：`omp/18.16.0`
 - 调研时上游最新版本：`v18.18.6`
