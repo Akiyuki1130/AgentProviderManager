@@ -194,6 +194,11 @@ export async function RefreshProviderModels(providerId: string, baseUrl: string,
 export async function BuildSingleCard(modelId: string): Promise<Record<string, unknown>> {
   return call('BuildSingleCard', modelId)
 }
+// 带站点上下文的单卡构建：手动添加模型时与拉取路径同源（离线目录 + 站点规则的档位/能力位
+// 也会参与推断）。apiType 归一与 ApplyModelPresetsForSite 共用 normalizeApiType。
+export async function BuildSingleCardForSite(modelId: string, baseUrl: string, apiType: string): Promise<Record<string, unknown>> {
+  return call('BuildSingleCardForSite', modelId, baseUrl || '', normalizeApiType(apiType))
+}
 export async function ApplyModelPresets(cards: unknown): Promise<Record<string, unknown>> {
   return call('ApplyModelPresets', cards)
 }

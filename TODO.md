@@ -183,9 +183,11 @@
   裁定与修法：DSH 写端改为**一个推理键都不写**（删掉 `reasoningEfforts` 与 `reasoningEffort`）。理由：`AGENTS.md` 的「只写真值，未知与假一律省略键」是硬不变量，`false` 在 DSH 里是「显式声明该模型不是推理模型」，而源语义只是「只有关闭档可表达」，两者不等价，宁可留未知。用户显式关闭（`RawReasoningEnabled=false`）仍照旧写 `false`，不受影响。
   验证：`deepseek_reasoning_test.go` 的 `TestDshOffOnlyWritesNoReasoningKey`、`dsh_write_constraints_test.go` 的 `TestDshExplicitReasoningFalsePreserved`。
 
-- [ ] **29. 导入页「手动添加模型」不参与自动勾选（阶段 H 残留，2026-10-17）**
+- [x] **29. 导入页「手动添加模型」不参与自动勾选（阶段 H 残留，2026-10-17 记录，2026-11-10 修复）**
   阶段 H 让拉取模型与「自动匹配」按能力表自动勾选支持的推理档位与能力位，但导入页的「手动添加模型」（`ImportPage.vue` 的 `onAddModel`）走的是**本地拼卡片 + 只补 `_vendor` / `_supported_levels`** 的轻量路径（`fetchVendorMeta`），因此手工敲进去的 ID 卡片上档位与能力位仍全为空。改成走 `BuildSingleCard`（`api.BuildSingleCard` 已存在，返回完整卡片）即可与拉取路径一致；不过它同时会把 ctx/out 与 `capabilities` 一并带上，需先确认「手动添加」是否希望自动补全长度（当日志意识上它与拉取同属「新增模型」，倾向一致）。
   与第 23 项残留③同源（站点上下文缺口：`BuildSingleCard` 不传 baseURL/apiType，站点层档位拿不到），建议同轮处理。
+   修法（已实施）：core 新增 `BuildSingleCardForSite(modelID, autoFill, baseURL, apiType)`（`internal/core/cards.go`，`BuildSingleCard` 转调它并传空站点，既有调用方行为逐字段不变），内部走与拉取路径同一个 `BuildModelCardsForSite`；app 新增同签名绑定（`internal/app/app.go`），前端 `api.BuildSingleCardForSite` 复用既有 `normalizeApiType`。导入页 `onAddModel` 传当前表单的 Base URL 与协议类型，管理页传 `editForm` 的 base_url/kind（`select` 仍按页面语义取 true/false）；绑定失败或异常时退回原来的轻量推断路径，不阻塞手动添加。因此手工输入的 ID 现在与拉取结果一样带上 ctx/out、能力位、站点级档位与默认勾选。
+   验证：`internal/core/cards_single_site_test.go`（空站点与 `BuildSingleCard` 逐字段相等；带站点与 `BuildModelCardsForSite` 同口径；空 ID 报错）、`go test ./...`、`npm run build`。
 
 - [x] **30. DSH 写端两条残留：`modelOverrides` 里的 compat 未过滤；自填档位名让整份配置解析失败（2026-10-17 记录，2026-11-10 按 lead 裁定修复）**
   第 10.15 项修复把「模型级 + 路由级 compat 按 wire protocol 过滤」做掉了，另有两处同族缺口留在门外：

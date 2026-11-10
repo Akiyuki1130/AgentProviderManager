@@ -435,7 +435,20 @@ func metaPathValue(meta map[string]interface{}, path string) interface{} {
 	return nil
 }
 
+// BuildSingleCard 按模型 ID 生成一张空 meta 的卡片；没有站点上下文，
+// 等价于 BuildSingleCardForSite(modelID, autoFill, "", "")。
 func BuildSingleCard(modelID string, autoFill bool) (ModelCard, error) {
+	return BuildSingleCardForSite(modelID, autoFill, "", "")
+}
+
+// BuildSingleCardForSite 是带站点上下文的单卡入口：把 provider 的 Base URL 与 API 类型
+// 交给能力表（LookupModelCapabilityForSite），使离线精确目录与站点级规则参与
+// _vendor / _supported_levels / 档位推断，结果与 FetchModels 返回的卡片口径一致。
+//
+// 导入页与管理页的「手动添加模型」都走这里，避免手工输入的 ID 卡片上档位与能力位为空
+// （TODO 第 29 项）。baseURL 为空时结果与 BuildSingleCard 完全一致；apiType 取不到时传空串，
+// 限定 apiType 的站点规则会被跳过（fail-closed）。
+func BuildSingleCardForSite(modelID string, autoFill bool, baseURL, apiType string) (ModelCard, error) {
 	mid := strings.TrimSpace(modelID)
 	if mid == "" {
 		return ModelCard{}, fmt.Errorf("模型 ID 不能为空")
@@ -443,10 +456,10 @@ func BuildSingleCard(modelID string, autoFill bool) (ModelCard, error) {
 	if len(mid) > MaxModelIDLength {
 		return ModelCard{}, fmt.Errorf("模型 ID 不能超过 %d 个字符", MaxModelIDLength)
 	}
-	cards := BuildModelCards([]struct {
+	cards := BuildModelCardsForSite([]struct {
 		ID   string
 		Meta map[string]interface{}
-	}{{ID: mid, Meta: map[string]interface{}{}}}, autoFill)
+	}{{ID: mid, Meta: map[string]interface{}{}}}, autoFill, baseURL, apiType)
 	return cards[0], nil
 }
 

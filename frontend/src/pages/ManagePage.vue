@@ -928,10 +928,19 @@ async function onAddModel() {
   })
   if (!mid || !mid.trim()) return
   if (editForm.value.cards.some((c) => c.model_id === mid.trim())) { toast('info', '提示', `模型「${mid.trim()}」已在列表中。`); return }
-  const card: Card = { model_id: mid.trim(), name: mid.trim(), reasoning: false, variants: [], default_variant: '', context: '', output: '', select: false }
-  // 补一次能力表推断字段（厂商 / 支持档位），使分组与档位弱化对新增卡片立刻生效
-  const meta = await fetchVendorMeta(card.model_id)
-  if (meta) { card._vendor = meta._vendor; card._supported_levels = meta._supported_levels }
+  // 与拉取路径同源：把当前表单的 Base URL 与协议类型交给后端，手工输入的 ID 也能拿到
+  // ctx/out、能力位与站点级档位（TODO 第 29 项）。失败时退回轻量推断。
+  let card: Card | null = null
+  try {
+    const res = await api.BuildSingleCardForSite(mid.trim(), editForm.value.base_url.trim(), editForm.value.kind) as Record<string, unknown>
+    if (res && res['success'] && res['card']) card = { ...(res['card'] as Card), select: false }
+  } catch { card = null }
+  if (!card) {
+    card = { model_id: mid.trim(), name: mid.trim(), reasoning: false, variants: [], default_variant: '', context: '', output: '', select: false }
+    // 补一次能力表推断字段（厂商 / 支持档位），使分组与档位弱化对新增卡片立刻生效
+    const meta = await fetchVendorMeta(card.model_id)
+    if (meta) { card._vendor = meta._vendor; card._supported_levels = meta._supported_levels }
+  }
   editForm.value.cards.push(card)
 }
 

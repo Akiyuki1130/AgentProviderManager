@@ -14,6 +14,7 @@
 - **TODO #28 只有 `off` 的源档位集合被写成 `reasoningEfforts: false`。** 现在退化为「不写任何档位键」——只写真值、未知省略是硬不变量；用户显式关闭仍写 `false`。
 - **TODO #30 DSH 写端两条残留。** ① `modelOverrides[*].compat` 现按协议过滤（复用 `dshCompatForWrite`，过滤后为空则删键），不再透传错位键；② 自填档位名不再写入 DSH（只写固定 7 档，否则整份 `llm-pi-ai` 解析失败），读侧开关打开时仍保留自填名。
 - **TODO #21 app 层两条兜底写入会把 APM 内部键落盘。** 新增 `core.StripAPMInternalModelKeys` 并在 `SaveProvider` / `ImportProvider` 的兜底分支调用。
+- **TODO #29「手动添加模型」与拉取路径不同源。** 新增 `core.BuildSingleCardForSite` 与同签名 app 绑定：导入页与管理页的手工添加现在带上当前表单的 Base URL 与协议类型，因此与 `FetchModels` 一样补全 ctx/out、能力位、站点级档位与默认勾选；`BuildSingleCard` 转调新函数并传空站点，既有调用方行为逐字段不变，绑定不可用时前端退回原来的轻量推断。
 
 ## 2.1.2 — 2026-10-18
 

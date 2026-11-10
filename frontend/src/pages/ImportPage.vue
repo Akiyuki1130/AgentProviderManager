@@ -403,10 +403,20 @@ async function onAddModel() {
   const mid = ((await uiPrompt({ title: t('import.addModel', lang.value), label: t('import.modelIdLabel', lang.value), placeholder: t('import.modelIdPlaceholder', lang.value), initialValue: 'gpt-4o-mini' })) || '').trim()
   if (!mid) return
   if (cards.value.some((c) => c.model_id === mid)) { toast('info', t('import.notice', lang.value), t('import.modelExists', lang.value).replace('{id}', mid)); return }
-  const card: Card = { model_id: mid, name: mid, reasoning: false, variants: [], default_variant: '', context: '', output: '', select: true }
-  // 补一次能力表推断字段（厂商 / 支持档位），使分组与档位弱化对新增卡片立刻生效
-  const meta = await fetchVendorMeta(mid)
-  if (meta) { card._vendor = meta._vendor; card._supported_levels = meta._supported_levels }
+  // 与拉取路径同源：带 Base URL 与协议类型走 BuildSingleCardForSite，手工输入的 ID
+  // 也能拿到 ctx/out、能力位、站点级档位与自动勾选（TODO 第 29 项）。绑定缺失或失败时
+  // 退回轻量推断，行为与改动前一致。
+  let card: Card | null = null
+  try {
+    const res = await api.BuildSingleCardForSite(mid, baseUrl.value.trim(), kind.value) as Record<string, unknown>
+    if (res && res['success'] && res['card']) card = { ...(res['card'] as Card), select: true }
+  } catch { card = null }
+  if (!card) {
+    card = { model_id: mid, name: mid, reasoning: false, variants: [], default_variant: '', context: '', output: '', select: true }
+    // 补一次能力表推断字段（厂商 / 支持档位），使分组与档位弱化对新增卡片立刻生效
+    const meta = await fetchVendorMeta(mid)
+    if (meta) { card._vendor = meta._vendor; card._supported_levels = meta._supported_levels }
+  }
   cards.value.push(card)
 }
 function removeCard(card: Card) { const idx = cards.value.indexOf(card); if (idx >= 0) cards.value.splice(idx, 1) }

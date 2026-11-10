@@ -1583,6 +1583,20 @@ func (a *App) BuildSingleCard(modelID string) map[string]interface{} {
 	return map[string]interface{}{"success": true, "card": card}
 }
 
+// BuildSingleCardForSite 与 BuildSingleCard 相同，额外接受 provider 的 Base URL 与
+// API 类型：离线精确目录与站点级能力规则因此也能参与 _vendor / _supported_levels /
+// 档位推断，使「手动添加模型」与 FetchModels 拉取到的卡片口径一致（TODO 第 29 项）。
+//
+// apiType 取不到时传空串（fail-closed，限定 apiType 的站点规则跳过）；
+// baseURL 为空时逐字段等价于 BuildSingleCard。
+func (a *App) BuildSingleCardForSite(modelID, baseURL, apiType string) map[string]interface{} {
+	card, err := core.BuildSingleCardForSite(modelID, a.autoFillLimits(), baseURL, apiType)
+	if err != nil {
+		return map[string]interface{}{"success": false, "error": err.Error()}
+	}
+	return map[string]interface{}{"success": true, "card": card}
+}
+
 // ApplyModelPresets applies the common-model preset limits to the given
 // cards, overwriting existing context/output values that the preset covers.
 // The UI confirms with the user before overwriting filled values.
