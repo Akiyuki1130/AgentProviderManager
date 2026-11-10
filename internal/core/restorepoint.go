@@ -14,9 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"gopkg.in/yaml.v3"
-
 	"agentprovidermanager/internal/zcodeprovider"
+	"gopkg.in/yaml.v3"
 )
 
 // 还原点（restore point）在每次改动 Agent 配置文件之前，把目标文件的**原始字节**
@@ -61,6 +60,8 @@ const (
 	OpManual         = "manual"
 	// OpAutoSave 标记前端后台自动保存产生的低价值还原点，清理时优先被淘汰。
 	OpAutoSave = "auto_save"
+	// OpSetDefaultModel 是 omp config.yml 里 modelRoles 默认模型写入的操作名。
+	OpSetDefaultModel = "set_default_model"
 )
 
 // 还原点记录的 format 取值。
@@ -69,7 +70,12 @@ const (
 	FormatLegacy   = "legacy"
 	FormatOpencode = "opencode"
 	FormatDeepSeek = "deepseek"
-	FormatUnknown  = "unknown"
+	// FormatOMP 是 omp 的模型文件（models.yml / models.yaml / models.json）。
+	FormatOMP = "omp"
+	// FormatOMPConfig 是 omp 的设置文件（config.yml / config.yaml）。回滚它只允许写回内容，
+	// 绝不允许把 targetConfigPath 切到设置文件（G7）。
+	FormatOMPConfig = "omp-config"
+	FormatUnknown   = "unknown"
 )
 
 // RestorePoint 描述一次变更前的配置快照。
@@ -127,6 +133,8 @@ func ConfigFormatAt(path, agentID string) string {
 		return FormatOpencode
 	case AgentDeepSeek:
 		return FormatDeepSeek
+	case AgentOMP:
+		return ompConfigFormatAt(path)
 	}
 	if _, err := os.Stat(path); err == nil {
 		switch DetectZCodeFormatAt(path) {
@@ -142,6 +150,31 @@ func ConfigFormatAt(path, agentID string) string {
 		return FormatV2
 	}
 	return FormatLegacy
+}
+
+// ompConfigFormatAt 区分 omp 的模型文件与设置文件：models.* 是 provider 目标，
+// config.yml 只承载 modelRoles 等设置（G7）。
+func ompConfigFormatAt(path string) string {
+	if isOMPConfigPath(path) {
+		return FormatOMPConfig
+	}
+	return FormatOMP
+}
+
+// isOMPConfigPath 判定路径是 omp 的设置文件（config.yml / config.yaml），先剥离备份后缀。
+func isOMPConfigPath(path string) bool {
+	base := strings.ToLower(filepath.Base(stripAuxSuffix(path)))
+	return base == "config.yml" || base == "config.yaml"
+}
+
+// isOMPModelsPath 判定路径是 omp 的模型文件（models.yml / models.yaml / models.json）。
+func isOMPModelsPath(path string) bool {
+	base := strings.ToLower(filepath.Base(stripAuxSuffix(path)))
+	switch base {
+	case "models.yml", "models.yaml", "models.json":
+		return true
+	}
+	return false
 }
 
 // PrepareChange 是“写入配置前的唯一入口”：先做同级 .bak_ 备份，再建立还原点。
@@ -563,7 +596,12 @@ func RestoreRestorePoint(id string) (RestoreOutcome, error) {
 	if point.SHA256 != "" && sha256Hex(data) != point.SHA256 {
 		return outcome, fmt.Errorf("还原点内容校验失败（sha256 不一致），已取消回滚")
 	}
-	outcome.Warning = validateRestoreContent(data, point)
+	warning, validateErr := validateRestoreContent(data, point)
+	if validateErr != nil {
+		// 硬校验失败：宁可回滚失败，也不写出一份目标 harness 读不了的配置。
+		return outcome, validateErr
+	}
+	outcome.Warning = warning
 
 	if err := writeRestoredContent(point.TargetPath, data); err != nil {
 		return outcome, err
@@ -637,35 +675,66 @@ func writeRestoredContent(target string, data []byte) error {
 	return nil
 }
 
-// validateRestoreContent 校验还原内容至少能被解析成该格式的配置，并返回非致命提示。
-// 历史文件可能包含当前 ZCode 已不再接受的键，那种情况只提醒、不阻止回滚。
-func validateRestoreContent(data []byte, point *RestorePoint) string {
+// validateRestoreContent 校验还原内容至少能被解析成该格式的配置。
+//
+// 返回 (warning, fatal)：warning 是非致命提示（历史文件可能包含当前版本已不再接受的键，
+// 那种情况只提醒、不阻止回滚）；fatal 非空时必须放弃回滚——它只用于「历史还原点里含有
+// 目标 harness 根本读不了的结构」这类会写坏用户配置的内容，此时绝不能落盘。
+func validateRestoreContent(data []byte, point *RestorePoint) (string, error) {
 	switch point.Format {
 	case FormatV2:
 		if _, err := zcodeprovider.Decode(data); err != nil {
-			return "还原内容不是当前 ZCode 版本可接受的 provider_config.json：" + err.Error()
+			return "还原内容不是当前 ZCode 版本可接受的 provider_config.json：" + err.Error(), nil
 		}
 	case FormatDeepSeek:
-		if isYAMLPath(point.TargetPath) {
-			var raw map[string]interface{}
-			if err := yaml.Unmarshal(bytes.TrimPrefix(data, []byte{0xEF, 0xBB, 0xBF}), &raw); err != nil {
-				return "还原内容不是合法的 YAML：" + err.Error()
-			}
-			return ""
+		// 与读取路径共用 parseDeepSeekConfigBytes：该函数内部用 isYAMLPath 判定格式，
+		// 因此 .yaml.bak_<ts> 这类还原内容不会被误当成 JSON。
+		if _, _, err := parseDeepSeekConfigBytes(data, point.TargetPath); err != nil {
+			return "还原内容无法作为当前 DSH 配置解析：" + err.Error(), nil
 		}
-		if _, err := parseJSONCObject(data); err != nil {
-			return "还原内容不是合法的 JSON 对象：" + err.Error()
+	case FormatOMP, FormatOMPConfig:
+		// omp 两个格式都只做「YAML 语法 + 根节点是 mapping」的宽松校验：omp 自己的 schema
+		// 演进很快，APM 不套 providers 之类的结构要求（G7），否则历史还原点会被误拒。
+		root, err := parseOMPRestoreYAML(data)
+		if err != nil {
+			return "还原内容不是合法的 YAML 对象：" + err.Error(), nil
+		}
+		if point.Format == FormatOMPConfig {
+			// 设置文件的硬校验：modelRoles 出现时必须是 mapping。这类内容写回去会让 omp
+			// 读不了设置文件，属于「历史还原点里出现 omp 读不了的设置」，必须中止回滚。
+			if value, ok := root["modelRoles"]; ok && value != nil {
+				if _, mapOK := value.(map[string]interface{}); !mapOK {
+					return "", fmt.Errorf("还原内容里的 modelRoles 不是对象（mapping），已取消回滚")
+				}
+			}
 		}
 	case FormatOpencode:
 		if _, err := parseJSONCObject(data); err != nil {
-			return "还原内容不是合法的 JSON 对象：" + err.Error()
+			return "还原内容不是合法的 JSON 对象：" + err.Error(), nil
 		}
 	default:
 		if _, err := parseJSONCObject(data); err != nil {
-			return "还原内容不是合法的 JSON 对象：" + err.Error()
+			return "还原内容不是合法的 JSON 对象：" + err.Error(), nil
 		}
 	}
-	return ""
+	return "", nil
+}
+
+// parseOMPRestoreYAML 解析 omp 的 YAML 还原内容；空内容视为空 mapping。
+// 只要求「YAML 合法 + 根节点是 mapping」，不套 APM 自己的 schema。
+func parseOMPRestoreYAML(data []byte) (map[string]interface{}, error) {
+	data = bytes.TrimPrefix(data, []byte{0xEF, 0xBB, 0xBF})
+	if strings.TrimSpace(string(data)) == "" {
+		return map[string]interface{}{}, nil
+	}
+	var root map[string]interface{}
+	if err := yaml.Unmarshal(data, &root); err != nil {
+		return nil, err
+	}
+	if root == nil {
+		return map[string]interface{}{}, nil
+	}
+	return root, nil
 }
 
 // parseJSONCObject 按旧版配置的宽松规则（允许注释与尾逗号）解析 JSON 对象。

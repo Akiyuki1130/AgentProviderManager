@@ -1,7 +1,7 @@
 <template>
   <div class="model-card" :class="{ expanded }">
     <div class="mc-top">
-      <label v-if="showSelect" class="check"><input type="checkbox" :checked="card.select" aria-label="选择该模型" @change="onSelectChange" /> <span class="check-mark" /></label>
+      <label v-if="showSelect" class="check"><input type="checkbox" :checked="card.select" :disabled="ro" aria-label="选择该模型" @change="onSelectChange" /> <span class="check-mark" /></label>
       <div class="mc-title" :title="expanded ? '收起' : '展开'" @click="toggleExpand">
         <span class="mc-name"><template v-for="(seg, si) in nameSegs" :key="si"><mark v-if="seg.hit">{{ seg.text }}</mark><span v-else>{{ seg.text }}</span></template></span>
         <span class="mc-id mono"><template v-for="(seg, si) in idSegs" :key="si"><mark v-if="seg.hit">{{ seg.text }}</mark><span v-else>{{ seg.text }}</span></template></span>
@@ -10,11 +10,11 @@
         <div v-if="!expanded" class="mc-quick">
           <div class="mc-field mc-field-sm">
             <label>上下文长度</label>
-            <input class="field field-sm tnum" :value="card.context" @input="onContextInput" placeholder="留空自动匹配" />
+            <input class="field field-sm tnum" :value="card.context" :disabled="ro" @input="onContextInput" placeholder="留空自动匹配" />
           </div>
           <div class="mc-field mc-field-sm">
             <label>输出长度</label>
-            <input class="field field-sm tnum" :value="card.output" @input="onOutputInput" placeholder="留空自动匹配" />
+            <input class="field field-sm tnum" :value="card.output" :disabled="ro" @input="onOutputInput" placeholder="留空自动匹配" />
           </div>
           <div class="mc-field mc-field-sm">
             <label>思考</label>
@@ -23,8 +23,8 @@
               :class="{ on: card.reasoning }"
               role="switch"
               :aria-checked="card.reasoning"
-              :aria-disabled="!canToggleReasoning"
-              :disabled="!canToggleReasoning"
+              :aria-disabled="!canToggleReasoning || ro"
+              :disabled="!canToggleReasoning || ro"
               :title="canToggleReasoning ? undefined : t('reasoning.noOffTitle', lang)"
               aria-label="思考"
               @click="toggleReasoning"
@@ -35,7 +35,7 @@
       <button class="mc-chevron" :class="{ open: expanded }" :title="expanded ? '收起' : '展开'" @click="toggleExpand">
         <n-icon :component="ChevronDown" :size="16" />
       </button>
-      <button class="mc-del" title="删除" @click="emit('delete')">
+      <button class="mc-del" :disabled="ro" :title="ro ? t('omp.readonlyNoSave', lang) : '删除'" @click="emit('delete')">
         <n-icon :component="CloseOutline" :size="16" />
       </button>
     </div>
@@ -46,7 +46,7 @@
           <div class="mc-params">
             <div class="mc-field span-2">
               <label>显示名称</label>
-              <input class="field" :value="card.name" @input="onNameInput" />
+              <input class="field" :value="card.name" :disabled="ro" @input="onNameInput" />
             </div>
             <div class="mc-field">
               <label>思考/推理</label>
@@ -56,8 +56,8 @@
                   :class="{ on: card.reasoning }"
                   role="switch"
                   :aria-checked="card.reasoning"
-                  :aria-disabled="!canToggleReasoning"
-                  :disabled="!canToggleReasoning"
+                  :aria-disabled="!canToggleReasoning || ro"
+                  :disabled="!canToggleReasoning || ro"
                   :title="canToggleReasoning ? undefined : t('reasoning.noOffTitle', lang)"
                   aria-label="思考/推理"
                   @click="toggleReasoning"
@@ -77,6 +77,7 @@
                     type="button"
                     class="pill"
                     :class="{ checked: (card.variants || []).includes(v), unsupported: !isSupported(v) }"
+                    :disabled="ro"
                     :title="isSupported(v) ? undefined : t('reasoning.supportedHint', lang)"
                     @click="toggleVariant(v)"
                   >
@@ -90,6 +91,7 @@
                   v-if="adoptableLevels"
                   type="button"
                   class="pill mc-adopt"
+                  :disabled="ro"
                   :title="t('level.adoptAria', lang).replace('{name}', card.name || card.model_id).replace('{levels}', adoptFromTooltip)"
                   :aria-label="t('level.adoptAria', lang).replace('{name}', card.name || card.model_id).replace('{levels}', adoptFromTooltip)"
                   @click="adoptLevels"
@@ -101,17 +103,19 @@
                   v-if="overwritableLevels"
                   type="button"
                   class="pill mc-adopt mc-adopt-danger"
+                  :disabled="ro"
                   :title="t('level.overwriteAria', lang).replace('{name}', card.name || card.model_id).replace('{levels}', overwriteRemovedLabel)"
                   :aria-label="t('level.overwriteAria', lang).replace('{name}', card.name || card.model_id).replace('{levels}', overwriteRemovedLabel)"
                   @click="overwriteInferred"
                 >{{ t('level.overwrite', lang) }}</button>
               </div>
               <!-- C2：允许自填档位时露出自由输入；失焦/回车把解析出的档位名并入集合（此处不做白名单过滤，后端依开关放宽校验） -->
-              <div v-if="settingStore.customVariants" class="mc-effort-row">
+              <div v-if="settingStore.customVariants && !isOmp" class="mc-effort-row">
                 <label>{{ t('reasoning.customLabel', lang) }}</label>
                 <input
                   v-model="customInput"
                   class="field mc-custom-input"
+                  :disabled="ro"
                   :maxlength="MAX_VARIANT_LEN"
                   :placeholder="t('reasoning.customPlaceholder', lang)"
                   @keydown.enter.prevent="commitCustomVariants"
@@ -120,22 +124,24 @@
               </div>
               <div class="mc-effort-row">
                 <label>{{ t('reasoning.defaultTierLabel', lang) }}</label>
-                <select class="field select-sm" :value="card.default_variant" @change="onDefaultChange">
+                <select class="field select-sm" :value="card.default_variant" :disabled="ro" @change="onDefaultChange">
                   <option value="">—</option>
                   <option v-for="v in variantOptions" :key="v" :value="v">{{ v }}</option>
                 </select>
                 <!-- ZCode 的 modelRule 没有「当前档位」字段：档位由 optionSpecs.reasoningLevel.map
                      在运行时求值，配置里只存可选集合与映射，默认档位无处落盘。DSH 有对应字段故有效。 -->
                 <span v-if="showZcodeNote" class="mc-effort-note">{{ t('reasoning.zcodeDefaultNote', lang) }}</span>
+                <!-- omp：没有 thinking 配置的模型，档位由 omp 自行推导，这里只是展示层记录 -->
+                <span v-if="isOmp" class="mc-effort-note">{{ t('omp.levelAutoNote', lang) }}</span>
               </div>
             </div>
             <div class="mc-field">
               <label>上下文长度 (tokens)</label>
-              <input class="field tnum" :value="card.context" @input="onContextInput" placeholder="留空自动匹配" />
+              <input class="field tnum" :value="card.context" :disabled="ro" @input="onContextInput" placeholder="留空自动匹配" />
             </div>
             <div class="mc-field">
               <label>输出长度 (tokens)</label>
-              <input class="field tnum" :value="card.output" @input="onOutputInput" placeholder="留空自动匹配" />
+              <input class="field tnum" :value="card.output" :disabled="ro" @input="onOutputInput" placeholder="留空自动匹配" />
             </div>
             <div class="mc-tip">提示：API 通常只返回模型 ID，以上参数已根据模型名自动推断。上下文与输出长度各自独立，填写即写入、留空不写入。</div>
             <!-- 阶段 E3「能力」区：harness 中立能力的唯一编辑入口，只读写 card.capabilities。
@@ -148,16 +154,18 @@
                      不承诺「取消勾选 = 告诉客户端不支持」——写端从不下发 false，那种承诺做不到。 -->
                 <span class="mc-caps-note">{{ t('cap.emptyHint', lang) }}</span>
                 <span v-if="inferredSourceLabel" class="mc-caps-note">{{ t('cap.sourceLabel', lang).replace('{source}', inferredSourceLabel) }}</span>
+                <span v-if="isOmp" class="mc-caps-note">{{ t('omp.capHint', lang) }}</span>
               </div>
               <div class="mc-caps-row">
                 <span class="mc-caps-label">{{ t('cap.input', lang) }}</span>
                 <div class="mc-effort-opts">
                   <button
-                    v-for="m in CAP_INPUT_MODALITIES"
+                    v-for="m in inputModalities"
                     :key="'in-' + m"
                     type="button"
                     class="pill"
                     :class="{ checked: hasModality('input', m), inferred: isInferredModality('input', m) }"
+                    :disabled="ro"
                     :aria-pressed="hasModality('input', m)"
                     :title="isInferredModality('input', m) ? t('cap.inferred', lang) : undefined"
                     @click="toggleModality('input', m)"
@@ -165,9 +173,9 @@
                     <span>{{ modalityLabel(m) }}</span>
                   </button>
                 </div>
-                <button v-if="adoptableCount('input') > 0" type="button" class="pill mc-adopt" @click="adoptModalities('input')">{{ t('cap.adopt', lang) }}</button>
+                <button v-if="adoptableCount('input') > 0" type="button" class="pill mc-adopt" :disabled="ro" @click="adoptModalities('input')">{{ t('cap.adopt', lang) }}</button>
               </div>
-              <div class="mc-caps-row">
+              <div v-if="!isOmp" class="mc-caps-row">
                 <span class="mc-caps-label">{{ t('cap.output', lang) }}</span>
                 <div class="mc-effort-opts">
                   <button
@@ -176,6 +184,7 @@
                     type="button"
                     class="pill"
                     :class="{ checked: hasModality('output', m), inferred: isInferredModality('output', m) }"
+                    :disabled="ro"
                     :aria-pressed="hasModality('output', m)"
                     :title="isInferredModality('output', m) ? t('cap.inferred', lang) : undefined"
                     @click="toggleModality('output', m)"
@@ -183,15 +192,15 @@
                     <span>{{ modalityLabel(m) }}</span>
                   </button>
                 </div>
-                <button v-if="adoptableCount('output') > 0" type="button" class="pill mc-adopt" @click="adoptModalities('output')">{{ t('cap.adopt', lang) }}</button>
+                <button v-if="adoptableCount('output') > 0" type="button" class="pill mc-adopt" :disabled="ro" @click="adoptModalities('output')">{{ t('cap.adopt', lang) }}</button>
               </div>
               <div class="mc-caps-block">
                 <span class="mc-caps-label">{{ t('cap.flags', lang) }}</span>
                 <div class="mc-caps-flags">
                   <!-- 自绘 .check（与卡片选择框同一控件体系）；勾选 = 写 true，取消 = 删键 -->
-                  <div v-for="f in CAP_FLAG_KEYS" :key="f" class="mc-caps-flag">
+                  <div v-for="f in visibleFlagKeys" :key="f" class="mc-caps-flag">
                     <label class="check mc-caps-flag-toggle">
-                      <input type="checkbox" :checked="flagValue(f)" :aria-label="flagLabel(f)" @change="onFlagChange(f, $event)" />
+                      <input type="checkbox" :checked="flagValue(f)" :disabled="ro" :aria-label="flagLabel(f)" @change="onFlagChange(f, $event)" />
                       <span class="check-mark" />
                       <span class="mc-caps-flag-name">{{ flagLabel(f) }}</span>
                     </label>
@@ -201,6 +210,7 @@
                       <button
                         type="button"
                         class="pill mc-adopt"
+                        :disabled="ro"
                         :title="t('cap.adoptAria', lang).replace('{name}', flagLabel(f))"
                         :aria-label="t('cap.adoptAria', lang).replace('{name}', flagLabel(f))"
                         @click="adoptFlag(f)"
@@ -227,14 +237,18 @@ import { useSettingStore } from '../stores/setting'
 import { uiConfirm } from '../stores/uiDialog'
 import { highlightSegments } from '../composables/useHighlight'
 import { t } from '../i18n'
-import { REASONING_VARIANTS, REASONING_VARIANTS_BASIC, MAX_VARIANT_LEN, canonicalVariant, pickDefaultVariant } from '../constants/variants'
+import { REASONING_VARIANTS, REASONING_VARIANTS_BASIC, OMP_REASONING_VARIANTS, MAX_VARIANT_LEN, canonicalVariant, pickDefaultVariant } from '../constants/variants'
 import { fillableLevels, overwriteLevels, applyLevels, joinLevels } from '../composables/useLevelFill'
 
-const props = defineProps<{ card: ModelCard; showSelect?: boolean; kind?: string; agent?: string; query?: string }>()
+// readonly：只读提供商（PI Agent 里由 extensions 等外部渠道注入的 provider）整体禁编辑，
+// 但仍可展开查看、可整体删除——保存通路已被外层拦死，这里只负责别让输入看起来可用。
+const props = defineProps<{ card: ModelCard; showSelect?: boolean; kind?: string; agent?: string; query?: string; readonly?: boolean }>()
 const emit = defineEmits<{ (e: 'delete'): void; (e: 'update'): void }>()
 const settingStore = useSettingStore()
 const lang = computed(() => settingStore.resolvedLang)
 
+// 只读：所有输入看起来就应不可用（保存通路另由外层拦死）
+const ro = computed(() => !!props.readonly)
 const expanded = ref(false)
 // C2：自填档位输入框内容（逗号或换行分隔），提交时解析并入 card.variants
 const customInput = ref('')
@@ -244,14 +258,20 @@ const idSegs = computed(() => highlightSegments(props.card.model_id, props.query
 // M3：展示子集 REASONING_VARIANTS（7 档）+ 当集合本身含 enabled 时并入 enabled，
 // 让 ["disabled","enabled"] / ["enabled"] 这类二值模型的 enabled 档可见、可编辑。
 // 来自单一真源 constants/variants.ts（DSH 与 ZCode 统一到同一展示集，不按 agent 分支）。
+// PI Agent（omp）只有六档强度：off 只表示「关闭思考」（thinking 键整体不写），
+// 自填档位与 enabled 等二值词在 omp 下没有写盘语义，因此档位全集按 harness 收口。
+const isOmp = computed(() => (props.agent || settingStore.agent) === 'omp')
 const baseOptions = computed<string[]>(() => {
+  if (isOmp.value) return [...OMP_REASONING_VARIANTS]
   const opts: string[] = [...REASONING_VARIANTS]
   if ((props.card.variants || []).includes('enabled') && !opts.includes('enabled')) opts.push('enabled')
   return opts
 })
-// C2：默认档位下拉/胶囊还要并入用户自填的、不在内建全集里的档位，让它们可选
+// C2：默认档位下拉/胶囊还要并入用户自填的、不在内建全集里的档位，让它们可选。
+// omp 不做这层并入：六档之外的档位写进去会被判非法档位。
 const variantOptions = computed<string[]>(() => {
   const opts = [...baseOptions.value]
+  if (isOmp.value) return opts
   for (const v of props.card.variants || []) if (!opts.includes(v)) opts.push(v)
   return opts
 })
@@ -272,6 +292,8 @@ const showSupportHint = computed(() => {
 // S1 配套：集合非空且不含 off 词（如 glm-5.3 = [low,high,max]、kimi-k2.7-code = [enabled]）
 // 的模型无法表达「关闭思考」，禁用开关。集合为空属未初始化的新模型，仍可正常切换。
 const canToggleReasoning = computed(() => {
+  // omp 的关闭思考是「不写 thinking 键」，不依赖 off 档位，因此永远可切换
+  if (isOmp.value) return true
   const v = props.card.variants
   return !v || v.length === 0 || v.includes('off')
 })
@@ -288,9 +310,9 @@ function toggleReasoning() {
   props.card.reasoning = !props.card.reasoning
   props.card._raw_reasoning_enabled = props.card.reasoning
   if (!props.card.reasoning) {
-    // S1：关闭思考 = 档位集合收敛为单元素 off 词 ["off"]（ZCode/DSH 都靠选中 off 档表达关闭）。
-    // 保留 _off_alias（写回时按原拼法落盘）与 default_variant 不动。
-    props.card.variants = ['off']
+    // omp：关闭思考 = 不写 thinking 键，因此把档位清空（绝不写 off 到 models.yml）
+    props.card.variants = isOmp.value ? [] : ['off']
+    // S1：ZCode/DSH 靠选中 off 档表达关闭；保留 _off_alias 与 default_variant 不动。
   } else {
     // S1：开启思考时，若集合不含非 off 档位（为空或仅 ["off"]），按「单模型思考默认全部强度」
     // 写入全部档位或基础三档兜底，并挑一个合理默认档位。
@@ -298,9 +320,12 @@ function toggleReasoning() {
     if (!cur.some((v) => v !== 'off')) {
       // C1：优先用后端推断的支持档位（非空）作为种子；为空才回退到「全集/基础三档」的既有行为。
       const supported = props.card._supported_levels
-      const next = supported && supported.length > 0
-        ? [...supported]
-        : (settingStore.reasoningAllIntensities ? [...REASONING_VARIANTS] : [...REASONING_VARIANTS_BASIC])
+      const supportedOmp = supported ? supported.filter((v) => (OMP_REASONING_VARIANTS as readonly string[]).includes(v)) : []
+      const next = isOmp.value
+        ? (supportedOmp.length > 0 ? supportedOmp : ['low', 'medium', 'high'])
+        : supported && supported.length > 0
+          ? [...supported]
+          : (settingStore.reasoningAllIntensities ? [...REASONING_VARIANTS] : [...REASONING_VARIANTS_BASIC])
       props.card.variants = next
       props.card.default_variant = pickDefaultVariant(next)
     }
@@ -325,7 +350,7 @@ function onDefaultChange(e: Event) { props.card.default_variant = (e.target as H
 // 还没有的档位时，返回「当前集合 ∪ 缺失档位」，否则 null——**只增不减，绝不删除已有档位**。
 // applyLevels 写 card.variants 并用 pickDefaultVariant 修正默认档位；这里再触发页面既有的
 // 更新 / 自动保存链路（与能力区 adopt* 同一口径）。
-const adoptableLevels = computed(() => fillableLevels(props.card))
+const adoptableLevels = computed(() => fillableLevels(props.card, isOmp.value))
 /** 采纳按钮悬浮提示里要列出的档位：本次会**新并入**的那些（不是整组目标集合）。 */
 const adoptFromTooltip = computed(() => {
   const target = adoptableLevels.value
@@ -345,7 +370,7 @@ function adoptLevels() {
  * 同时给两个按钮只会让人不知道点哪个；破坏性所以必须先过 uiConfirm，并列出将删除的档位名。
  */
 const overwritableLevels = computed<string[] | null>(() => {
-  const target = overwriteLevels(props.card)
+  const target = overwriteLevels(props.card, isOmp.value)
   if (!target) return null
   const cur = props.card.variants || []
   return cur.some((v) => !target.includes(v)) ? target : null
@@ -479,6 +504,15 @@ function adoptFlag(f: FlagKey) {
 
 function modalityLabel(m: string): string { return t(`cap.modal.${m}`, lang.value) }
 function flagLabel(f: FlagKey): string { return t(`cap.flag.${f}`, lang.value) }
+
+// PI Agent 的能力位是固定子集：输入只 text / image，没有输出模态，布尔位只有 tool_call。
+// 其余位在此不渲染也不写盘（写进去会被后端判非法键）。
+const inputModalities = computed<readonly string[]>(() =>
+  isOmp.value ? CAP_INPUT_MODALITIES.filter((m) => m === 'text' || m === 'image') : CAP_INPUT_MODALITIES,
+)
+const visibleFlagKeys = computed<readonly FlagKey[]>(() =>
+  isOmp.value ? CAP_FLAG_KEYS.filter((f) => f === 'tool_call') : CAP_FLAG_KEYS,
+)
 
 /** 推断来源只读展示（`_source` 由后端填，可能缺失）。 */
 const inferredSource = computed(() => {

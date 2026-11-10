@@ -98,7 +98,34 @@
       </div>
     </div>
 
-    <div class="fluent-card card-pad migrate-footer enter-stagger" :style="{ animationDelay: staggerMs(3) + 'ms' }">
+    <!-- 警告卡：静态 omp 说明、后端透出的源侧 warnings、不会迁移的字段、以及迁移结果里被跳过的 provider。
+         全部纯文本，零 emoji；分区标题复用 .warn-title -->
+    <div v-if="hasWarnings" class="fluent-card card-pad migrate-warn enter-stagger" :style="{ animationDelay: staggerMs(3) + 'ms' }">
+      <div class="warn-title">{{ t('migrate.warningsTitle', lang) }}</div>
+      <div v-if="ompWarning" class="warn-body">{{ ompWarning }}</div>
+      <div v-if="sideWarnings.length" class="warn-sub">
+        <div class="warn-title">{{ t('migrate.sideWarningsTitle', lang) }}</div>
+        <ul class="warn-list">
+          <li v-for="(w, i) in sideWarnings" :key="'w' + i">{{ w }}</li>
+        </ul>
+      </div>
+      <div v-if="droppedFields.length" class="warn-sub">
+        <div class="warn-title">{{ t('migrate.droppedTitle', lang) }}</div>
+        <div class="warn-body">{{ t('migrate.droppedHint', lang) }}</div>
+        <ul class="warn-list">
+          <li v-for="(f, i) in droppedFields" :key="'d' + i" class="mono">{{ f }}</li>
+        </ul>
+      </div>
+      <div v-if="skipped.length" class="warn-sub">
+        <div class="warn-title">{{ t('migrate.skippedTitle', lang) }}</div>
+        <div class="warn-body">{{ t('migrate.skippedCount', lang).replace('{n}', String(skipped.length)) }}</div>
+        <ul class="warn-list">
+          <li v-for="(s, i) in skipped" :key="'s' + i"><span class="mono">{{ s.id }}</span> — {{ s.reason }}</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="fluent-card card-pad migrate-footer enter-stagger" :style="{ animationDelay: staggerMs(4) + 'ms' }">
       <div class="footer-hint">{{ footerHint }}</div>
       <div class="footer-actions">
         <n-button type="primary" :disabled="selectedIds.length === 0 || sourceAgent === targetAgent" :loading="migrating" @click="doMigrate">{{ t('migrate.start', lang) }}</n-button>
@@ -120,15 +147,37 @@ import { staggerMs } from '../composables/useStagger'
 import * as api from '../api'
 
 type ProviderSummary = { id: string; name: string; kind: string; base_url: string; has_api_key: boolean; model_count: number }
-type Side = { agent: string; label: string; path: string; exists: boolean; error: string; providers: ProviderSummary[]; raw_text: string; format: string }
+// warnings / dropped_fields 由 core.MigrateSide 透出：omp 侧会列出「环境变量名 Key 不迁移」等提醒与丢弃字段。
+type Side = {
+  agent: string
+  label: string
+  path: string
+  exists: boolean
+  error: string
+  providers: ProviderSummary[]
+  raw_text: string
+  format: string
+  warnings?: string[]
+  dropped_fields?: string[]
+}
+type SkippedProvider = { id: string; reason: string }
 
 const settingStore = useSettingStore()
 const lang = computed(() => settingStore.resolvedLang)
 
+// 与 core.AllAgents() 同步：ZCode / DeepSeek Harness / PI Agent (oh-my-pi)。
+// 名称是产品名、不随界面语言变化；omp 的迁移限制见下方警告块。
 const agentOptions = [
   { label: 'ZCode', value: 'zcode' },
   { label: 'DeepSeek Harness', value: 'deepseek' },
+  { label: 'PI Agent (oh-my-pi)', value: 'omp' },
 ]
+// 迁移警告：只在涉及 PI Agent 的一侧出现，文案走 i18n 三语。
+const ompWarning = computed(() => {
+  const side = sourceAgent.value === 'omp' ? 'source' : targetAgent.value === 'omp' ? 'target' : ''
+  if (!side) return ''
+  return t(side === 'source' ? 'migrate.ompSourceWarn' : 'migrate.ompTargetWarn', lang.value)
+})
 
 const sourceAgent = ref('zcode')
 const targetAgent = ref('deepseek')
@@ -139,6 +188,10 @@ const previewError = ref('')
 const sourceSide = ref<Side>({ agent: 'zcode', label: 'ZCode', path: '', exists: false, error: '', providers: [], raw_text: '', format: 'json' })
 const targetSide = ref<Side>({ agent: 'deepseek', label: 'DeepSeek Harness', path: '', exists: false, error: '', providers: [], raw_text: '', format: 'json' })
 const selectedIds = ref<string[]>([])
+// 预览阶段透出的提醒与丢弃字段；迁移执行后被跳过的 provider 单独记录（成功后才清空）。
+const sideWarnings = ref<string[]>([])
+const droppedFields = ref<string[]>([])
+const skipped = ref<SkippedProvider[]>([])
 
 const sourceProviders = computed(() => sourceSide.value.providers || [])
 const targetProviders = computed(() => targetSide.value.providers || [])
@@ -147,6 +200,7 @@ const sourceLabel = computed(() => labelOf(sourceAgent.value))
 const targetLabel = computed(() => labelOf(targetAgent.value))
 const selectedSet = computed(() => new Set(selectedIds.value))
 const allSourceSelected = computed(() => sourceProviders.value.length > 0 && sourceProviders.value.every((p) => selectedSet.value.has(p.id)))
+const hasWarnings = computed(() => !!ompWarning.value || sideWarnings.value.length > 0 || droppedFields.value.length > 0 || skipped.value.length > 0)
 const footerHint = computed(() => t('migrate.footerHint', lang.value)
   .replace('{source}', sourceLabel.value)
   .replace('{count}', String(selectedIds.value.length))
@@ -155,7 +209,10 @@ const footerHint = computed(() => t('migrate.footerHint', lang.value)
 
 function labelOf(id: string) {
   const found = agentOptions.find((o) => o.value === id)
-  return found ? found.label : id
+  // 后端新增但前端还没列出的 Agent：回退到 i18n 名称，再回退 id（不再显示成空串）
+  if (found) return found.label
+  if (id === 'omp') return t('agent.omp', lang.value)
+  return id
 }
 function shortPath(p: string) {
   if (!p) return ''
@@ -205,6 +262,13 @@ async function doPreview() {
     const preview = res['preview'] as { source: Side; target: Side }
     sourceSide.value = preview.source || sourceSide.value
     targetSide.value = preview.target || targetSide.value
+    // 两侧提醒合并去重后统一展示：omp 作源/目标时的限制都可能影响本次迁移。
+    const warn = [...(sourceSide.value.warnings || []), ...(targetSide.value.warnings || [])]
+    sideWarnings.value = Array.from(new Set(warn.filter((w) => !!w)))
+    const dropped = [...(sourceSide.value.dropped_fields || []), ...(targetSide.value.dropped_fields || [])]
+    droppedFields.value = Array.from(new Set(dropped.filter((f) => !!f)))
+    // 重新预览说明目标状态可能已变，上一次的跳过清单不再可信
+    skipped.value = []
     // keep selection only for existing ids
     const valid = new Set(sourceSide.value.providers.map((p) => p.id))
     selectedIds.value = selectedIds.value.filter((id) => valid.has(id))
@@ -247,7 +311,10 @@ async function doMigrate() {
       .replace('{n}', String(res['migrated']))
       .replace('{target}', targetLabel.value)
       .replace('{mode}', t(mode.value === 'overwrite' ? 'migrate.modeOverwrite' : 'migrate.modeMerge', lang.value)))
+    // 目标只读、Key 不可迁移等条目会被后端跳过，必须显式列出而不是静默消失。
+    const sk = (res['skipped'] as SkippedProvider[] | undefined) || []
     await doPreview()
+    skipped.value = Array.isArray(sk) ? sk.filter((s) => s && s.id) : []
     window.dispatchEvent(new CustomEvent('agent-changed', { detail: targetAgent.value }))
   } catch (e) {
     toast('error', t('migrate.failed', lang.value), String(e))
@@ -301,6 +368,11 @@ onMounted(() => { void doPreview() })
 .empty-state { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 16px; color: var(--fluent-text-soft); text-align: center; border: 1px dashed var(--fluent-border); border-radius: 8px; }
 .empty-title { font-size: 12px; font-weight: 600; color: var(--fluent-text); }
 .empty-sub { font-size: 11px; }
+.migrate-warn { display: flex; flex-direction: column; gap: 6px; border-left: 3px solid var(--warn); }
+.warn-title { font-size: 12px; font-weight: 600; color: var(--warn); }
+.warn-body { font-size: 11px; line-height: 1.6; color: var(--fluent-text-soft); }
+.warn-sub { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+.warn-list { margin: 0; padding-left: 18px; font-size: 11px; line-height: 1.6; color: var(--fluent-text-soft); }
 .migrate-footer { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
 .footer-hint { font-size: 12px; color: var(--fluent-text-soft); }
 .footer-actions { display: flex; gap: 8px; }

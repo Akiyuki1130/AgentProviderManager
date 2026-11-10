@@ -65,10 +65,13 @@
           <label style="display:flex; gap:4px; align-items:center; font-size:11px; cursor:pointer"><input type="checkbox" v-model="showKey" /> {{ t('import.showKey', lang) }}</label>
           <n-button @click="showKeychainPicker = true"><template #icon><n-icon :component="KeyOutline" /></template>{{ t('import.fromKeychain', lang) }}</n-button>
         </div>
+        <!-- PI Agent 的 Key 直接明文落在 models.yml 里，导入前必须明确告知（不阻塞操作） -->
+        <div v-if="isOmp && apiKey.trim()" class="conn-warn">{{ t('import.ompPlaintextWarn', lang) }}</div>
         <label class="form-label">Provider ID</label>
         <n-input v-model:value="providerId" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" />
         <label class="form-label">{{ t('import.providerNameLabel', lang) }}</label>
-        <n-input v-model:value="providerName" :placeholder="t('import.providerNamePlaceholder', lang)" />
+        <n-input v-model:value="providerName" :disabled="isOmp" :placeholder="t('import.providerNamePlaceholder', lang)" />
+        <div v-if="isOmp" class="conn-warn">{{ t('import.ompNameReadonly', lang) }}</div>
       </div>
       <div class="fetch-row">
         <n-button type="primary" :loading="fetching" @click="onFetch"><template #icon><n-icon :component="SyncOutline" /></template>{{ t('btn.fetch', lang) }}</n-button>
@@ -190,6 +193,7 @@
           </label>
           <span class="batch-hint">{{ capOverwrite ? t('cap.batchHintOverwrite', lang) : t('cap.batchHint', lang) }}</span>
           <span v-if="!capOverwrite" class="batch-hint">{{ t('cap.batchArrayNote', lang) }}</span>
+          <span v-if="isOmp" class="batch-hint">{{ t('omp.capHint', lang) }}</span>
           <span class="batch-hint">{{ capSummary }}</span>
         </div>
       </div>
@@ -265,13 +269,15 @@ import { useVendorGroup, fetchVendorMeta } from '../composables/useVendorGroup'
 import { useCapabilityFill } from '../composables/useCapabilityFill'
 import { useLevelFill } from '../composables/useLevelFill'
 import type { ModelCard as Card, KeychainEntry, ProbeResult } from '../types'
-import { REASONING_VARIANTS, REASONING_VARIANTS_BASIC, pickDefaultVariant } from '../constants/variants'
+import { REASONING_VARIANTS, REASONING_VARIANTS_BASIC, OMP_REASONING_VARIANTS, pickDefaultVariant } from '../constants/variants'
 import { t } from '../i18n'
 import * as api from '../api'
 
 const settingStore = useSettingStore()
 const appStore = useAppStore()
 const lang = computed(() => settingStore.resolvedLang)
+// PI Agent（omp）：只有六档强度、API Key 明文写 models.yml、provider 显示名不落盘
+const isOmp = computed(() => settingStore.agent === 'omp')
 const baseUrl = ref('')
 const kind = ref('openai-compatible')
 const apiKey = ref('')
@@ -288,7 +294,7 @@ const importing = ref(false)
 const mergeChk = ref(true)
 const showKeychainPicker = ref(false)
 const manualRefreshInfo = ref<{ id: string; name: string } | null>(null)
-const variantOpts = REASONING_VARIANTS
+const variantOpts = computed<readonly string[]>(() => (isOmp.value ? OMP_REASONING_VARIANTS : REASONING_VARIANTS))
 const batchDefault = ref('')
 const batchContext = ref('')
 const batchOutput = ref('')
@@ -303,7 +309,7 @@ const kindOptions = computed(() => [
   { label: t('import.kindAnthropic', lang.value), value: 'anthropic' },
   { label: t('import.kindResponses', lang.value), value: 'responses' },
 ])
-const variantSelectOpts = computed(() => variantOpts.map((v) => ({ label: v, value: v })))
+const variantSelectOpts = computed(() => variantOpts.value.map((v) => ({ label: v, value: v })))
 // 阶段 D：厂商分组 + 筛选（与管理页共用 composable，纯展示、绝不写盘）。
 // 筛选属于「可见性」，因此参与 filteredCards，被筛掉的模型不进入批量作用域。
 const { groupOn: vendorGroupOn, filter: vendorFilter, label: vendorLabel, matches: vendorMatches, options: vendorOptions, groupCards } = useVendorGroup(() => cards.value, lang)
@@ -339,7 +345,8 @@ async function doFetch() {  fetching.value = true
   statusText.value = t('status.requesting', lang.value)
   statusKind.value = ''
   try {
-    const res = await api.FetchModels(baseUrl.value.trim(), apiKey.value.trim()) as Record<string, unknown>
+    // kind 让后端按目标协议解析模型清单（omp 的 openai-completions 等原生叫法由 api 层归一）
+    const res = await api.FetchModels(baseUrl.value.trim(), apiKey.value.trim(), { kind: kind.value }) as Record<string, unknown>
     if (!res['success']) { statusText.value = String(res['error'] || ''); statusKind.value = 'err'; toast('error', t('import.fetchFailed', lang.value), res['error'] as string); return }
     cards.value = (res['models'] as Card[]) || []
     statusText.value = t('import.fetchSuccess', lang.value).replace('{n}', String(res['count']))
@@ -442,7 +449,9 @@ function batchSelectAll(v: boolean) { for (const c of filteredCards.value) c.sel
 function batchToggleReasoning() {
   const next = !batchReasoning.value
   if (next) {
-    const onVariants = settingStore.reasoningAllIntensities ? [...REASONING_VARIANTS] : [...REASONING_VARIANTS_BASIC]
+    const onVariants = isOmp.value
+      ? [...OMP_REASONING_VARIANTS]
+      : settingStore.reasoningAllIntensities ? [...REASONING_VARIANTS] : [...REASONING_VARIANTS_BASIC]
     for (const c of filteredCards.value) {
       c.reasoning = true
       c._raw_reasoning_enabled = true
@@ -457,13 +466,14 @@ function batchToggleReasoning() {
     return
   }
   // S1：关闭思考 = 档位集合收敛为 ["off"]；集合不含 off 词的模型无法表达关闭，跳过并计数提示。
+  // omp 没有 off 档：关闭思考等于不写 thinking 键，因此清空档位集合、不做跳过判定。
   let skipped = 0
   for (const c of filteredCards.value) {
     const cur = c.variants || []
-    if (cur.length > 0 && !cur.includes('off')) { skipped++; continue }
+    if (!isOmp.value && cur.length > 0 && !cur.includes('off')) { skipped++; continue }
     c.reasoning = false
     c._raw_reasoning_enabled = false
-    c.variants = ['off']
+    c.variants = isOmp.value ? [] : ['off']
   }
   if (skipped > 0) toast('info', t('reasoning.batchSkipTitle', lang.value), t('reasoning.batchSkipBody', lang.value).replace('{n}', String(skipped)))
 }
@@ -472,7 +482,8 @@ function batchToggleReasoning() {
 function cardSupportsTier(c: Card, tier: string): boolean {
   const lv = c._supported_levels
   if (!lv || lv.length === 0) return true
-  if (!(REASONING_VARIANTS as readonly string[]).includes(tier)) return true
+  const domain: readonly string[] = isOmp.value ? OMP_REASONING_VARIANTS : REASONING_VARIANTS
+  if (!domain.includes(tier)) return true
   return lv.includes(tier)
 }
 // C3：当前可见模型是否「全部」不支持某档位（列表非空时才判定，避免空列表误标灰）
@@ -522,7 +533,7 @@ const {
   overwrite: capOverwrite,
   summary: capSummary,
   fill: onFillCapabilities,
-} = useCapabilityFill(() => filteredCards.value, lang)
+} = useCapabilityFill(() => filteredCards.value, lang, () => settingStore.agent)
 
 // ---- 阶段 F 修订：档位并入「推理档位」行 ----
 // 计数 / 并入 / 覆盖 / 确认 / 汇报都在 useLevelFill（两页同一实现）；作用域与其它批量行一致：
@@ -534,7 +545,7 @@ const {
   overwrite: levelOverwrite,
   summary: levelSummary,
   fill: onFillLevels,
-} = useLevelFill(() => filteredCards.value, lang)
+} = useLevelFill(() => filteredCards.value, lang, () => settingStore.agent)
 
 async function onAutoMatchLimits() {
   const list = filteredCards.value
@@ -734,6 +745,8 @@ async function loadZcodeFormatSections() {
 .batch-item { display: inline-flex; gap: 4px; align-items: center; font-size: 11px; }
 .batch-group-label { font-size: 11px; color: var(--fluent-text-soft); font-weight: 600; }
 .batch-hint { font-size: 10px; color: var(--fluent-text-soft); opacity: 0.75; }
+/* PI Agent 导入提示（明文 Key / 显示名不落盘）：跨满 .conn-grid 整行，弱提示不强占视觉 */
+.conn-warn { grid-column: 1 / -1; font-size: 11px; color: var(--warn); line-height: 1.5; }
 .list-scroll { display: flex; flex-direction: column; position: relative; }
 /* D10：fetching 期间覆盖旧列表的半透明遮罩；absolute 脱流 + pointer-events:none，不改变布局 */
 .fetch-overlay {

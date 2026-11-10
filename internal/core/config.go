@@ -14,7 +14,10 @@ import (
 	"time"
 
 	"agentprovidermanager/internal/dshprovider"
+	"agentprovidermanager/internal/ompprovider"
 	"agentprovidermanager/internal/zcodeprovider"
+
+	"gopkg.in/yaml.v3"
 )
 
 // LoadConfig loads a JSON/JSONC config file. Missing file returns empty map.
@@ -346,6 +349,10 @@ func FileFingerprint(path string) (string, error) {
 	return fmt.Sprintf("%d:%d:%s", stat.ModTime().UnixNano(), stat.Size(), hex.EncodeToString(h[:])), nil
 }
 
+// LoadConfigForRestore 按备份路径的格式选择解析器。isYAMLPath 会先剥离 .bak_<ts> /
+// .snapshot_<ts> 等固定词表后缀，所以 settings.yaml.bak_<ts> 与 settings.yaml 走同一条
+// YAML 分支；.json 系列备份也仍按 JSON 解析。恢复入口（RestoreBackup / RestoreLastBackup）
+// 与还原点校验（validateRestoreContent）共用这一处判定。
 func LoadConfigForRestore(path string) (map[string]interface{}, error) {
 	if isYAMLPath(path) {
 		return DeepSeekLoadConfig(path)
@@ -584,7 +591,8 @@ func DetectConfigLocations() []ConfigLocation {
 func DetectConfigLocationsForAgent(agentID string) []ConfigLocation {
 	var locations []ConfigLocation
 	seen := map[string]bool{}
-	add := func(label, path string) {
+	// needsMigration 只对 omp 的 models.json 位置为 true（G1）；其它 harness 恒为 false。
+	add := func(label, path string, needsMigration ...bool) {
 		if path == "" {
 			return
 		}
@@ -606,6 +614,7 @@ func DetectConfigLocationsForAgent(agentID string) []ConfigLocation {
 			}
 		}
 		loc := ConfigLocation{Label: label, Path: path, Exists: exists, Accessible: accessible, Error: errStr}
+		loc.NeedsMigration = exists && len(needsMigration) > 0 && needsMigration[0]
 		if exists && accessible {
 			summary := ConfigProviderSummaryForAgent(path, agentID)
 			loc.ProviderCount = len(summary.Providers)
@@ -622,7 +631,18 @@ func DetectConfigLocationsForAgent(agentID string) []ConfigLocation {
 		home, _ = os.UserHomeDir()
 	}
 	normAgent := NormalizeAgentID(agentID)
-	if normAgent == AgentDeepSeek {
+	if normAgent == AgentOMP {
+		// 计划 §4.4：只列实际存在的 models 文件；config.yml 永不出现在这里（G7）。
+		ompAddLocations(add)
+		if len(locations) == 0 {
+			// omp 尚未产生任何 models 文件时，仍给一个「尚不存在但可写」的候选，
+			// 与其它 agent 列出默认路径的口径一致；ModelsWritePath 在只有 models.json
+			// 时返回不可写（G1），因此这里不会诱导新建 .yml 去遮蔽 .json。
+			if path, writable := ompprovider.ModelsWritePath(""); writable {
+				add(ompDefaultModelsLabel(ompprovider.AgentDir("")), path)
+			}
+		}
+	} else if normAgent == AgentDeepSeek {
 		// 0.2：桌面端与 web profile 各自一个 patch；home 级 patch 优先级更高。
 		add("DeepSeek Harness 桌面端 profile（0.2）", DeepSeekDesktopProfilePatch())
 		add("DeepSeek Harness web profile（0.2）", DeepSeekWebProfilePatch())
@@ -639,6 +659,15 @@ func DetectConfigLocationsForAgent(agentID string) []ConfigLocation {
 	} else if normAgent == AgentOpenCode {
 		add("OpenCode 配置", OpencodeConfig())
 	} else if agentID == "" {
+		before := len(locations)
+		// 计划 §9.1：总览同样要能看到 omp；这里只报实际存在的 models 文件。
+		ompAddLocations(add)
+		if len(locations) == before {
+			// 一个 models 文件都没有时，仍给一个可写候选（与 omp 单 agent 分支同口径）。
+			if path, writable := ompprovider.ModelsWritePath(""); writable {
+				add(ompDefaultModelsLabel(ompprovider.AgentDir("")), path)
+			}
+		}
 		add("ZCode 全局配置", ZCodeConfig())
 		add("ZCode 新版配置", ZCodeProviderConfigPath())
 		add("ZCode 旧版配置位置", filepath.Join(home, ".zcode", "config.json"))
@@ -671,7 +700,21 @@ func ConfigProviderSummaryForAgent(path string, agentID string) ImportPreview {
 			normAgent = string(AgentDeepSeek)
 		} else if strings.Contains(low, "opencode") {
 			normAgent = string(AgentOpenCode)
+		} else {
+			// 计划 §9.1：总览（agentID 为空）同样按内容嗅探，否则 omp 的 models.yml
+			// 会被当成 ZCode JSON 解析而报错、显示 0 个 provider。
+			normAgent = sniffConfigAgent(path)
 		}
+	}
+	if AgentID(normAgent) == AgentOMP {
+		if IsOMPConfigFile(path) {
+			// G7：config.yml 不是 provider 文件，绝不能按 providers 解析。
+			return ImportPreview{Path: path, Exists: true, Error: "这是 omp 的设置文件（modelRoles 等），不是 provider 配置；请选择 models.yml"}
+		}
+		return ompProviderSummary(path)
+	}
+	if normAgent == "omp-config" {
+		return ImportPreview{Path: path, Exists: true, Error: "这是 omp 的设置文件（modelRoles 等），不是 provider 配置；请选择 models.yml"}
 	}
 	if normAgent == string(AgentDeepSeek) {
 		preview := DeepSeekImportPreview(path)
@@ -711,6 +754,159 @@ func v2ProviderImportPreview(path string, item ImportPreview) ImportPreview {
 	}
 	item.Providers = zcodeV2Store{}.List(cfg.Doc())
 	return item
+}
+
+// ompAddLocations 按计划 §4.4 的顺序枚举 omp 的 models 文件位置：
+// 默认 profile、命名 profile（按 profile 名排序）。
+// 每一项都只报告「实际存在的文件」，needsMigration 表示当前只有 models.json。
+func ompAddLocations(add func(label, path string, needsMigration ...bool)) {
+	if ompprovider.Home() == "" {
+		return
+	}
+	// 默认 profile 的目录必须与 omp 的读取语义同源：设置了 PI_CODING_AGENT_DIR 时
+	// omp 根本不读 <home>/agent，把它列成「默认 profile」会让用户去编辑一个死文件。
+	defaultDir := ompprovider.AgentDir("")
+	if path, exists, migration := ompModelsFileInDir(defaultDir); exists {
+		add(ompDefaultModelsLabel(defaultDir), path, migration)
+	}
+	for _, name := range ompprovider.Profiles() {
+		if path, exists, migration := ompModelsFileInDir(ompprovider.AgentDir(name)); exists {
+			add(fmt.Sprintf("PI Agent profile「%s」", name), path, migration)
+		}
+	}
+}
+
+// ompDefaultModelsLabel 说明默认 profile 位置的来源：PI_CODING_AGENT_DIR 生效时给出
+// 环境变量提示，避免用户以为自己在改 <home>/agent。
+func ompDefaultModelsLabel(defaultDir string) string {
+	override := strings.TrimSpace(os.Getenv("PI_CODING_AGENT_DIR"))
+	if override != "" && strings.EqualFold(filepath.Clean(override), filepath.Clean(defaultDir)) {
+		return "PI Agent 配置（PI_CODING_AGENT_DIR）"
+	}
+	return "PI Agent 配置（默认 profile）"
+}
+
+// ompModelsFileInDir 在指定目录里按 omp 的读取优先级找 models 文件：
+// .yml > .yaml > .json；只有 .json 时 exists=true 且 needsMigration=true（G1）。
+func ompModelsFileInDir(dir string) (path string, exists bool, needsMigration bool) {
+	if strings.TrimSpace(dir) == "" {
+		return "", false, false
+	}
+	for _, name := range []string{"models.yml", "models.yaml"} {
+		p := filepath.Join(dir, name)
+		if info, err := os.Stat(p); err == nil && !info.IsDir() {
+			return p, true, false
+		}
+	}
+	p := filepath.Join(dir, "models.json")
+	if info, err := os.Stat(p); err == nil && !info.IsDir() {
+		return p, true, true
+	}
+	return filepath.Join(dir, "models.yml"), false, false
+}
+
+// ompProviderSummary 用 ompprovider 的读侧 + omp_models.go 的只读判定生成位置列表摘要，
+// 保证列表里的 kind / 只读徽标与编辑器（OMPProviderView）完全同源。
+// 只有 models.json 时整份文件都是只读可见（G1）。
+func ompProviderSummary(path string) ImportPreview {
+	item := ImportPreview{Path: path, Exists: true}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		item.Error = ShortText(fmt.Sprintf("读取配置文件失败：%v", err), 200)
+		return item
+	}
+	migrationOnly := strings.EqualFold(filepath.Ext(path), ".json")
+	models, err := ompprovider.LoadModels(data)
+	if err != nil {
+		item.Error = ShortText(err.Error(), 200)
+		return item
+	}
+	providers, err := models.Providers()
+	if err != nil {
+		item.Error = ShortText(err.Error(), 200)
+		return item
+	}
+	ids := models.ProviderIDs()
+	sort.Strings(ids)
+	for _, id := range ids {
+		view := ompReadProvider(id, providers[id], "")
+		item.Providers = append(item.Providers, ProviderSummary{
+			ID:         id,
+			Name:       id,
+			Kind:       view.Kind,
+			BaseURL:    view.BaseURL,
+			HasAPIKey:  view.APIKeyRaw != "",
+			ModelCount: len(view.ModelIDs),
+			ReadOnly:   view.ReadOnly || migrationOnly,
+		})
+	}
+	return item
+}
+
+// IsOMPConfigFile 判定路径是否是 omp 的设置文件（config.yml / config.yaml）。
+// G7：它永远不能作为 provider 目标，app 层的 SetConfigPath / ChooseConfigFile 必须拒绝；
+// 判定同时要求文件确实位于 omp 目录（OMPHome / PI_CODING_AGENT_DIR），避免误伤其它
+// harness 里恰好叫 config.yml 的文件。
+func IsOMPConfigFile(path string) bool {
+	if strings.TrimSpace(path) == "" {
+		return false
+	}
+	switch strings.ToLower(filepath.Base(stripAuxSuffix(path))) {
+	case "config.yml", "config.yaml":
+	default:
+		return false
+	}
+	return ompPathOwned(path)
+}
+
+// ompPathOwned 判断路径是否位于 omp 的配置目录内。
+func ompPathOwned(path string) bool {
+	if ompprovider.IsUnderHome(path) {
+		return true
+	}
+	override := strings.TrimSpace(os.Getenv("PI_CODING_AGENT_DIR"))
+	if override == "" {
+		return false
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return false
+	}
+	dir, err := filepath.Abs(override)
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(filepath.Dir(abs), dir)
+}
+
+// sniffConfigAgent 按计划 §9.1 的内容顺序判定配置文件属于哪个 harness。
+// 返回 "" 表示不命中，调用方继续走既有的 ZCode 格式判定。
+func sniffConfigAgent(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	data = bytes.TrimPrefix(data, []byte{0xEF, 0xBB, 0xBF})
+	if strings.Contains(strings.ToLower(string(data)), "llm-pi-ai") {
+		return string(AgentDeepSeek)
+	}
+	owned := ompPathOwned(path)
+	if owned && IsOMPConfigFile(path) {
+		return "omp-config"
+	}
+	var root map[string]interface{}
+	if err := yaml.Unmarshal(data, &root); err != nil || root == nil {
+		return ""
+	}
+	// omp models 的根是 mapping 且带 providers 键（ZCode legacy 用单数 provider，
+	// ZCode v2 用 schemaVersion + config，都不会命中这里）。
+	if _, ok := root["providers"]; ok {
+		return string(AgentOMP)
+	}
+	if owned && root["modelRoles"] != nil {
+		return "omp-config"
+	}
+	return ""
 }
 
 func deepCopyValue(v interface{}) interface{} {

@@ -9,6 +9,14 @@
 // minimal 为合法独立档位（不再被折成 low）。
 export const REASONING_VARIANTS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
 
+// PI Agent（omp）的 six tiers：其 thinkingLevels 只有下面六档，没有 off / enabled。
+// omp 靠独立的「思考」开关表达关闭推理，因此卡片里不显示 off 胶囊，
+// 这六档之外的档位既不展示也不写盘（契约 §4.6）。顺序固定，胶囊与池排序都用它。
+export const OMP_REASONING_VARIANTS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
+// omp 模型在文件里可能只写 ["off"] + thinking 配置：卡片仍按六档展示（用 _supported_levels 弱化），
+// off 只作为「关闭」的 UI 语义存在，绝不作为强度档写盘。
+export const OMP_VARIANT_FULLSET = ['off', ...OMP_REASONING_VARIANTS] as const
+
 // 关闭「单模型思考默认全部强度」时写入的基础三档兜底。
 export const REASONING_VARIANTS_BASIC = ['off', 'high', 'max'] as const
 

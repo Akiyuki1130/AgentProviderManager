@@ -131,6 +131,13 @@ func (a *App) ExportBackup(opts map[string]interface{}) map[string]interface{} {
 	if err != nil {
 		return map[string]interface{}{"success": false, "error": core.ShortText(err.Error(), 300)}
 	}
+	// omp 的 provider 可能带 omp 私有结构（_raw_provider、!command 密钥引用、只读协议），
+	// 必须先投影成跨 Agent 安全的形状，再做 include_keys 的凭据剥离（计划 §7.4 / G12）。
+	// 被剔除的条目带中文原因回给前端展示，绝不静默丢弃。
+	ompSkipped := make([]core.OMPBackupSkip, 0)
+	if agent == string(core.AgentOMP) {
+		providers, ompSkipped = core.ProjectOMPBackupProviders(providers)
+	}
 	if !includeKeys {
 		providers = core.StripBackupKeys(providers)
 	}
@@ -146,7 +153,10 @@ func (a *App) ExportBackup(opts map[string]interface{}) map[string]interface{} {
 	if err := os.WriteFile(path, data, 0600); err != nil {
 		return map[string]interface{}{"success": false, "error": core.ShortText(err.Error(), 300)}
 	}
-	return map[string]interface{}{"success": true, "path": path, "provider_count": len(providers), "key_mode": keyMode, "include_keys": includeKeys}
+	return map[string]interface{}{
+		"success": true, "path": path, "provider_count": len(providers),
+		"key_mode": keyMode, "include_keys": includeKeys, "skipped": ompSkipped,
+	}
 }
 
 func (a *App) OpenBackupFile() map[string]interface{} {

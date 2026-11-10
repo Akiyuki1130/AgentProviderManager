@@ -15,8 +15,14 @@
       </template>
     </PageHeader>
 
-    <!-- ZCode 兼容性问题：issues 为空时不显示该卡片 -->
-    <div v-if="compatIssues.length > 0" class="fluent-card card-pad compat-card enter-stagger" :style="{ animationDelay: staggerMs(1) + 'ms' }">
+    <!-- PI Agent 提醒：models.yml 里 apiKey 是明文；默认模型在 config.yml，不随备份迁移 -->
+    <div v-if="isOmp" class="fluent-card card-pad rp-omp-note enter-stagger" :style="{ animationDelay: staggerMs(1) + 'ms' }">
+      <div class="rp-omp-title">{{ t('restorePoints.ompTitle', lang) }}</div>
+      <div class="rp-omp-body">{{ t('omp.exportNote', lang) }}</div>
+    </div>
+
+    <!-- ZCode 兼容性问题：issues 为空时不显示该卡片；仅 ZCode 目标才有该诊断 -->
+    <div v-if="!isOmp && compatIssues.length > 0" class="fluent-card card-pad compat-card enter-stagger" :style="{ animationDelay: staggerMs(1) + 'ms' }">
       <div class="compat-head">
         <n-icon :component="WarningOutline" :size="16" class="compat-icon" />
         <div class="card-title compat-title">{{ t('restorePoints.compatTitle', lang) }}</div>
@@ -84,7 +90,7 @@
                 {{ formatTime(p.created_at) }}
                 <div v-if="p.note" class="rp-note">{{ p.note }}</div>
               </td>
-              <td>{{ p.agent_label || p.agent_id || '—' }}</td>
+              <td>{{ agentLabelOf(p.agent_label || p.agent_id || '') }}</td>
               <td>
                 <span class="format-badge" :class="`format-badge--${p.format || 'unknown'}`">{{ formatLabel(p.format) }}</span>
               </td>
@@ -124,7 +130,7 @@
           {{ t('restorePoints.confirmOverwrite', lang) }}
         </div>
         <div class="rp-confirm-meta">
-          {{ formatTime(pending.created_at) }} · {{ pending.agent_label || pending.agent_id }} ·
+          {{ formatTime(pending.created_at) }} · {{ agentLabelOf(pending.agent_label || pending.agent_id || '') }} ·
           {{ formatLabel(pending.format) }} · {{ opLabel(pending.operation) }}
         </div>
       </div>
@@ -179,7 +185,15 @@
             <n-input v-model:value="exportPassword2" type="password" show-password-on="click" :placeholder="t('restorePoints.bkPasswordConfirm', lang)" />
           </div>
         </template>
+        <n-alert v-if="settingStore.agent === 'omp'" type="warning" size="small" :show-icon="false">{{ t('omp.exportNote', lang) }}</n-alert>
         <div v-if="exportError" class="bk-error">{{ exportError }}</div>
+        <div v-if="exportSkipped.length" class="bk-skipped">
+          <div class="bk-skipped-title">{{ t('restorePoints.exportSkippedTitle', lang) }}</div>
+          <div class="bk-skipped-count">{{ t('restorePoints.exportSkippedCount', lang).replace('{n}', String(exportSkipped.length)) }}</div>
+          <ul class="bk-skipped-list">
+            <li v-for="(s, i) in exportSkipped" :key="'sk' + i"><span class="mono">{{ s.id }}</span> — {{ s.reason }}</li>
+          </ul>
+        </div>
       </div>
       <template #footer>
         <div style="display: flex; justify-content: flex-end; gap: 8px">
@@ -208,7 +222,7 @@
         <div v-if="inspecting" class="bk-hint">{{ t('restorePoints.inspecting', lang) }}</div>
         <template v-else-if="inspect && !inspect.needs_password">
           <div class="bk-info">
-            <div class="bk-info-row"><span>{{ t('restorePoints.bkAgent', lang) }}</span><span>{{ inspect.agent_label || inspect.agent || '—' }}</span></div>
+            <div class="bk-info-row"><span>{{ t('restorePoints.bkAgent', lang) }}</span><span>{{ agentLabelOf(inspect.agent_label || inspect.agent || '') }}</span></div>
             <div class="bk-info-row"><span>{{ t('restorePoints.bkCreated', lang) }}</span><span>{{ formatTime(inspect.created_at || '') }}</span></div>
             <div class="bk-info-row"><span>{{ t('restorePoints.bkProviders', lang) }}</span><span>{{ inspect.provider_count ?? 0 }}</span></div>
             <div class="bk-info-row"><span>{{ t('restorePoints.bkKeyMode', lang) }}</span><span class="badge" :class="(inspect.include_keys && inspect.key_mode === 'plain') ? 'badge-warn' : 'badge-ok'">{{ keyModeLabel(inspect) }}</span></div>
@@ -286,6 +300,8 @@ const exportPassword2 = ref('')
 const showKeysWarn = ref(false)
 const exportProviders = ref<ProviderSummary[]>([])
 const exportSelected = ref<string[]>([])
+// 导出时被后端整条跳过的 provider（例如只读 provider 不导出），成功提示里必须显式列出。
+const exportSkipped = ref<{ id: string; reason: string }[]>([])
 const openingBackup = ref(false)
 const showImport = ref(false)
 const importing = ref(false)
@@ -296,7 +312,18 @@ const importPassword = ref('')
 const importError = ref('')
 const conflict = ref<'skip' | 'overwrite'>('skip')
 
-const KNOWN_OPS = ['save_provider', 'delete_provider', 'delete_model', 'import_legacy', 'import_provider', 'migrate', 'restore', 'manual']
+// PI Agent 的默认模型切换也会留还原点（set_default_model），单独给一行文案
+const KNOWN_OPS = ['save_provider', 'delete_provider', 'delete_model', 'import_legacy', 'import_provider', 'migrate', 'restore', 'set_default_model', 'manual']
+
+// PI Agent（omp）：没有 ZCode 兼容性诊断，也不复用 ZCode 的格式徽标
+const isOmp = computed(() => settingStore.agent === 'omp')
+const OMP_AGENT_LABEL = 'PI Agent (oh-my-pi)'
+function agentLabelOf(idOrLabel: string): string {
+  const v = (idOrLabel || '').trim()
+  if (!v) return '—'
+  if (v === 'omp') return OMP_AGENT_LABEL
+  return v
+}
 
 function toast(type: string, title: string, msg?: string) {
   const fn = (window as unknown as Record<string, unknown>)['__toast'] as ((t: string, title: string, msg?: string) => void) | undefined
@@ -313,6 +340,8 @@ function formatTime(iso: string): string {
 }
 
 function formatLabel(format: string): string {
+  if (format === 'omp') return t('restore.formatOmp', lang.value)
+  if (format === 'omp-config') return t('restore.formatOmpConfig', lang.value)
   if (format === 'v2') return t('restorePoints.formatV2', lang.value)
   if (format === 'legacy') return t('restorePoints.formatLegacy', lang.value)
   if (format === 'opencode') return t('restorePoints.formatOpencode', lang.value)
@@ -373,6 +402,12 @@ async function loadPoints() {
 
 // 兼容性检查只读且可能因文件不存在而无结果，失败时静默（不显示卡片）
 async function loadCompat() {
+  // ZCode 专属诊断：非 ZCode 目标直接跳过，避免桌面上出现无关的红色卡片
+  if (settingStore.agent !== 'zcode') {
+    compatIssues.value = []
+    compatPath.value = ''
+    return
+  }
   try {
     const res = await api.GetZCodeCompat()
     if (res && res.success) {
@@ -518,6 +553,7 @@ function openExport() {
     }
   } catch { /* 预设损坏则用默认值 */ }
   exportSelected.value = []
+  exportSkipped.value = []
   exportPassword.value = ''
   exportPassword2.value = ''
   showExport.value = true
@@ -575,9 +611,17 @@ async function runExport() {
       return
     }
     try { localStorage.setItem(EXPORT_PREF_KEY, JSON.stringify({ scope: exportScope.value, keys: exportKeys.value, mode: exportMode.value })) } catch { /* ignore */ }
+    const skipped = (res.skipped || []).filter((s) => s && s.id)
+    exportSkipped.value = skipped
     toast('success', t('restorePoints.exportTitle', lang.value),
       t('restorePoints.exportResult', lang.value).replace('{n}', String(res.provider_count ?? ids.length)).replace('{path}', basename(pick.path || '')))
-    showExport.value = false
+    if (skipped.length > 0) {
+      // 有跳过项时保留弹窗，让用户能逐条读到原因（弹窗内 .bk-skipped 区块）
+      toast('warning', t('restorePoints.exportSkippedTitle', lang.value),
+        t('restorePoints.exportSkippedCount', lang.value).replace('{n}', String(skipped.length)))
+    } else {
+      showExport.value = false
+    }
     exportPassword.value = ''
     exportPassword2.value = ''
   } catch (e) {
@@ -713,6 +757,7 @@ onMounted(async () => {
 .format-badge--v2 { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, transparent); background: var(--ok-soft); }
 .format-badge--legacy { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, transparent); background: var(--warn-soft); }
 .format-badge--opencode { color: var(--accent, #0078d4); border-color: color-mix(in srgb, var(--accent, #0078d4) 40%, transparent); background: color-mix(in srgb, var(--accent, #0078d4) 10%, transparent); }
+.format-badge--omp { color: #0d9488; border-color: color-mix(in srgb, #0d9488 40%, transparent); background: color-mix(in srgb, #0d9488 10%, transparent); }
 .format-badge--deepseek { color: #8a5cf6; border-color: color-mix(in srgb, #8a5cf6 40%, transparent); background: color-mix(in srgb, #8a5cf6 10%, transparent); }
 .format-badge--unknown { color: var(--fluent-text-soft); }
 .compat-card {
@@ -733,6 +778,9 @@ onMounted(async () => {
 .rp-confirm-path { word-break: break-all; }
 .rp-confirm-warn { font-size: 12px; color: var(--warn); }
 .rp-confirm-meta { font-size: 11px; color: var(--fluent-text-soft); }
+.rp-omp-note { display: flex; flex-direction: column; gap: 4px; border-left: 3px solid var(--warn); }
+.rp-omp-title { font-size: 12px; font-weight: 600; color: var(--warn); }
+.rp-omp-body { font-size: 11px; line-height: 1.6; color: var(--fluent-text-soft); }
 .bk-form { display: flex; flex-direction: column; gap: 10px; font-size: 12px; }
 .bk-label { font-size: 12px; color: var(--fluent-text-soft); }
 .bk-hint { font-size: 12px; color: var(--fluent-text-soft); }
@@ -750,4 +798,8 @@ onMounted(async () => {
 .bk-pw { display: flex; flex-direction: column; gap: 8px; }
 .bk-warn-body { font-size: 13px; line-height: 1.6; color: var(--fluent-text); }
 .bk-error { color: var(--err); font-size: 12px; white-space: pre-line; }
+.bk-skipped { display: flex; flex-direction: column; gap: 4px; border: 1px solid color-mix(in srgb, var(--warn) 30%, transparent); background: var(--warn-soft, color-mix(in srgb, var(--warn) 10%, transparent)); border-radius: 8px; padding: 8px 10px; }
+.bk-skipped-title { font-size: 12px; font-weight: 600; color: var(--warn); }
+.bk-skipped-count { font-size: 11px; color: var(--fluent-text-soft); }
+.bk-skipped-list { margin: 0; padding-left: 18px; font-size: 11px; line-height: 1.6; color: var(--fluent-text-soft); word-break: break-all; }
 </style>

@@ -67,6 +67,10 @@ type ProviderSummary struct {
 	BaseURL    string `json:"base_url"`
 	HasAPIKey  bool   `json:"has_api_key"`
 	ModelCount int    `json:"model_count"`
+	// ReadOnly 与 ProviderEdit.ReadOnly 同源：omp 侧只读的 provider（协议不可建模、
+	// 缺 baseUrl、只有 models.json 未迁移等）在列表里就要能画出只读徽标，不必等详情。
+	// 其它 harness 恒为 false。
+	ReadOnly bool `json:"read_only"`
 }
 
 // ProviderEdit mirrors the editor provider object.
@@ -80,6 +84,14 @@ type ProviderEdit struct {
 	OptionsJSON    string                 `json:"options_json"`
 	Cards          []ModelCard            `json:"cards"`
 	RawProvider    map[string]interface{} `json:"_raw_provider,omitempty"`
+	// 以下四个字段是 omp 专用只读信息。其它 harness 不填，omitempty 保证现有载荷不变。
+	// ReadOnly 为 true 时后端仍允许整体删除，但拒绝保存 / 部分写（见计划 §4.7）。
+	ReadOnly       bool   `json:"read_only,omitempty"`
+	ReadOnlyReason string `json:"read_only_reason,omitempty"`
+	// APIKeyKind 区分 omp 的 apiKey 三种形态：literal | env | command | none。
+	APIKeyKind string `json:"api_key_kind,omitempty"`
+	// RawAPI 是 omp 原始 api 值，只在协议不可建模（只读）时用于展示。
+	RawAPI string `json:"raw_api,omitempty"`
 }
 
 // OpencodePreview mirrors opencode_import_preview.
@@ -99,6 +111,9 @@ type ConfigLocation struct {
 	Error         string   `json:"error"`
 	ProviderCount int      `json:"provider_count"`
 	ProviderIDs   []string `json:"provider_ids"`
+	// NeedsMigration 只对 omp 的 models.json 为 true：该文件只能只读解析，
+	// 写盘前必须让 omp 自己迁移成 models.yml（G1）。其它 harness 恒为 false。
+	NeedsMigration bool `json:"needs_migration"`
 }
 
 // KeychainEntry mirrors a keychain entry.
@@ -115,4 +130,13 @@ type KeychainEntry struct {
 type FetchResult struct {
 	Models []ModelCard `json:"models"`
 	Count  int         `json:"count"`
+}
+
+// StripAPMInternalModelKeys 导出 cards.go 里 stripAPMInternalModelKeys 的可见性包装，
+// 供 app 层没有 backend 的兜底写盘路径（TODO #21：CardsToCfgMap + MergeProviderIntoConfig
+// + WriteConfig）在落盘前剥掉 _raw_cfg / _off_alias / _vendor / _supported_levels /
+// _apm_capabilities 等 APM 内部键。唯一实现仍在 cards.go，这里不得复制逻辑。
+// 支持的入参形状与 cards.go 一致：单 provider 配置 {models:{...}} 或整份文档 {provider:{...}}。
+func StripAPMInternalModelKeys(providerCfg map[string]interface{}) {
+	stripAPMInternalModelKeys(providerCfg)
 }

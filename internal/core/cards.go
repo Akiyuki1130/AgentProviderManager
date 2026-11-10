@@ -523,7 +523,9 @@ func CfgToCardForSite(modelID string, modelCfg map[string]interface{}, baseURL, 
 					offAlias = offAliasFromVariant(key)
 				}
 				key = canonicalVariant(key)
-				if (CustomVariantsAllowed() || ZCodeVariantSet[key]) && !containsStr(variants, key) {
+				// 读侧与写侧同一门控（variantAllowed）：开关打开时只做归一/去重/限长，
+				// 不再丢弃白名单外的档位名，否则「自填档位」保存→重读就会整组消失。
+				if variantAllowed(key) && !containsStr(variants, key) {
 					variants = append(variants, key)
 				}
 			}
@@ -538,7 +540,8 @@ func CfgToCardForSite(modelID string, modelCfg map[string]interface{}, baseURL, 
 				}
 				key = canonicalVariant(key)
 				if key == "off" || value != nil {
-					if (CustomVariantsAllowed() || ZCodeVariantSet[key]) && !containsStr(variants, key) {
+					// 同上一处：读侧复用 variantAllowed，与写侧对称。
+					if variantAllowed(key) && !containsStr(variants, key) {
 						variants = append(variants, key)
 					}
 				}

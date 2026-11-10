@@ -110,10 +110,10 @@ func (a *App) loadAgentState() {
 	// DSH settings.yaml）而新版/0.2 文件确实存在时，改为新版路径并持久化。
 	//
 	// 运行期间用户显式选择的文件（SetConfigPath / ChooseConfigFile 直接写 agentPaths）
-	// 不会被覆盖，因此这里也只处理“启动时读到的历史路径”。两个 Agent 都升级，
+	// 不会被覆盖，因此这里也只处理“启动时读到的历史路径”。三个 Agent 都升级，
 	// 而不是只升级当前 Agent，否则跨 Agent 迁移仍可能写进 DSH 0.2 根本不读的 settings.yaml。
 	updated := false
-	for _, agentID := range []core.AgentID{core.AgentZCode, core.AgentDeepSeek} {
+	for _, agentID := range []core.AgentID{core.AgentZCode, core.AgentDeepSeek, core.AgentOMP} {
 		key := agentID.String()
 		if preferred := preferModernConfigPath(key, paths[key]); preferred != paths[key] {
 			paths[key] = preferred
@@ -161,6 +161,10 @@ func preferModernConfigPath(agentID, stored string) string {
 				return preferred
 			}
 		}
+	case core.AgentOMP:
+		// omp 只在“存量的 models.json 且确实存在可写的 models.yml”时升级；
+		// 其它路径是用户显式选择的，启动阶段不得改写。
+		return preferOMPModelsPath(stored)
 	}
 	return stored
 }
@@ -176,6 +180,8 @@ func defaultPathForAgent(agentID string) string {
 		return core.ZCodeDefaultPath()
 	case core.AgentDeepSeek:
 		return core.DeepSeekDefaultPath()
+	case core.AgentOMP:
+		return ompDefaultTargetPath()
 	default:
 		return core.AgentDefaultPath(core.NormalizeAgentID(agentID))
 	}
@@ -487,6 +493,10 @@ func (a *App) ChooseConfigFile() map[string]interface{} {
 	if _, err := os.Stat(result); err != nil {
 		return map[string]interface{}{"success": false, "path": "", "error": "请选择有效的配置文件"}
 	}
+	// G7：omp 的 config.yml 只承载默认模型，绝不是 provider 目标；提前给出可操作的中文提示。
+	if err := guardedTargetPath(a.currentAgent, result); err != nil {
+		return map[string]interface{}{"success": false, "path": "", "error": err.Error()}
+	}
 	if _, err := loadConfigForAgent(result, a.currentAgent); err != nil {
 		return map[string]interface{}{"success": false, "path": "", "error": err.Error()}
 	}
@@ -534,6 +544,11 @@ func (a *App) SetConfigPath(path string) map[string]interface{} {
 		if d, err := filepath.Abs(a.lastDialogPath); err == nil && strings.ToLower(d) == norm {
 			allowed = true
 		}
+	}
+	// G7：omp 的 config.yml 不在已探测位置里，lastDialogPath 兜底也可能把它放进来，
+	// 这里同样拒绝并给专用提示，避免用户以为文件损坏。
+	if err := guardedTargetPath(a.currentAgent, path); err != nil {
+		return map[string]interface{}{"success": false, "error": err.Error()}
 	}
 	if !allowed {
 		return map[string]interface{}{"success": false, "error": "该路径不在已探测的配置位置中，请通过「浏览」选择配置文件"}
@@ -1078,6 +1093,22 @@ func (a *App) SaveProvider(providerID string, provider map[string]interface{}) m
 		if existing, gerr := store.Get(doc, newID); gerr == nil && existing != nil && newID != providerID {
 			return map[string]interface{}{"success": false, "error": fmt.Sprintf("提供商「%s」已存在", newID)}
 		}
+		// 只读提供商（例如 omp 里 api 不属于三种主流协议的条目）允许整体删除，但禁止保存。
+		// store.Upsert 内部也会兜底拒绝，这里先给出可读的中文原因（计划 §4.7）。
+		for _, key := range []string{providerID, newID} {
+			if key == "" {
+				continue
+			}
+			existing, gerr := store.Get(doc, key)
+			if gerr != nil || existing == nil || !existing.ReadOnly {
+				continue
+			}
+			msg := "该提供商为只读，无法保存"
+			if reason := strings.TrimSpace(existing.ReadOnlyReason); reason != "" {
+				msg += "：" + reason
+			}
+			return map[string]interface{}{"success": false, "error": core.ShortText(msg, 300), "error_code": "READ_ONLY"}
+		}
 		incomingModels, _ := providerCfg["models"].(map[string]interface{})
 		if len(incomingModels) == 0 {
 			for _, key := range []string{newID, providerID} {
@@ -1171,6 +1202,10 @@ func (a *App) SaveProvider(providerID string, provider map[string]interface{}) m
 		return errResp
 	}
 	bak := snapshot.BackupPath
+	// 兜底路径没有 backend 的文档变换，写盘前必须自己剥掉 APM 内部键
+	// （_raw_cfg / _off_alias / _vendor / _supported_levels / _apm_capabilities），
+	// 否则它们会随 CardsToCfgMap 的产物永久落进用户配置（TODO.md #21）。
+	core.StripAPMInternalModelKeys(providerCfg)
 	merged, mergeErr := core.MergeProviderIntoConfig(config, newID, providerCfg, false)
 	if mergeErr != nil {
 		return map[string]interface{}{"success": false, "error": fmt.Sprintf("写入配置文件时出错：\n%s", core.ShortText(mergeErr.Error(), 300))}
@@ -1337,6 +1372,9 @@ func (a *App) loadLegacyImportPreview() (core.LegacyImportPreview, error) {
 // GetZCodeFormat 返回当前 ZCode 配置格式（v2 / legacy / unknown）与判定路径。
 // supports_legacy_import 为真表示：当前是 v2、旧版 config.json 存在且尚有未导入的供应商。
 func (a *App) GetZCodeFormat() map[string]interface{} {
+	if g := zcodeOnlyGuard(a.currentAgent); g != nil {
+		return g
+	}
 	path := a.zcodeFormatTargetPath()
 	format := core.DetectZCodeFormatAt(path)
 	supports := false
@@ -1360,6 +1398,9 @@ func (a *App) GetZCodeFormat() map[string]interface{} {
 func (a *App) GetZCodeCompat() map[string]interface{} {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if g := zcodeOnlyGuard(a.currentAgent); g != nil {
+		return g
+	}
 	report := core.InspectZCodeCompat(a.zcodeFormatTargetPath())
 	return map[string]interface{}{
 		"success": true,
@@ -1373,6 +1414,9 @@ func (a *App) GetZCodeCompat() map[string]interface{} {
 func (a *App) RepairZCodeCompat() map[string]interface{} {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if g := zcodeOnlyGuard(a.currentAgent); g != nil {
+		return g
+	}
 	target := a.zcodeFormatTargetPath()
 	if target == "" {
 		return map[string]interface{}{"success": false, "error": "请先选择目标配置文件"}
@@ -1394,6 +1438,9 @@ func (a *App) RepairZCodeCompat() map[string]interface{} {
 
 // PreviewLegacyImport 预览旧版 config.json 中可导入新版的供应商，以及转换会丢掉的字段。
 func (a *App) PreviewLegacyImport() map[string]interface{} {
+	if g := zcodeOnlyGuard(a.currentAgent); g != nil {
+		return g
+	}
 	if !core.IsZCodeV2Path(a.zcodeFormatTargetPath()) {
 		return map[string]interface{}{"success": false, "error": "当前不是新版配置格式（provider_config.json），无法导入旧供应商"}
 	}
@@ -1411,6 +1458,9 @@ func (a *App) PreviewLegacyImport() map[string]interface{} {
 // ApplyLegacyImport 把选中的旧供应商一次性导入新版配置。
 // 写盘前会备份目标新版文件，返回值里带上备份路径。旧版 config.json 不会被修改。
 func (a *App) ApplyLegacyImport(ids []string) map[string]interface{} {
+	if g := zcodeOnlyGuard(a.currentAgent); g != nil {
+		return g
+	}
 	if len(ids) == 0 {
 		return map[string]interface{}{"success": false, "error": "请至少选择一个提供商"}
 	}
@@ -1442,17 +1492,21 @@ func (a *App) ApplyLegacyImport(ids []string) map[string]interface{} {
 	}
 }
 
-func (a *App) FetchModels(baseURL, apiKey string) map[string]interface{} {
-	raw, err := core.FetchModelsRaw(baseURL, apiKey, 40*1e9)
+// FetchModels 拉取某个 Base URL 的模型列表。
+//
+// opts 可为 nil，键：headers(map[string]string) / kind(string) / auth_header(bool)。
+// kind 决定站点规则使用的协议类型：缺省或无法识别时 apiType 为空串，限定 apiType 的
+// 站点规则会被跳过（fail-closed），而不是按 baseURL 猜一个。
+func (a *App) FetchModels(baseURL, apiKey string, opts map[string]interface{}) map[string]interface{} {
+	fetchOpt, apiType := fetchOptionsFromMap(opts)
+	raw, err := core.FetchModelsWithOptions(baseURL, apiKey, fetchOpt, 40*1e9)
 	if err != nil {
 		if mfe, ok := err.(*core.ModelFetchError); ok {
 			return map[string]interface{}{"success": false, "error": mfe.Msg, "error_code": mfe.ErrorCode}
 		}
 		return map[string]interface{}{"success": false, "error": core.ShortText(err.Error(), 300), "error_code": "OTHER"}
 	}
-	cards := core.BuildModelCardsForSite(raw, a.autoFillLimits(), baseURL, "")
-	// apiType 只传空串：/models 请求本身只带 baseURL 与 apiKey，协议类型无从得知；
-	// 限定 apiType 的站点规则会被跳过（fail-closed），而不是按 baseURL 猜一个。
+	cards := core.BuildModelCardsForSite(raw, a.autoFillLimits(), baseURL, apiType)
 	if len(cards) == 0 {
 		return map[string]interface{}{"success": false, "error": "API 返回了空模型列表"}
 	}
@@ -1493,7 +1547,7 @@ func (a *App) RefreshProviderModels(providerID, baseURLOverride, apiKeyOverride 
 		if baseURL == "" {
 			return map[string]interface{}{"success": false, "error": "该提供商未配置 Base URL，请先在管理页填写"}
 		}
-		return a.FetchModels(baseURL, apiKey)
+		return a.FetchModels(baseURL, apiKey, providerRequestOptions(edit, agent))
 	}
 	cfg, err := core.LoadConfig(target)
 	if err != nil {
@@ -1518,7 +1572,7 @@ func (a *App) RefreshProviderModels(providerID, baseURLOverride, apiKeyOverride 
 	if baseURL == "" {
 		return map[string]interface{}{"success": false, "error": "该提供商未配置 Base URL，请先在管理页填写"}
 	}
-	return a.FetchModels(baseURL, apiKey)
+	return a.FetchModels(baseURL, apiKey, providerRequestOptions(provider, agent))
 }
 
 func (a *App) BuildSingleCard(modelID string) map[string]interface{} {
@@ -1687,6 +1741,8 @@ func (a *App) ImportProvider(payload map[string]interface{}) map[string]interfac
 		return errResp
 	}
 	bak := snapshot.BackupPath
+	// 同 SaveProvider 的兜底分支：没有 backend 时由这里剥掉 APM 内部键再合并（TODO.md #21）。
+	core.StripAPMInternalModelKeys(providerCfg)
 	merged, err := core.MergeProviderIntoConfig(existing, pid, providerCfg, mergeModels)
 	if err != nil {
 		return map[string]interface{}{"success": false, "error": err.Error()}
@@ -1734,6 +1790,10 @@ func (a *App) ChooseOpencodeFile() map[string]interface{} {
 }
 
 func (a *App) ImportOpencode(payload map[string]interface{}) map[string]interface{} {
+	// omp 没有 OpenCode 导入的语义，先给出确定的中文原因，不再解析 payload。
+	if isOMPAgent(a.currentAgent) {
+		return map[string]interface{}{"success": false, "error": "当前 Agent 为 omp，请直接在管理页保存提供商", "error_code": "WRONG_AGENT"}
+	}
 	if payload == nil {
 		return map[string]interface{}{"success": false, "error": "参数格式错误"}
 	}
@@ -1802,26 +1862,17 @@ func (a *App) ImportOpencode(payload map[string]interface{}) map[string]interfac
 
 // Config merge
 
-// configFileAgent 判定一份配置文件属于哪个 Agent，并返回其格式名。
-// 只按文件内容判定，供“选择一份配置文件合并进当前 Agent”的入口使用。
-func configFileAgent(path string) (string, string) {
-	if format := core.DeepSeekFormatName(core.DetectDeepSeekFormatAt(path)); format != "unknown" {
-		return string(core.AgentDeepSeek), format
-	}
-	if format := core.AgentFormatName(string(core.AgentZCode), path); format != "unknown" {
-		return string(core.AgentZCode), format
-	}
-	return "", ""
-}
-
 // PreviewConfigMerge 预览任意受支持的配置文件里可合并的供应商。
 func (a *App) PreviewConfigMerge(path string) map[string]interface{} {
 	if strings.TrimSpace(path) == "" {
 		return map[string]interface{}{"success": false, "error": "请先选择要合并的配置文件"}
 	}
-	agent, format := configFileAgent(path)
+	agent, format, reason := configFileAgentDetail(path)
 	if agent == "" {
-		return map[string]interface{}{"success": false, "error": "无法识别该配置文件的格式（支持 ZCode 与 DeepSeek Harness 的配置文件）"}
+		if reason != "" {
+			return map[string]interface{}{"success": false, "error": core.ShortText(reason, 300)}
+		}
+		return map[string]interface{}{"success": false, "error": "无法识别该配置文件的格式（支持 ZCode、DeepSeek Harness 与 omp 的配置文件）"}
 	}
 	item := core.ConfigProviderSummaryForAgent(path, agent)
 	return map[string]interface{}{"success": true, "path": item.Path, "exists": item.Exists, "error": item.Error, "providers": item.Providers, "agent": agent, "format": format}
@@ -1843,13 +1894,17 @@ func (a *App) ChooseMergeFile() map[string]interface{} {
 	if _, osErr := os.Stat(result); osErr != nil {
 		return map[string]interface{}{"success": false, "path": "", "error": "请选择有效的配置文件"}
 	}
-	if agent, _ := configFileAgent(result); agent == "" {
-		return map[string]interface{}{"success": false, "path": "", "error": "无法识别该配置文件的格式（支持 ZCode 与 DeepSeek Harness 的配置文件）"}
+	agent, _, reason := configFileAgentDetail(result)
+	if agent == "" {
+		if reason != "" {
+			return map[string]interface{}{"success": false, "path": "", "error": core.ShortText(reason, 300)}
+		}
+		return map[string]interface{}{"success": false, "path": "", "error": "无法识别该配置文件的格式（支持 ZCode、DeepSeek Harness 与 omp 的配置文件）"}
 	}
 	return map[string]interface{}{"success": true, "path": result}
 }
 
-// MergeConfig 把另一份配置文件（ZCode 或 DeepSeek Harness）里选中的供应商合并进当前 Agent。
+// MergeConfig 把另一份配置文件（ZCode、DeepSeek Harness 或 omp）里选中的供应商合并进当前 Agent。
 //
 // 旧实现只认 ZCode 旧版的顶层 provider 映射，并且当前 Agent 是 DeepSeek 时直接拒绝；
 // 这里改成与其它写路径一致：源、目标都通过 config backend 读取与写入，因此
@@ -1876,9 +1931,12 @@ func (a *App) MergeConfig(payload map[string]interface{}) map[string]interface{}
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return map[string]interface{}{"success": false, "error": "源配置文件不存在"}
 	}
-	srcAgent, srcFormat := configFileAgent(path)
+	srcAgent, srcFormat, srcReason := configFileAgentDetail(path)
 	if srcAgent == "" {
-		return map[string]interface{}{"success": false, "error": "无法识别该配置文件的格式（支持 ZCode 与 DeepSeek Harness 的配置文件）"}
+		if srcReason != "" {
+			return map[string]interface{}{"success": false, "error": core.ShortText(srcReason, 300)}
+		}
+		return map[string]interface{}{"success": false, "error": "无法识别该配置文件的格式（支持 ZCode、DeepSeek Harness 与 omp 的配置文件）"}
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()

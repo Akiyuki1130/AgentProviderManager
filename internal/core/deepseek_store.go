@@ -187,12 +187,58 @@ var deepSeekRouteExtraKeys = []string{
 }
 
 // deepSeekRouteExtras 从内部 provider options 里挑出可透传到 pi-ai 路由的字段。
-func deepSeekRouteExtras(opts map[string]interface{}) map[string]interface{} {
+//
+// api 是该 provider 的 wire protocol（apiForDeepSeekKind 的结果），只用于过滤
+// modelOverrides 里每个模型自带的 compat：DSH 的 assertOfferedCompatFields 对路由、
+// 模型节点、以及 modelOverrides 里的覆盖项都会校验，错位的 compat 键（例如在
+// anthropic-messages 上写 supportsStrictMode）会让整份 llm-pi-ai 配置解析失败。
+func deepSeekRouteExtras(opts map[string]interface{}, api string) map[string]interface{} {
 	out := map[string]interface{}{}
 	for _, key := range deepSeekRouteExtraKeys {
-		if v, ok := opts[key]; ok {
-			out[key] = v
+		v, ok := opts[key]
+		if !ok {
+			continue
 		}
+		if key == "modelOverrides" {
+			v = dshFilterModelOverrides(v, api)
+			if v == nil {
+				continue
+			}
+		}
+		out[key] = v
+	}
+	return out
+}
+
+// dshFilterModelOverrides 按 wire protocol 过滤 modelOverrides 里每个模型的 compat，
+// 复用 dshCompatForWrite——与模型节点、路由级 compat 是同一份判定，不在这里另写
+// 第三份协议表。每个模型的其它键（defaultContextWindow、reasoningEfforts 等）原样
+// 透传；compat 过滤后为空就删除该键（省略 = 不覆盖），非映射形状的输入原样返回，
+// 交给下游 schema 校验。返回 nil 表示整个 modelOverrides 无可透传内容。
+func dshFilterModelOverrides(value interface{}, api string) interface{} {
+	overrides, ok := value.(map[string]interface{})
+	if !ok {
+		return value
+	}
+	out := make(map[string]interface{}, len(overrides))
+	for modelID, raw := range overrides {
+		model, ok := raw.(map[string]interface{})
+		if !ok {
+			out[modelID] = raw
+			continue
+		}
+		clone := deepCopyMap(model)
+		if compat, exists := clone["compat"]; exists {
+			if filtered := dshCompatForWrite(compat, nil, api); len(filtered) > 0 {
+				clone["compat"] = filtered
+			} else {
+				delete(clone, "compat")
+			}
+		}
+		out[modelID] = clone
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }
@@ -299,7 +345,7 @@ func deepSeekBuildEntry(providerID string, providerCfg map[string]interface{}, e
 	delete(entry, "apiKey")
 	entry["api"] = api
 	// 透传 headers 等 pi-ai 路由支持的字段（来自 ZCode 侧 options 或 DSH 原条目）。
-	for k, v := range deepSeekRouteExtras(opts) {
+	for k, v := range deepSeekRouteExtras(opts, api) {
 		if k == "compat" {
 			continue
 		}

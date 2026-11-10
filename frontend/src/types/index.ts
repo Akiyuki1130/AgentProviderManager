@@ -76,6 +76,8 @@ export interface ProviderSummary {
   base_url: string
   has_api_key: boolean
   model_count: number
+  /** 只读提供商（例如 PI Agent 里 APM 不建模的协议）：列表先画只读徽标，编辑页禁用保存。 */
+  read_only?: boolean
 }
 
 export interface ProviderEdit {
@@ -87,6 +89,17 @@ export interface ProviderEdit {
   api_key_required: boolean
   options_json: string
   cards: ModelCard[]
+  /**
+   * 只读边界（PI Agent 专有场景）：只读 provider 允许整体删除，但禁止单模型删除/编辑、
+   * 部分写、保存与自动保存；后端 Upsert/SaveProvider 也会兜底拒绝，前端只是提前收口。
+   */
+  read_only?: boolean
+  /** 只读原因（后端给出的中文原因，前端原样展示，不再改写）。 */
+  read_only_reason?: string
+  /** 配置里 API Key 的形态：literal = 明文 / env = 环境变量引用 / command = !command 引用 / none = 无 Key。 */
+  api_key_kind?: 'literal' | 'env' | 'command' | 'none' | string
+  /** 文件里原始的 omp api（只读展示；kind 下拉对只读 provider 禁用时用它代替）。 */
+  raw_api?: string
   _raw_provider?: Record<string, unknown>
 }
 
@@ -98,6 +111,8 @@ export interface ConfigLocation {
   error: string
   provider_count: number
   provider_ids: string[]
+  /** 只有 models.json（旧格式）时为 true：必须先跑一次 omp 完成迁移，APM 才能读写 models.yml。 */
+  needs_migration?: boolean
 }
 
 export interface KeychainEntry {
@@ -147,8 +162,11 @@ export interface LegacyImportResult {
   backup: string
 }
 
-/** 还原点记录的目标文件格式：v2 / legacy / opencode / deepseek / unknown。 */
-export type RestorePointFormat = 'v2' | 'legacy' | 'opencode' | 'deepseek' | 'unknown'
+/**
+ * 还原点记录的目标文件格式：v2 / legacy / opencode / deepseek / omp / omp-config / unknown。
+ * omp = PI Agent 的 models.yml；omp-config = 同目录的 config.yml（默认模型 roles）。
+ */
+export type RestorePointFormat = 'v2' | 'legacy' | 'opencode' | 'deepseek' | 'omp' | 'omp-config' | 'unknown'
 
 /**
  * 还原点：每次写配置前自动建立的“修改前状态”快照。
@@ -300,6 +318,8 @@ export interface ExportBackupResult {
   path?: string
   provider_count?: number
   key_mode?: string
+  /** 被后端整条跳过的提供商（如只读 provider 不导出），附中文原因；未跳过时为空或缺省。 */
+  skipped?: { id: string; reason: string }[]
 }
 
 export interface BackupInspectResult {

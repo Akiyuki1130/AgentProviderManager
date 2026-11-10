@@ -197,22 +197,26 @@ func TestDshEnabledCompatMapsToHigh(t *testing.T) {
 	}
 }
 
-// TestDshOffOnlyBecomesFalse 验证只含 off 的集合在写出时退化为 reasoningEfforts: false
-// （DSH 的 zod 约束要求非空字典必须声明至少一个非 off 档位，单 off 无法用字典表达）。
-func TestDshOffOnlyBecomesFalse(t *testing.T) {
+// TestDshOffOnlyWritesNoReasoningKey 验证只含 off 的集合在写出时**一个推理键都不写**。
+//
+// DSH 的 zod 约束要求非空字典必须声明至少一个非 off 档位，所以单 off 无法用字典表达；
+// 但退化成 reasoningEfforts: false 是错的——按 AGENTS.md 的「只写真值，未知与假
+// 一律省略键」，false 在 DSH 里表示「显式声明该模型不是推理模型」，而源语义只是
+// 「只有关闭档可表达」，两者不等价。故宁可删键留未知。
+func TestDshOffOnlyWritesNoReasoningKey(t *testing.T) {
 	node := dshWriteNode([]string{"off"}, "off")
-	if node["reasoningEfforts"] != false {
-		t.Fatalf("只含 off 应写成 false：%#v", node["reasoningEfforts"])
+	if got, exists := node["reasoningEfforts"]; exists {
+		t.Fatalf("只含 off 不得写 reasoningEfforts（省略 = 未知），实际 %#v", got)
 	}
 	if _, leftover := node["reasoningEffort"]; leftover {
-		t.Fatalf("reasoningEfforts:false 时不得残留 reasoningEffort：%#v", node["reasoningEffort"])
+		t.Fatalf("只含 off 时不得残留 reasoningEffort：%#v", node["reasoningEffort"])
 	}
 }
 
 // TestDshEffortsConstraintMutualExclusion 联合断言 DSH 的两条约束互斥语义：
 //   - reasoningEfforts 为 dict 时，必须非空且至少含一个非 off 档位；
 //   - off 档写 null，非 off 档写同名拼法；
-//   - 只含 off 的集合 / 显式关闭一律写出 false，绝不写空字典。
+//   - 显式关闭写 false（只含 off 的源集合删键留未知，绝不写空字典或 false）。
 func TestDshEffortsConstraintMutualExclusion(t *testing.T) {
 	enabledCard := ModelCard{
 		ModelID: "demo", Reasoning: true,

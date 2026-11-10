@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"agentprovidermanager/internal/dshprovider"
+	"agentprovidermanager/internal/ompprovider"
 	"agentprovidermanager/internal/zcodeprovider"
 )
 
@@ -16,6 +17,9 @@ const (
 	AgentZCode    AgentID = "zcode"
 	AgentOpenCode AgentID = "opencode"
 	AgentDeepSeek AgentID = "deepseek"
+	// AgentOMP 是 oh-my-pi（omp）的 Agent ID。它的 provider 配置在
+	// ~/.omp/agent/models.yml，默认模型在 config.yml 的 modelRoles.default。
+	AgentOMP AgentID = "omp"
 )
 
 type AgentDef struct {
@@ -31,6 +35,7 @@ func AllAgents() []AgentDef {
 	return []AgentDef{
 		{ID: AgentZCode, Label: "ZCode", LabelEn: "ZCode", DetectLabel: "ZCode 全局配置"},
 		{ID: AgentDeepSeek, Label: "DeepSeek Harness", LabelEn: "DeepSeek Harness", DetectLabel: "DeepSeek 配置"},
+		{ID: AgentOMP, Label: "OMP", LabelEn: "OMP", DetectLabel: "OMP 模型配置"},
 	}
 }
 
@@ -38,7 +43,7 @@ func AllAgents() []AgentDef {
 // app.go 的 loadAgentState 借此让本地已存的 "opencode" 回落。
 func IsValidAgent(id string) bool {
 	switch AgentID(strings.ToLower(strings.TrimSpace(id))) {
-	case AgentZCode, AgentDeepSeek:
+	case AgentZCode, AgentDeepSeek, AgentOMP:
 		return true
 	}
 	return false
@@ -47,7 +52,7 @@ func IsValidAgent(id string) bool {
 func NormalizeAgentID(id string) AgentID {
 	n := AgentID(strings.ToLower(strings.TrimSpace(id)))
 	switch n {
-	case AgentZCode, AgentOpenCode, AgentDeepSeek:
+	case AgentZCode, AgentOpenCode, AgentDeepSeek, AgentOMP:
 		return n
 	}
 	return AgentZCode
@@ -64,6 +69,8 @@ func AgentDefaultPath(id AgentID) string {
 		return OpencodeConfig()
 	case AgentDeepSeek:
 		return DeepSeekSettingsPath()
+	case AgentOMP:
+		return ompDefaultPath()
 	default:
 		return ZCodeConfig()
 	}
@@ -132,6 +139,10 @@ func AgentFormatName(agentID, path string) string {
 		return ZCodeFormatName(DetectZCodeFormatAt(path))
 	case AgentDeepSeek:
 		return DeepSeekFormatName(DetectDeepSeekFormatAt(path))
+	case AgentOMP:
+		// omp 的 provider 只存在于 models.yml / models.yaml（models.json 只读待迁移），
+		// 格式名保持稳定的 "models.yml"，不随目标文件后缀变化。
+		return "models.yml"
 	}
 	return ""
 }
@@ -285,7 +296,6 @@ func DeepSeekFormatLabel(f dshprovider.Format) string {
 	}
 }
 
-
 func DshHome() string {
 	if v := strings.TrimSpace(os.Getenv("DSH_HOME")); v != "" {
 		return v
@@ -318,4 +328,20 @@ func DeepSeekCredentialsPath() string {
 
 func DeepSeekEnvCredentialsPath() string {
 	return DeepSeekCredentialsPath()
+}
+
+// ompDefaultPath 返回 omp 的默认 models 文件路径。
+//
+// 优先 ModelsWritePath(活跃 profile)：它只会给出 models.yml / models.yaml（G1：P1 不自动
+// 从 models.json 新建 .yml）；只有 models.json 时写路径为空，退回 ModelsPath 给出的
+// 只读路径，这样前端能打开文件但仍会按 needs_migration 拒绝保存。
+func ompDefaultPath() string {
+	profile := ompprovider.ActiveProfile()
+	if path, ok := ompprovider.ModelsWritePath(profile); ok && strings.TrimSpace(path) != "" {
+		return path
+	}
+	if path, _ := ompprovider.ModelsPath(profile); strings.TrimSpace(path) != "" {
+		return path
+	}
+	return filepath.Join(ompprovider.BaseDir(), "models.yml")
 }

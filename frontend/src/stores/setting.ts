@@ -5,7 +5,8 @@ import * as api from '../api'
 type AppTheme = 'light' | 'dark' | 'system'
 export type Lang = 'system' | 'zh' | 'en' | 'ja'
 export type ResolvedLang = 'zh' | 'en' | 'ja'
-export type AgentID = 'zcode' | 'opencode' | 'deepseek'
+// opencode 为历史值（入口已隐藏），omp = PI Agent (oh-my-pi)。
+export type AgentID = 'zcode' | 'opencode' | 'deepseek' | 'omp'
 
 const THEME_KEY = 'apm:theme'
 const LANG_KEY = 'apm:lang'
@@ -48,11 +49,14 @@ function loadBool(key: string, def: boolean): boolean {
 }
 // OpenCode 入口已隐藏：本地历史值 "opencode" 归一化回落到 zcode，
 // 避免应用停在一个不可选的 Agent 上。AgentID 类型保留并集以兼容历史数据。
+// 白名单必须与 core.AllAgents() 的 id 同步；不要写「未知一律回落 zcode」以外的兜底猜测，
+// 否则新 Agent（omp）会被悄悄吞成 zcode。
+const KNOWN_AGENTS: readonly AgentID[] = ['zcode', 'deepseek', 'omp']
 function loadAgent(): AgentID {
   const v = localStorage.getItem(AGENT_KEY)
-  if (v === 'zcode' || v === 'deepseek') return v
+  if (v && (KNOWN_AGENTS as readonly string[]).includes(v)) return v as AgentID
   const legacy = localStorage.getItem('zcode-pm:agent')
-  if (legacy === 'zcode' || legacy === 'deepseek') return legacy as AgentID
+  if (legacy && (KNOWN_AGENTS as readonly string[]).includes(legacy)) return legacy as AgentID
   return 'zcode'
 }
 

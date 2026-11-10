@@ -1,6 +1,6 @@
 import { computed, ref, type ComputedRef, type Ref } from 'vue'
 import type { ModelCard } from '../types'
-import { REASONING_VARIANTS, canonicalVariant, pickDefaultVariant } from '../constants/variants'
+import { REASONING_VARIANTS, OMP_REASONING_VARIANTS, canonicalVariant, pickDefaultVariant } from '../constants/variants'
 import { useToast } from './useToast'
 import { uiConfirm } from '../stores/uiDialog'
 import { t, type UiLang } from '../i18n'
@@ -41,14 +41,23 @@ import { t, type UiLang } from '../i18n'
  * 不在全集里的档位（例如二值思考模型的 `enabled`）排在最后，且**同序内部保持调用方给定的顺序**
  * （`Array.prototype.sort` 稳定，键来源为 `source()` 的确定遍历序，因此不会随系统语言漂移）。
  */
-function levelOrder(level: string): number {
-  const idx = (REASONING_VARIANTS as readonly string[]).indexOf(level)
-  return idx === -1 ? REASONING_VARIANTS.length : idx
+function levelOrder(level: string, omp = false): number {
+  const order: readonly string[] = omp ? OMP_REASONING_VARIANTS : REASONING_VARIANTS
+  const idx = order.indexOf(level)
+  return idx === -1 ? order.length : idx
 }
 
 /** 按规范序稳定排序（不改入参）。 */
-function sortLevels(levels: string[]): string[] {
-  return [...levels].sort((a, b) => levelOrder(a) - levelOrder(b))
+function sortLevels(levels: string[], omp = false): string[] {
+  return [...levels].sort((a, b) => levelOrder(a, omp) - levelOrder(b, omp))
+}
+
+/**
+ * PI Agent（omp）只认六档强度：off / enabled 这类「思考开关」词在 omp 的 models.yml 里没有位置，
+ * 写进去会被判为非法档位。因此按 agent 收口推断集合——omp 下只保留六档成员。
+ */
+function allowedLevels(omp: boolean): readonly string[] {
+  return omp ? OMP_REASONING_VARIANTS : REASONING_VARIANTS
 }
 
 /**
@@ -61,7 +70,7 @@ function sortLevels(levels: string[]): string[] {
  * 放行，写盘折叠成 `["off"]` 后重读又变成「思考已关」，状态与用户看到的对不上。
  * 无推断值则返回 `[]`。纯只读，绝不回写。
  */
-export function inferredLevels(card: ModelCard): string[] {
+export function inferredLevels(card: ModelCard, omp = false): string[] {
   const raw = card._supported_levels
   if (!raw || raw.length === 0) return []
   const out: string[] = []
@@ -70,6 +79,7 @@ export function inferredLevels(card: ModelCard): string[] {
     if (typeof item !== 'string') continue
     const v = canonicalVariant(item)
     if (!v || seen.has(v)) continue
+    if (omp && !(allowedLevels(true) as readonly string[]).includes(v)) continue
     seen.add(v)
     out.push(v)
   }
@@ -77,9 +87,9 @@ export function inferredLevels(card: ModelCard): string[] {
 }
 
 /** 该卡片缺失的推断档位（推断集合里当前还没有的）：`[]` 表示没有可并入的。 */
-function missingLevels(card: ModelCard): string[] {
+function missingLevels(card: ModelCard, omp = false): string[] {
   const cur = card.variants || []
-  return inferredLevels(card).filter((v) => !cur.includes(v))
+  return inferredLevels(card, omp).filter((v) => !cur.includes(v))
 }
 
 /**
@@ -95,13 +105,16 @@ function missingLevels(card: ModelCard): string[] {
  * 注意：判定里**没有**「当前集合已有非 off 档就跳过」这一条——那会让本功能在存量配置上
  * 完全失效（APM 早期保存的卡片档位是写死的 `[off,high,max]`，恰恰是最需要补的一批）。
  */
-export function fillableLevels(card: ModelCard): string[] | null {
+export function fillableLevels(card: ModelCard, omp = false): string[] | null {
   if (card.reasoning !== true) return null
-  const inferred = inferredLevels(card)
+  const inferred = inferredLevels(card, omp)
+  // omp 没有 off 档：推断集合全为六档强度，非空即有意义（见 allowedLevels）
   if (!inferred.some((v) => v !== 'off')) return null
-  const missing = missingLevels(card)
+  const missing = missingLevels(card, omp)
   if (missing.length === 0) return null
-  return sortLevels([...(card.variants || []), ...missing])
+  const merged = [...(card.variants || []), ...missing]
+  // omp 下已有集合里若混入了 off/enabled（历史数据），补全时顺手收敛掉
+  return sortLevels(omp ? merged.filter((v) => (allowedLevels(true) as readonly string[]).includes(v)) : merged, omp)
 }
 
 /**
@@ -116,12 +129,12 @@ export function fillableLevels(card: ModelCard): string[] | null {
  *
  * 相等判定忽略顺序（集合语义）：档位顺序由 `sortLevels` 统一，写盘不依赖调用方顺序。
  */
-export function overwriteLevels(card: ModelCard): string[] | null {
+export function overwriteLevels(card: ModelCard, omp = false): string[] | null {
   if (card.reasoning !== true) return null
-  const inferred = inferredLevels(card)
+  const inferred = inferredLevels(card, omp)
   if (!inferred.some((v) => v !== 'off')) return null
   const cur = card.variants || []
-  const target = sortLevels(inferred)
+  const target = sortLevels(inferred, omp)
   if (cur.length === target.length && target.every((v) => cur.includes(v))) return null
   return target
 }
@@ -145,8 +158,8 @@ export function applyLevels(card: ModelCard, levels: string[]): void {
  * 该卡片「本可处理但因思考未开被门控挡下」：推断里有非 off 档（说明能力表确实知道档位），
  * 而思考当前是关的。只用于把"点了没反应"解释成具体原因，不参与写入判定。
  */
-function blockedByReasoning(card: ModelCard): boolean {
-  return card.reasoning !== true && inferredLevels(card).some((v) => v !== 'off')
+function blockedByReasoning(card: ModelCard, omp = false): boolean {
+  return card.reasoning !== true && inferredLevels(card, omp).some((v) => v !== 'off')
 }
 
 /**
@@ -170,22 +183,22 @@ interface OverwritePlan {
   blocked: number
 }
 
-function overwritePlan(cards: ModelCard[]): OverwritePlan {
+function overwritePlan(cards: ModelCard[], omp = false): OverwritePlan {
   const removedCounts = new Map<string, number>()
   let models = 0
   let loseOff = 0
   let blocked = 0
   for (const card of cards) {
-    if (blockedByReasoning(card)) blocked += 1
-    const target = overwriteLevels(card)
+    if (blockedByReasoning(card, omp)) blocked += 1
+    const target = overwriteLevels(card, omp)
     if (!target) continue
     models += 1
     const cur = card.variants || []
     for (const v of cur) if (!target.includes(v)) removedCounts.set(v, (removedCounts.get(v) || 0) + 1)
-    if (cur.includes('off') && !target.includes('off')) loseOff += 1
+    if (!omp && cur.includes('off') && !target.includes('off')) loseOff += 1
   }
   const removed = [...removedCounts.keys()]
-    .sort((a, b) => levelOrder(a) - levelOrder(b))
+    .sort((a, b) => levelOrder(a, omp) - levelOrder(b, omp))
     .map((level) => ({ level, count: removedCounts.get(level) || 0 }))
   return { models, removed, loseOff, blocked }
 }
@@ -206,18 +219,20 @@ function overwritePlan(cards: ModelCard[]): OverwritePlan {
  * 为什么"的差别，恰恰是本功能的两个隐性门控（思考未开、能力表没数据）最需要说清楚的地方。
  * 页面只在「可见卡片为 0」时禁用——那一点必然是静默空操作，与同一行的能力补全按钮同口径。
  */
-export function useLevelFill(source: () => ModelCard[], lang: Ref<UiLang>): {
+export function useLevelFill(source: () => ModelCard[], lang: Ref<UiLang>, agent?: () => string): {
   overwrite: Ref<boolean>
   summary: ComputedRef<string>
   fill: () => Promise<void>
 } {
   const { push } = useToast()
+  // 当前 harness：PI Agent（omp）只有六档强度，其余 harness 保持原有档位全集
+  const isOmp = () => (agent ? agent() : '') === 'omp'
   /** 覆盖方向开关（默认并入）。 */
   const overwrite = ref(false)
 
-  const fillableCount = computed(() => source().filter((c) => fillableLevels(c) !== null).length)
-  const overwriteCount = computed(() => source().filter((c) => overwriteLevels(c) !== null).length)
-  const blockedCount = computed(() => source().filter(blockedByReasoning).length)
+  const fillableCount = computed(() => source().filter((c) => fillableLevels(c, isOmp()) !== null).length)
+  const overwriteCount = computed(() => source().filter((c) => overwriteLevels(c, isOmp()) !== null).length)
+  const blockedCount = computed(() => source().filter((c) => blockedByReasoning(c, isOmp())).length)
 
   /**
    * 「一个都处理不了」的文案：门控是隐性的，必须说出原因，而且**与当前方向同口径**
@@ -245,7 +260,7 @@ export function useLevelFill(source: () => ModelCard[], lang: Ref<UiLang>): {
     if (list.length === 0) return
 
     if (overwrite.value) {
-      const plan = overwritePlan(list)
+      const plan = overwritePlan(list, isOmp())
       if (plan.models === 0) {
         push('info', t('level.batchLabel', lang.value), noneText(plan.blocked))
         return
@@ -269,7 +284,7 @@ export function useLevelFill(source: () => ModelCard[], lang: Ref<UiLang>): {
       let models = 0
       let removedTotal = 0
       for (const card of list) {
-        const target = overwriteLevels(card)
+        const target = overwriteLevels(card, isOmp())
         if (!target) continue
         const before = card.variants || []
         const removed = before.filter((v) => !target.includes(v)).length
@@ -291,13 +306,13 @@ export function useLevelFill(source: () => ModelCard[], lang: Ref<UiLang>): {
     let tiers = 0
     let blocked = 0
     for (const card of list) {
-      if (blockedByReasoning(card)) blocked += 1
-      const target = fillableLevels(card)
+      if (blockedByReasoning(card, isOmp())) blocked += 1
+      const target = fillableLevels(card, isOmp())
       if (!target) continue
       // 增量必须在 `applyLevels` **之前**算：`applyLevels` 会把缺失档位并入 `card.variants`，
       // 之后 `missingLevels(card)` 恒为空集，`tiers` 会永远报 0（与上方覆盖路径把
       // `before`/`removed` 算在 `applyLevels` 之前一致）。
-      const add = missingLevels(card).length
+      const add = missingLevels(card, isOmp()).length
       applyLevels(card, target)
       models += 1
       tiers += add

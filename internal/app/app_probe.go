@@ -2,6 +2,7 @@ package app
 
 import (
 	"strings"
+	"time"
 
 	"agentprovidermanager/internal/core"
 )
@@ -37,7 +38,7 @@ func (a *App) TestConnectionRaw(baseURL, apiKey, kind string) map[string]interfa
 		return map[string]interface{}{"success": false, "error": "请填写 Base URL", "error_code": "BAD_URL"}
 	}
 	kindNorm := core.ProbeKind(kind)
-	return probeResponse(core.TestConnection(baseURL, apiKey, kindNorm), kindNorm)
+	return probeResponse(core.ProbeProviderRequest(baseURL, apiKey, core.ProbeOptions{Kind: kindNorm}, 15*time.Second), kindNorm)
 }
 
 // TestProviderConnection 解析凭据后运行两段探测，解析逻辑与 RefreshProviderModels 一致。
@@ -57,7 +58,7 @@ func (a *App) TestProviderConnection(providerID, baseURLOverride, apiKeyOverride
 		if gerr != nil {
 			return map[string]interface{}{"success": false, "error": core.ShortText(gerr.Error(), 300), "error_code": "OTHER"}
 		}
-		return probeProvider(edit, baseURLOverride, apiKeyOverride)
+		return probeProvider(edit, agent, baseURLOverride, apiKeyOverride)
 	}
 	cfg, err := core.LoadConfig(target)
 	if err != nil {
@@ -67,10 +68,13 @@ func (a *App) TestProviderConnection(providerID, baseURLOverride, apiKeyOverride
 	if err != nil {
 		return map[string]interface{}{"success": false, "error": core.ShortText(err.Error(), 300), "error_code": "OTHER"}
 	}
-	return probeProvider(edit, baseURLOverride, apiKeyOverride)
+	return probeProvider(edit, agent, baseURLOverride, apiKeyOverride)
 }
 
-func probeProvider(edit *core.ProviderEdit, baseURLOverride, apiKeyOverride string) map[string]interface{} {
+// probeProvider 按 edit 里的 Base URL / 凭据 / 协议类型发起探测。
+// headers 与 authHeader 只在 omp 下从 options_json 透传（其它 harness 的
+// options_json 语义不同），由 providerRequestOptions 统一判定。
+func probeProvider(edit *core.ProviderEdit, agent, baseURLOverride, apiKeyOverride string) map[string]interface{} {
 	baseURL := strings.TrimSpace(baseURLOverride)
 	if baseURL == "" {
 		baseURL = edit.BaseURL
@@ -86,7 +90,9 @@ func probeProvider(edit *core.ProviderEdit, baseURLOverride, apiKeyOverride stri
 		return map[string]interface{}{"success": false, "error": "该提供商未配置 Base URL，请先在管理页填写", "error_code": "BAD_URL"}
 	}
 	kindNorm := core.ProbeKind(edit.Kind)
-	return probeResponse(core.TestConnection(baseURL, apiKey, kindNorm), kindNorm)
+	fetchOpt, _ := fetchOptionsFromMap(providerRequestOptions(edit, agent))
+	opt := core.ProbeOptions{Kind: kindNorm, Headers: fetchOpt.Headers, AuthHeader: fetchOpt.AuthHeader}
+	return probeResponse(core.ProbeProviderRequest(baseURL, apiKey, opt, 15*time.Second), kindNorm)
 }
 
 // acceptsLocalKeyForOverride 判定「本次测试是否允许沿用本地已存的 API Key」：

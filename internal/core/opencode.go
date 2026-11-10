@@ -31,7 +31,9 @@ func ConvertOpencodeModel(mid string, modelCfg map[string]interface{}, kind stri
 			// 折成 "off"，其余（含 minimal）原样保留。旧的 OpencodeEffortToVariant
 			// 查表已删除——它的键在归一后恒 miss，属死代码。
 			v := canonicalVariant(key)
-			if !ZCodeVariantSet[v] {
+			// 与 CfgToCard / NormalizeVariants 同一门控：开关打开时保留自填档位名，
+			// 关闭时按白名单丢弃——读侧若在这里硬丢，保存→重读会丢掉整组档位。
+			if !variantAllowed(v) {
 				continue
 			}
 			if !containsStr(variants, v) {

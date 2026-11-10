@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"agentprovidermanager/internal/ompprovider"
 )
 
 // MigrateSide holds preview info for one agent side.
@@ -19,6 +21,11 @@ type MigrateSide struct {
 	Providers []ProviderSummary `json:"providers"`
 	RawText   string            `json:"raw_text"`
 	Format    string            `json:"format"`
+	// Warnings 是迁移到 omp 或从 omp 迁出时的提示（密钥明文、默认模型不设置等）。
+	// 仅当源或目标是 omp 时非空，其它组合保持空切片，前端可忽略。
+	Warnings []string `json:"warnings,omitempty"`
+	// DroppedFields 是 omp 源私有字段的丢弃清单（计划 §7.3 要求预览显式列出）。
+	DroppedFields []string `json:"dropped_fields,omitempty"`
 }
 
 // MigratePreview aggregates source and target sides.
@@ -95,6 +102,128 @@ func readRawConfigText(path string) (string, string) {
 	return string(data), "json"
 }
 
+// ompTargetNotWritableMsg 是 omp 只能只读解析 models.json 时的目标提示（G1）。
+const ompTargetNotWritableMsg = "omp 目前只有 models.json，需先在 omp 里完成迁移（生成 models.yml）后才能作为迁移目标"
+
+// ompMigrateTargetPath 解析 omp 迁移目标路径：显式路径原样使用；否则取
+// ModelsWritePath（.yml 优先 .yaml），只有 models.json 时返回不可写。
+func ompMigrateTargetPath(explicit string) (string, error) {
+	if p := strings.TrimSpace(explicit); p != "" {
+		return p, nil
+	}
+	path, writable := ompprovider.ModelsWritePath(ompprovider.ActiveProfile())
+	if !writable || strings.TrimSpace(path) == "" {
+		return "", errors.New(ompTargetNotWritableMsg)
+	}
+	return path, nil
+}
+
+// ompMigrateWarnings 返回 omp 参与的跨 Agent 迁移必须展示的警告（计划 §7.3）。
+func ompMigrateWarnings() []string {
+	return []string{
+		"密钥会以明文写入目标配置文件",
+		"源没有可用密钥（!command / 环境变量名 / OAuth）时不迁移密钥，目标已有 Key 保留",
+		"自定义 / off 档位不会写入",
+		"结构化输出、联网搜索、中段 system、附件、温度、非 text/image 输入不会迁移",
+		"provider 显示名不会迁移",
+		"迁移后不会自动设置默认模型，请在目标 Agent 的「默认模型」里手动选择",
+	}
+}
+
+// ompMigrateDroppedFields 是 omp 源 provider 的私有字段丢弃清单（计划 §7.3）。
+func ompMigrateDroppedFields() []string {
+	return []string{
+		"thinking.mode / effortMap",
+		"cost",
+		"compat",
+		"headers",
+		"tokenizer",
+		"promptCache",
+		"模型级 api",
+		"模型级 baseUrl",
+		"compactionModel",
+		"contextPromotionTarget",
+	}
+}
+
+// projectOMPMigrateEdit 把 omp 源 provider 投影成跨 Agent 可迁移的载荷：
+// 只贡献 id / kind / base_url / api_key / cards（计划 §7.3），
+// 不复制 compat / discovery / modelOverrides / properties / access 等私有结构。
+// 返回 error 表示该 provider 不可迁移（只读、协议不可建模、缺 baseUrl）。
+func projectOMPMigrateEdit(edit *ProviderEdit) (*ProviderEdit, error) {
+	if edit == nil {
+		return nil, errors.New("源提供商不存在")
+	}
+	if edit.ReadOnly {
+		reason := strings.TrimSpace(edit.ReadOnlyReason)
+		if reason == "" {
+			reason = "该 provider 在 omp 里只读，无法迁移"
+		}
+		return nil, errors.New(reason)
+	}
+	kind := strings.TrimSpace(edit.Kind)
+	switch kind {
+	case "openai-compatible", "anthropic", "responses":
+	default:
+		raw := strings.TrimSpace(edit.RawAPI)
+		if raw == "" {
+			raw = kind
+		}
+		if raw == "" {
+			raw = "unknown"
+		}
+		return nil, errors.New("不支持的协议「" + raw + "」，无法迁移")
+	}
+	if strings.TrimSpace(edit.BaseURL) == "" {
+		return nil, errors.New("缺少 baseUrl，无法迁移")
+	}
+	projected := &ProviderEdit{
+		ID:             edit.ID,
+		Kind:           kind,
+		BaseURL:        edit.BaseURL,
+		APIKey:         ompMigratableKey(*edit),
+		APIKeyRequired: edit.APIKey != "",
+		Cards:          projectOMPMigrateCards(edit.Cards),
+	}
+	return projected, nil
+}
+
+// ompMigratableKey 只迁移字面量密钥。环境变量名与 !command 是指针而不是密钥，
+// 原样写进目标等于把变量名写死成密钥（计划 §7.3）。
+func ompMigratableKey(edit ProviderEdit) string {
+	key := strings.TrimSpace(edit.APIKey)
+	if key == "" {
+		return ""
+	}
+	switch strings.ToLower(strings.TrimSpace(edit.APIKeyKind)) {
+	case "command", "env", "none":
+		return ""
+	case "literal":
+		return key
+	}
+	if strings.HasPrefix(key, "!") {
+		return ""
+	}
+	if _, ok := os.LookupEnv(key); ok {
+		return ""
+	}
+	return key
+}
+
+// projectOMPMigrateCards 只保留目标 harness 能表达的已知模型字段：
+// 清掉私有载体（_raw_cfg / options / headers），模型级 api 与 baseUrl 也不在
+// ModelCard 里单独传递（计划 §7.3 丢弃清单）。
+func projectOMPMigrateCards(cards []ModelCard) []ModelCard {
+	out := make([]ModelCard, 0, len(cards))
+	for _, card := range cards {
+		card.RawCfg = nil
+		card.Options = nil
+		card.Headers = nil
+		out = append(out, card)
+	}
+	return out
+}
+
 // ---- 路径解析与校验 ----
 
 // resolveMigratePath 把显式路径规整为实际使用的路径；为空时按 Agent 取“优先”默认：
@@ -108,6 +237,11 @@ func resolveMigratePath(agentID, explicit string) string {
 		return ZCodeDefaultPath()
 	case AgentDeepSeek:
 		return DeepSeekDefaultPath()
+	case AgentOMP:
+		// 计划 §7.3：omp 目标必须落在可写的 models.yml / models.yaml。
+		// 只有 models.json 时返回空串，由调用方给出「不可写」提示，绝不新建 .yml。
+		path, _ := ompMigrateTargetPath("")
+		return path
 	default:
 		return AgentDefaultPath(NormalizeAgentID(agentID))
 	}
@@ -230,6 +364,16 @@ func MigratePreviewAtPaths(sourceAgent, targetAgent, sourcePath, targetPath stri
 		Source: buildSide(srcNorm, srcPath),
 		Target: buildSide(tgtNorm, tgtPath),
 	}
+	if tgtNorm == string(AgentOMP) && tgtPath == "" {
+		preview.Target.Error = ompTargetNotWritableMsg
+	}
+	if srcNorm == string(AgentOMP) {
+		preview.Source.Warnings = ompMigrateWarnings()
+		preview.Source.DroppedFields = ompMigrateDroppedFields()
+	}
+	if tgtNorm == string(AgentOMP) {
+		preview.Target.Warnings = ompMigrateWarnings()
+	}
 	if sameMigratePath(srcPath, tgtPath) {
 		msg := "源配置路径与目标配置路径相同，无法迁移"
 		if preview.Source.Error == "" {
@@ -330,6 +474,9 @@ func MigrateExecuteAtPaths(sourceAgent, targetAgent, sourcePath, targetPath stri
 	}
 	srcPath := resolveMigratePath(srcNorm, sourcePath)
 	tgtPath := resolveMigratePath(tgtNorm, targetPath)
+	if tgtNorm == string(AgentOMP) && tgtPath == "" {
+		return nil, errors.New(ompTargetNotWritableMsg)
+	}
 	if sameMigratePath(srcPath, tgtPath) {
 		return nil, fmt.Errorf("源配置路径与目标配置路径相同，无法迁移")
 	}
@@ -356,6 +503,26 @@ func MigrateExecuteAtPaths(sourceAgent, targetAgent, sourcePath, targetPath stri
 		edits = append(edits, edit)
 	}
 
+	// omp 作为源（G17）：只贡献 base_url / api_key / kind / cards。
+	// 只读（协议不可建模 / modelOverrides-only / 缺 baseUrl）或密钥不可解析的
+	// provider 不静默跳过，而是带原因计入 skipped。
+	skipped := make([]map[string]interface{}, 0)
+	if srcNorm == string(AgentOMP) {
+		projected := make([]*ProviderEdit, 0, len(edits))
+		for _, edit := range edits {
+			next, perr := projectOMPMigrateEdit(edit)
+			if perr != nil {
+				skipped = append(skipped, map[string]interface{}{"id": edit.ID, "reason": perr.Error()})
+				continue
+			}
+			projected = append(projected, next)
+		}
+		edits = projected
+		if len(edits) == 0 {
+			return nil, fmt.Errorf("选中的 omp 提供商都不可迁移：%s", firstSkipReason(skipped))
+		}
+	}
+
 	// 目标：读指纹，文档变换全部走目标 store。
 	tgtBackend, err := migrateBackendFor(tgtNorm, tgtPath)
 	if err != nil {
@@ -370,9 +537,27 @@ func MigrateExecuteAtPaths(sourceAgent, targetAgent, sourcePath, targetPath stri
 	}
 	tgtStore := tgtBackend.Store(tgtDoc)
 
+	migrated := 0
+	changed := false
 	if mode == "overwrite" {
-		// 先清空目标里已有的全部 provider（Delete 会同步 agent-default-model）。
+		// 目标已有的 provider 先全部删除（Delete 会同步 agent-default-model），
+		// 但只读 provider 既不能覆盖也不能删：删掉它等于毁掉用户无法重建的配置，
+		// 因此保留并在 skipped 里给原因（计划 §7.3 overwrite 语义）。
+		readOnlyTargets := map[string]string{}
+		existingKeys := map[string]string{}
 		for _, summary := range tgtStore.List(tgtDoc) {
+			existing, gerr := tgtStore.Get(tgtDoc, summary.ID)
+			if gerr == nil && existing != nil {
+				existingKeys[summary.ID] = existing.APIKey
+				if existing.ReadOnly {
+					reason := strings.TrimSpace(existing.ReadOnlyReason)
+					if reason == "" {
+						reason = "目标 provider 只读，无法覆盖"
+					}
+					readOnlyTargets[summary.ID] = reason
+					continue
+				}
+			}
 			next, _, derr := tgtStore.Delete(tgtDoc, summary.ID)
 			if derr != nil {
 				return nil, migrateTargetError(derr)
@@ -380,9 +565,19 @@ func MigrateExecuteAtPaths(sourceAgent, targetAgent, sourcePath, targetPath stri
 			if next != nil {
 				tgtDoc = next
 			}
+			changed = true
 		}
 		for _, edit := range edits {
-			payload := migratePayload(edit, edit.APIKey, edit.Cards)
+			if reason, ok := readOnlyTargets[edit.ID]; ok {
+				skipped = append(skipped, map[string]interface{}{"id": edit.ID, "reason": reason})
+				continue
+			}
+			apiKey := edit.APIKey
+			// 空 Key 不覆盖：源没有可用密钥时沿用目标旧 Key（§7.4「空 Key 不覆盖」）。
+			if strings.TrimSpace(apiKey) == "" && strings.TrimSpace(existingKeys[edit.ID]) != "" {
+				apiKey = existingKeys[edit.ID]
+			}
+			payload := migratePayload(edit, apiKey, edit.Cards)
 			next, uerr := tgtStore.Upsert(tgtDoc, edit.ID, payload, SaveOptions{MergeModels: false})
 			if uerr != nil {
 				return nil, migrateTargetError(uerr)
@@ -390,12 +585,23 @@ func MigrateExecuteAtPaths(sourceAgent, targetAgent, sourcePath, targetPath stri
 			if next != nil {
 				tgtDoc = next
 			}
+			migrated++
+			changed = true
 		}
 	} else {
 		for _, edit := range edits {
 			apiKey := edit.APIKey
 			cards := edit.Cards
-			if existing, gerr := tgtStore.Get(tgtDoc, edit.ID); gerr == nil && existing != nil {
+			existing, gerr := tgtStore.Get(tgtDoc, edit.ID)
+			if gerr == nil && existing != nil {
+				if existing.ReadOnly {
+					reason := strings.TrimSpace(existing.ReadOnlyReason)
+					if reason == "" {
+						reason = "目标 provider 只读，无法合并"
+					}
+					skipped = append(skipped, map[string]interface{}{"id": edit.ID, "reason": reason})
+					continue
+				}
 				// 合并模型集合：保留目标已有模型，源同名模型覆盖。
 				cards = MergeModelCards(existing.Cards, edit.Cards)
 				// 源没有 Key 时沿用目标已有的 Key，避免把目标 Key 抹掉。
@@ -411,7 +617,20 @@ func MigrateExecuteAtPaths(sourceAgent, targetAgent, sourcePath, targetPath stri
 			if next != nil {
 				tgtDoc = next
 			}
+			migrated++
+			changed = true
 		}
+	}
+
+	result := map[string]interface{}{
+		"success": true, "migrated": migrated, "mode": mode,
+		"source": srcNorm, "target": tgtNorm, "target_path": tgtPath,
+		"skipped": skipped,
+	}
+	if !changed {
+		// 没有任何可写入的条目：不建立备份/还原点，避免留下无意义的还原点。
+		result["backup"] = ""
+		return result, nil
 	}
 
 	// 写盘前统一建立同级备份与还原点；指纹来自 ReadWithFingerprint。
@@ -426,9 +645,16 @@ func MigrateExecuteAtPaths(sourceAgent, targetAgent, sourcePath, targetPath stri
 	if bak == "" {
 		bak = FindLatestBackup(tgtPath)
 	}
-	return map[string]interface{}{
-		"success": true, "migrated": len(edits), "mode": mode,
-		"source": srcNorm, "target": tgtNorm, "target_path": tgtPath,
-		"backup": bak,
-	}, nil
+	result["backup"] = bak
+	return result, nil
+}
+
+// firstSkipReason 取第一条跳过原因用于错误提示（都不可迁移时）。
+func firstSkipReason(skipped []map[string]interface{}) string {
+	for _, item := range skipped {
+		if reason, ok := item["reason"].(string); ok && reason != "" {
+			return reason
+		}
+	}
+	return "原因未知"
 }

@@ -100,7 +100,7 @@ func TestFetchThenImportIntoDeepSeekProfile(t *testing.T) {
 	a.targetConfigPath = target
 	a.currentAgent = string(core.AgentDeepSeek)
 
-	fetched := a.FetchModels(srv.URL, "sk-placeholder")
+	fetched := a.FetchModels(srv.URL, "sk-placeholder", nil)
 	requireSuccess(t, fetched, "FetchModels")
 	cards, _ := fetched["models"].([]core.ModelCard)
 	if len(cards) != 2 {

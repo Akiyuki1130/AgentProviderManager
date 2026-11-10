@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -66,12 +67,23 @@ func dshHasNonOffEffort(efforts map[string]interface{}) bool {
 	return false
 }
 
-// dshEffortForWrite 是写端把卡片档位名落到 DSH 的解析：先走 dshCanonicalEffort
-// （别名归一 + 7 档白名单 + enabled→high 兼容）；认不出时，仅在「允许自定义档位」
-// 策略打开时放宽为小写去空格的原始名（空串仍丢弃）。
+// dshEffortForWrite 是写端把卡片档位名落到 DSH 的解析：**只**接受
+// dshCanonicalEffort 的 7 档结果（别名归一 + enabled→high 兼容）。
 //
-// off 语义不受放宽影响：别名（disabled/none/nothink）始终先折成 "off"。
+// 「允许自定义档位」开关刻意不影响写端：DSH 的 reasoningEfforts 字典键被 schema
+// 限死为固定 7 档，写入一个自填档位名（如 very-high）不是「这一档被忽略」，而是
+// 让整份 llm-pi-ai 配置在解析期抛错、所有模型一起不可用。丢失一档的代价远小于
+// 整份配置失效，因此这里宁可丢弃。读端仍会保留自填名（见 dshEffortForRead），
+// 于是卡片数据不丢，只是 DSH 写盘这一步不落盘。
 func dshEffortForWrite(value string) (string, bool) {
+	return dshCanonicalEffort(value)
+}
+
+// dshEffortForRead 是读端把配置里的 DSH 档位名解析回卡片的解析，与写端刻意不对称：
+// 先走 dshCanonicalEffort；认不出时仅在「允许自定义档位」策略打开时保留小写去空格
+// 的原始名（并做与卡片同一门控相同的限长/控制字符校验），否则用户自填的档位在
+// 保存→重读后会消失，「自填」形同虚设。写端见 dshEffortForWrite 的 schema 边界说明。
+func dshEffortForRead(value string) (string, bool) {
 	if lv, ok := dshCanonicalEffort(value); ok {
 		return lv, true
 	}
@@ -79,19 +91,10 @@ func dshEffortForWrite(value string) (string, bool) {
 		return "", false
 	}
 	lv := strings.ToLower(strings.TrimSpace(value))
-	if lv == "" {
+	if lv == "" || len(lv) > MaxVariantLen || hasControlChar(lv) {
 		return "", false
 	}
 	return lv, true
-}
-
-// dshEffortForRead 是读端把配置里的 DSH 档位名解析回卡片的解析。它只是
-// dshEffortForWrite 的**语义别名**（二者当前行为完全一致）：之所以单独命名，
-// 是为了让读/写两侧的意图在调用点自解释、并在将来某一侧需要分化时不改调用点。
-// 语义：先走 dshCanonicalEffort；认不出时仅在「允许自定义档位」策略打开时保留
-// 小写去空格的原始名。否则用户自填的档位会在保存→重读后消失，使「自填」不可用。
-func dshEffortForRead(value string) (string, bool) {
-	return dshEffortForWrite(value)
 }
 
 // dshFallbackEfforts 是阶段 G 的能力表兜底：卡片完全没有推理信息、能力表又确实给出
@@ -156,16 +159,54 @@ func dshEffortsFromCapability(levels []string) map[string]interface{} {
 	return re
 }
 
+// auxSuffixRes 是「写入是原子的」一节列出的固定词表后缀（见 AGENTS.md）：
+// .bak_<ts>、.snapshot_<ts>、.removed_<ts>、.restore_*、.tmp_*、.apm-update-*、.apm-backup-*。
+//
+// 时间戳段按写盘代码实际生成的形状匹配：备份与快照是 yyyymmdd_hhmmss_micros（三段数字），
+// .removed_ 只有 yyyymmdd_hhmmss，同名冲突时再追加 _<序号>。* 段限定为不含 . / \ 的单段，
+// 既够用于 CreateTemp 生成的数字尾巴，又不会把 xxx.yaml.weird_1 这类未知后缀猜进来。
+var auxSuffixRes = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)\.bak_\d{8}_\d{6}_\d{6}$`),
+	regexp.MustCompile(`(?i)\.snapshot_\d{8}_\d{6}_\d{6}$`),
+	regexp.MustCompile(`(?i)\.removed_\d{8}_\d{6}(?:_\d+)?$`),
+	regexp.MustCompile(`(?i)\.restore_[^./\\]+$`),
+	regexp.MustCompile(`(?i)\.tmp_[^./\\]+$`),
+	regexp.MustCompile(`(?i)\.apm-update-[^./\\]+$`),
+	regexp.MustCompile(`(?i)\.apm-backup-[^./\\]+$`),
+}
+
+// stripAuxSuffix 逐层剥离已知的辅助文件后缀，返回「真实配置文件名」。
+//
+// 格式判定必须先剥掉这些后缀，否则 settings.yaml.bak_20261018_101010_123456 会被当成
+// JSON，DSH（YAML）的「恢复最近备份」必然解析失败。实现刻意保守：只剥离固定词表里的
+// 形状，未知后缀原样保留，绝不猜测；连续多重后缀（如 settings.yaml.bak_<ts>.tmp_<ts>）
+// 会被反复剥离直到不再命中。
+func stripAuxSuffix(path string) string {
+	for {
+		stripped := ""
+		for _, re := range auxSuffixRes {
+			if loc := re.FindStringIndex(path); loc != nil && loc[0] > 0 {
+				stripped = path[:loc[0]]
+				break
+			}
+		}
+		if stripped == "" {
+			return path
+		}
+		path = stripped
+	}
+}
+
+// isYAMLPath 判定配置路径是 YAML（.yaml/.yml）还是 JSON；判定前先剥离辅助文件后缀，
+// 让 settings.yaml.bak_<ts> 这类备份与 settings.yaml 走同一条解析分支。
 func isYAMLPath(path string) bool {
-	low := strings.ToLower(path)
+	low := strings.ToLower(stripAuxSuffix(path))
 	return strings.HasSuffix(low, ".yaml") || strings.HasSuffix(low, ".yml")
 }
 
-func loadDeepSeekRaw(path string) (map[string]interface{}, string, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, "", err
-	}
+// parseDeepSeekConfigBytes 是 DSH 配置唯一的字节解析入口：按 isYAMLPath 的判定选择
+// YAML 或 JSON(C) 分支。读取、写回校验与还原校验都复用它，避免两套后缀判定分叉。
+func parseDeepSeekConfigBytes(data []byte, path string) (map[string]interface{}, string, error) {
 	data = bytes.TrimPrefix(data, []byte{0xEF, 0xBB, 0xBF})
 	if strings.TrimSpace(string(data)) == "" {
 		return map[string]interface{}{}, "json", nil
@@ -194,6 +235,14 @@ func loadDeepSeekRaw(path string) (map[string]interface{}, string, error) {
 		return nil, "", &ConfigParseError{Msg: "配置文件根节点必须是对象 {...}"}
 	}
 	return m, "json", nil
+}
+
+func loadDeepSeekRaw(path string) (map[string]interface{}, string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, "", err
+	}
+	return parseDeepSeekConfigBytes(data, path)
 }
 
 func DeepSeekLoadConfig(path string) (map[string]interface{}, error) {
@@ -816,15 +865,18 @@ func DeepSeekProviderToEdit(providerID string, raw map[string]interface{}) (*Pro
 		}
 	}
 	name := stringOr(normalized["name"], pid)
+	uiKind := stringOr(normalized["kind"], "openai-compatible")
 	// 把可透传给 pi-ai 路由（headers、timeoutMs、compat…）的字段交给调用方，
-	// 迁移到别处或经编辑器保存时才不会丢。
+	// 迁移到别处或经编辑器保存时才不会丢。modelOverrides 里每个模型也各带一份
+	// compat，必须按 wire protocol 过滤（复用与模型节点/路由级相同的
+	// dshCompatForWrite），否则错位的 compat 键会让整份 llm-pi-ai 解析失败。
 	optionsJSON := ""
-	if extra := deepSeekRouteExtras(opts); len(extra) > 0 {
+	if extra := deepSeekRouteExtras(opts, apiForDeepSeekKind(uiKind)); len(extra) > 0 {
 		if b, merr := json.Marshal(extra); merr == nil {
 			optionsJSON = string(b)
 		}
 	}
-	return &ProviderEdit{ID: pid, Name: name, Kind: stringOr(normalized["kind"], "openai-compatible"), BaseURL: baseURL, APIKey: apiKey, APIKeyRequired: apiKey != "", OptionsJSON: optionsJSON, Cards: cards, RawProvider: deepCopyMap(raw)}, nil
+	return &ProviderEdit{ID: pid, Name: name, Kind: uiKind, BaseURL: baseURL, APIKey: apiKey, APIKeyRequired: apiKey != "", OptionsJSON: optionsJSON, Cards: cards, RawProvider: deepCopyMap(raw)}, nil
 }
 
 func DeepSeekImportPreview(path string) ImportPreview {
@@ -1002,11 +1054,14 @@ func dshModelToRaw(card ModelCard, baseURL, api string) map[string]interface{} {
 			re = map[string]interface{}{"off": nil, "high": "high", "max": "max"}
 		}
 		if !dshHasNonOffEffort(re) {
-			// DSH 的 zod 约束要求非空字典必须声明至少一个非 off 档位。
-			// 只含 off 的集合无法用字典表达，也不能凭空发明档位，
-			// 于是退化为 DSH 的非推理标记——这与 dshApplyExplicitReasoningOff
-			// 的出口（reasoningEfforts: false）一致。
-			m["reasoningEfforts"] = false
+			// DSH 的 zod 约束要求非空字典必须声明至少一个非 off 档位，所以只含
+			// off 的源集合无法用字典表达。这里**不**退化成 reasoningEfforts: false：
+			// 按 AGENTS.md 的「只写真值，未知与假一律省略键」，false 在 DSH 里是
+			// 「显式声明该模型不是推理模型」，而源语义只是「只有关闭档可表达」，
+			// 两者不等价。宁可留未知（删键），也不把推理能力断言成关闭。
+			// 显式关闭仍由上方 explicit && !enabled 分支写 false。
+			delete(m, "reasoningEfforts")
+			delete(m, "reasoningEffort")
 			break
 		}
 		m["reasoningEfforts"] = re

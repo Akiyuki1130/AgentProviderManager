@@ -123,6 +123,24 @@ export async function GetCurrentAgent(): Promise<Record<string, unknown>> {
 export async function SetCurrentAgent(agent: string): Promise<Record<string, unknown>> {
   return call('SetCurrentAgent', agent)
 }
+// PI Agent（omp）的 modelRoles：只支持 "default" 一个角色（契约 §5）。
+// selectors 由后端扫描 models.yml 生成，前端不得自行拼装。
+// 空 selector 表示删除该角色键；config.yml/config.yaml 都不存在而 settings.json 存在时后端拒绝（G18）。
+export type OMPModelRoles = {
+  success?: boolean
+  path?: string
+  exists?: boolean
+  roles?: Record<string, string>
+  selectors?: string[]
+  error?: string
+  error_code?: string
+}
+export async function GetOMPModelRoles(): Promise<OMPModelRoles> {
+  return call<OMPModelRoles>('GetOMPModelRoles')
+}
+export async function SetOMPModelRole(role: string, selector: string): Promise<OMPModelRoles> {
+  return call<OMPModelRoles>('SetOMPModelRole', role, selector)
+}
 export async function GuessProviderID(baseUrl: string): Promise<string> {
   try { return (await call('GuessProviderID', baseUrl)) as string } catch { return '' }
 }
@@ -147,8 +165,28 @@ export async function DeleteProvider(id: string): Promise<Record<string, unknown
 export async function DeleteModel(providerId: string, modelId: string): Promise<Record<string, unknown>> {
   return call('DeleteModel', providerId, modelId)
 }
-export async function FetchModels(baseUrl: string, apiKey: string): Promise<Record<string, unknown>> {
-  return call('FetchModels', baseUrl, apiKey)
+/**
+ * 获取模型列表的可选参数（契约 §4）：只有下面三个键会被后端识别。
+ * - headers：额外请求头（例如需要鉴权头/版本头的网关）。
+ * - kind：UI 协议类型（anthropic / responses / openai-compatible）；PI Agent 读取时按它
+ *   决定对接哪种 api 形态。
+ * - auth_header：自定义鉴权头名（默认 Authorization）。
+ * 空对象与省略第三参等价，后端不得把它当成「清空」语义。
+ */
+export type FetchModelsOptions = {
+  headers?: Record<string, string>
+  kind?: string
+  auth_header?: string
+}
+export async function FetchModels(baseUrl: string, apiKey: string, opts?: FetchModelsOptions): Promise<Record<string, unknown>> {
+  const payload: Record<string, unknown> = {}
+  const headers = opts && opts.headers ? opts.headers : undefined
+  if (headers && Object.keys(headers).length > 0) payload['headers'] = headers
+  if (opts && opts.kind) payload['kind'] = opts.kind
+  if (opts && opts.auth_header) payload['auth_header'] = opts.auth_header
+  // 始终按契约的三参调用：后端还没重新生成绑定时，多出的第三参会被生成的定参函数忽略，
+  // 与「省略第三参」等价；这样后端就位后无需再改前端。
+  return call('FetchModels', baseUrl, apiKey, payload)
 }
 export async function RefreshProviderModels(providerId: string, baseUrl: string, apiKey: string): Promise<Record<string, unknown>> {
   return call('RefreshProviderModels', providerId, baseUrl, apiKey)
@@ -177,6 +215,10 @@ function normalizeApiType(value: string): string {
     case 'openai':
       return 'openai-responses'
     case 'openai-compatible':
+      return 'openai-chat-completions'
+    // PI Agent（omp）原生 api 名：openai-completions 是它的 chat-completions 叫法，
+    // 站点规则表用的是 ZCode 的 api.type，所以这里归一后再交给后端。
+    case 'openai-completions':
       return 'openai-chat-completions'
     case 'anthropic-messages':
     case 'openai-chat-completions':

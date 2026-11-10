@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 )
 
@@ -182,6 +183,147 @@ func stripCardKeys(card *ModelCard) {
 		stripSensitiveOptions(raw)
 		card.RawCfg = raw
 	}
+}
+
+// OMPBackupSkip 记录一个未能进入备份的 omp provider 及原因（计划 §7.4）。
+// 只读 / 协议不可建模 / 缺 baseUrl 的 provider 不能被硬塞成破损条目，
+// 导出端把它们交给前端展示，而不是静默丢弃。
+type OMPBackupSkip struct {
+	ID     string `json:"id"`
+	Reason string `json:"reason"`
+}
+
+// ProjectOMPBackupProviders 把 omp 的 ProviderEdit 规范化为跨 Agent 安全的备份投影
+// （计划 §7.4 / G12）：只保留 id / base_url / kind / api_key / cards；options_json
+// 只保留 headers（并剥离敏感键）与 authHeader；_raw_provider 与其它私有结构一律置空。
+//
+// 调用方（app 的 ExportBackup）应在 StripBackupKeys 之前调用它：include_keys=false
+// 的凭据剥离仍由 StripBackupKeys 统一完成，避免两处各写一份词表。
+func ProjectOMPBackupProviders(providers []ProviderEdit) ([]ProviderEdit, []OMPBackupSkip) {
+	out := make([]ProviderEdit, 0, len(providers))
+	skipped := make([]OMPBackupSkip, 0)
+	for _, edit := range providers {
+		if edit.ReadOnly {
+			reason := strings.TrimSpace(edit.ReadOnlyReason)
+			if reason == "" {
+				reason = "该 provider 在 omp 里只读，无法导出"
+			}
+			skipped = append(skipped, OMPBackupSkip{ID: edit.ID, Reason: reason})
+			continue
+		}
+		kind := strings.TrimSpace(edit.Kind)
+		switch kind {
+		case "openai-compatible", "anthropic", "responses":
+		default:
+			raw := strings.TrimSpace(edit.RawAPI)
+			if raw == "" {
+				raw = kind
+			}
+			if raw == "" {
+				raw = "unknown"
+			}
+			skipped = append(skipped, OMPBackupSkip{ID: edit.ID, Reason: "不支持的协议「" + raw + "」，无法导出"})
+			continue
+		}
+		if strings.TrimSpace(edit.BaseURL) == "" {
+			skipped = append(skipped, OMPBackupSkip{ID: edit.ID, Reason: "缺少 baseUrl，无法导出"})
+			continue
+		}
+		projected := ProviderEdit{
+			ID:             edit.ID,
+			Kind:           kind,
+			BaseURL:        edit.BaseURL,
+			APIKey:         ompExportableKey(edit),
+			APIKeyRequired: edit.APIKey != "",
+			OptionsJSON:    projectOMPOptionsJSON(edit.OptionsJSON),
+			Cards:          projectOMPBackupCards(edit.Cards),
+		}
+		out = append(out, projected)
+	}
+	return out, skipped
+}
+
+// ompExportableKey 只把字面量密钥带进备份。环境变量名与 !command 都是「指针，
+// 不是密钥」：把它们当 apiKey 导出去，导入端会原样写回，等于把变量名写死成密钥
+// （计划 §4.5 / §7.3）。
+func ompExportableKey(edit ProviderEdit) string {
+	key := strings.TrimSpace(edit.APIKey)
+	if key == "" {
+		return ""
+	}
+	switch strings.ToLower(strings.TrimSpace(edit.APIKeyKind)) {
+	case "command", "env":
+		return ""
+	case "literal", "none":
+		if strings.EqualFold(edit.APIKeyKind, "none") {
+			return ""
+		}
+		return key
+	}
+	if strings.HasPrefix(key, "!") {
+		return ""
+	}
+	if _, ok := os.LookupEnv(key); ok {
+		return ""
+	}
+	return key
+}
+
+// projectOMPOptionsJSON 把 omp 的 options_json 收窄到 {"headers":{...},"authHeader":bool}，
+// headers 里命中敏感词表的键直接丢弃（即使 include_keys=true 也不导出 Authorization 头）。
+func projectOMPOptionsJSON(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	var doc map[string]interface{}
+	if err := json.Unmarshal([]byte(raw), &doc); err != nil {
+		return ""
+	}
+	kept := map[string]interface{}{}
+	if headers, ok := doc["headers"].(map[string]interface{}); ok && len(headers) > 0 {
+		clean := make(map[string]interface{}, len(headers))
+		for k, v := range headers {
+			if sensitiveOptionKeys[normalizeOptionKey(k)] {
+				continue
+			}
+			clean[k] = v
+		}
+		if len(clean) > 0 {
+			kept["headers"] = clean
+		}
+	}
+	if v, ok := doc["authHeader"].(bool); ok && v {
+		kept["authHeader"] = true
+	}
+	if len(kept) == 0 {
+		return ""
+	}
+	b, err := json.Marshal(kept)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+// projectOMPBackupCards 清掉卡片的私有载体（_raw_cfg / options 里的 omp 结构），
+// 保留对目标 harness 有意义的已知字段；模型级 headers 交由 StripBackupKeys 在
+// include_keys=false 时统一剥离。
+func projectOMPBackupCards(cards []ModelCard) []ModelCard {
+	out := make([]ModelCard, 0, len(cards))
+	for _, card := range cards {
+		card.RawCfg = nil
+		card.Options = nil
+		if card.Headers != nil {
+			headers := make(map[string]string, len(card.Headers))
+			for k, v := range card.Headers {
+				headers[k] = v
+			}
+			card.Headers = headers
+		}
+		out = append(out, card)
+	}
+	return out
 }
 
 // SealBackup 按 pkg.KeyMode 生成要写入备份文件的字节。

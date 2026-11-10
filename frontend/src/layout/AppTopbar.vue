@@ -67,6 +67,7 @@ import { WindowIsMaximised, WindowMinimise, WindowToggleMaximise, Quit } from '.
 import { useSettingStore } from '../stores/setting'
 import { leaveDirty, requestLeave } from '../stores/leaveGuard'
 import { t } from '../i18n'
+import * as api from '../api'
 
 const settingStore = useSettingStore()
 const props = defineProps<{
@@ -92,10 +93,38 @@ const topbarEl = ref<HTMLElement | null>(null)
 const compact = ref(false)
 let topbarRO: ResizeObserver | null = null
 
-const agentOptions = [
-  { label: 'ZCode', value: 'zcode' },
-  { label: 'DeepSeek Harness', value: 'deepseek' },
-]
+// Agent 名称是产品名（不随界面语言变化），但新增 Agent（如 omp）必须能从后端
+// core.AllAgents() 动态带出来，不能再在前端写死两份清单——写死正是 omp 一开始选不到的原因。
+const AGENT_LABELS: Record<string, string> = {
+  zcode: 'ZCode',
+  deepseek: 'DeepSeek Harness',
+  omp: 'PI Agent (oh-my-pi)',
+}
+const AGENT_FALLBACK = ['zcode', 'deepseek', 'omp']
+const agentOptions = ref<{ label: string; value: string }[]>(
+  AGENT_FALLBACK.map((id) => ({ label: AGENT_LABELS[id], value: id })),
+)
+function agentLabelOf(id: string): string {
+  return AGENT_LABELS[id] || id
+}
+async function loadAgents() {
+  try {
+    const res = await api.ListAgents()
+    const raw = res['agents']
+    const list = Array.isArray(raw) ? (raw as Array<Record<string, unknown>>) : []
+    const opts = list
+      .map((a) => {
+        const id = typeof a['id'] === 'string' ? a['id'] : ''
+        const label = typeof a['label'] === 'string' && a['label'] ? a['label'] : agentLabelOf(id)
+        return { label, value: id }
+      })
+      .filter((o) => o.value)
+    // 后端还没实现 omp 时也不清空下拉：内置三项兜底，避免选择器变空
+    if (opts.length > 0) agentOptions.value = opts
+  } catch {
+    /* 后端未就绪：保留内置三项 */
+  }
+}
 
 async function refreshMaximised() {
   try {
@@ -177,6 +206,7 @@ watch(() => props.targetPath, () => void fitPath())
 
 onMounted(() => {
   window.addEventListener('resize', onWindowResize)
+  void loadAgents()
   void refreshMaximised()
   void nextTick(fitPath)
   const el = topbarEl.value

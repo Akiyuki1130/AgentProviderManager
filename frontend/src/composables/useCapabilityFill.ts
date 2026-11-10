@@ -31,8 +31,27 @@ function bitOrder(id: string): number {
   return 200 + (CAP_FLAG_KEYS as readonly string[]).indexOf(id.slice(5))
 }
 
+/**
+ * PI Agent（omp）的能力位是 harness 决定的固定子集：输入只支持 text / image，
+ * 没有「输出模态」概念，布尔位里只有 tool_call 有对应写盘语义。
+ * 其余位在 omp 下既不展示也不写入（写进去会被判非法键）。
+ */
+const OMP_INPUT_MODALITIES = ['text', 'image'] as const
+const OMP_FLAG_KEYS = ['tool_call'] as const
+
+function ompInputAllowed(m: string): boolean {
+  return (OMP_INPUT_MODALITIES as readonly string[]).includes(m)
+}
+
+function bitAllowed(id: string, omp: boolean): boolean {
+  if (!omp) return true
+  if (id.startsWith('in:')) return ompInputAllowed(id.slice(3))
+  if (id.startsWith('out:')) return false
+  return (OMP_FLAG_KEYS as readonly string[]).includes(id.slice(5))
+}
+
 /** 该卡片上「可补全」的位：能力表 / provider 推断为真、用户尚未确认，按规范序生成。 */
-function bitIds(card: ModelCard): string[] {
+function bitIds(card: ModelCard, omp = false): string[] {
   const ids: string[] = []
   const inf = card._capabilities_inferred
   if (!inf) return ids
@@ -40,15 +59,17 @@ function bitIds(card: ModelCard): string[] {
   for (const m of CAP_INPUT_MODALITIES) if ((inf.input_modalities || []).includes(m) && !(cur.input_modalities || []).includes(m)) ids.push(`in:${m}`)
   for (const m of CAP_OUTPUT_MODALITIES) if ((inf.output_modalities || []).includes(m) && !(cur.output_modalities || []).includes(m)) ids.push(`out:${m}`)
   for (const f of CAP_FLAG_KEYS) if (inf[f] === true && cur[f] === undefined) ids.push(`flag:${f}`)
-  return ids
+  return omp ? ids.filter((id) => bitAllowed(id, true)) : ids
 }
 
 /** 一个方向的推断模态集合：按规范序、只保留词表内成员（词表外的推断值一律丢弃）。 */
-function inferredModalities(card: ModelCard, dir: Direction): string[] {
+function inferredModalities(card: ModelCard, dir: Direction, omp = false): string[] {
   // 元组自身的 includes/顺序比较只接受字面量联合，先放宽成 readonly string[]（同原实现的写法）。
   const order: readonly string[] = dir.order
+  // omp 没有输出模态；输入只有 text / image
+  if (omp && dir.key !== 'input_modalities') return []
   const raw = (card._capabilities_inferred || {})[dir.key] || []
-  return order.filter((m) => raw.includes(m))
+  return order.filter((m) => raw.includes(m) && (!omp || (dir.key === 'input_modalities' && ompInputAllowed(m))))
 }
 
 /** 一个方向的用户已确认模态集合：按规范序，非词表成员丢弃（与卡片 `toggleModality` 同口径）。 */
@@ -69,13 +90,13 @@ function currentModalities(card: ModelCard, dir: Direction): string[] {
  * - 多选限制：`fillAll` 为真时处理全部可补项；否则只处理与所选位有交集的位
  *   （模态按方向整组判定，见 `cap.batchArrayNote`）。
  */
-function mergePlan(card: ModelCard, chosen: Set<string>, fillAll: boolean): { next: ModelCapabilities; bits: number } | null {
+function mergePlan(card: ModelCard, chosen: Set<string>, fillAll: boolean, omp = false): { next: ModelCapabilities; bits: number } | null {
   const inf = card._capabilities_inferred
   if (!inf) return null
   const next: ModelCapabilities = { ...(card.capabilities || {}) }
   let bits = 0
   for (const dir of DIRECTIONS) {
-    const src = inferredModalities(card, dir)
+    const src = inferredModalities(card, dir, omp)
     if (src.length === 0) continue
     if (!fillAll && !src.some((m) => chosen.has(dir.prefix + m))) continue
     const cur = currentModalities(card, dir)
@@ -86,6 +107,7 @@ function mergePlan(card: ModelCard, chosen: Set<string>, fillAll: boolean): { ne
     bits += added.length
   }
   for (const f of CAP_FLAG_KEYS) {
+    if (omp && !(OMP_FLAG_KEYS as readonly string[]).includes(f)) continue
     if (inf[f] !== true || next[f] !== undefined) continue
     if (!fillAll && !chosen.has(`flag:${f}`)) continue
     next[f] = true
@@ -104,14 +126,17 @@ function mergePlan(card: ModelCard, chosen: Set<string>, fillAll: boolean): { ne
  * 2. **布尔位不参与覆盖**：三态里「能力表没声明真」≠「假」，删掉用户勾过的布尔键就是抹掉
  *    已确认的能力。要补的布尔位在「补全」方向下补，覆盖只改模态集合。
  */
-function overwritePlan(card: ModelCard): { next: ModelCapabilities; removed: string[] } | null {
+function overwritePlan(card: ModelCard, omp = false): { next: ModelCapabilities; removed: string[] } | null {
   const inf = card._capabilities_inferred
   if (!inf) return null
   const next: ModelCapabilities = { ...(card.capabilities || {}) }
   const removed: string[] = []
   let changed = false
   for (const dir of DIRECTIONS) {
-    const target = inferredModalities(card, dir)
+    // omp 没有输出模态：覆盖时不得因为「推断为空」把输出方向留成旧值，但删掉整组也超纲，
+    // 因此直接跳过（与通用逻辑的「推断为空就不动」同口径）。
+    if (omp && dir.key !== 'input_modalities') continue
+    const target = inferredModalities(card, dir, omp)
     if (target.length === 0) continue
     const cur = currentModalities(card, dir)
     if (cur.length === target.length && target.every((m) => cur.includes(m))) continue
@@ -149,7 +174,7 @@ function joinBits(items: string[], lang: UiLang): string {
  * - 两个方向都不新增接口、不直接写盘：结果只落在卡片的 `capabilities` 上，由两页既有的
  *   卡片载荷负责提交。
  */
-export function useCapabilityFill(source: () => ModelCard[], lang: Ref<UiLang>): {
+export function useCapabilityFill(source: () => ModelCard[], lang: Ref<UiLang>, agent?: () => string): {
   picked: Ref<string[]>
   options: ComputedRef<{ label: string; value: string }[]>
   overwrite: Ref<boolean>
@@ -157,6 +182,8 @@ export function useCapabilityFill(source: () => ModelCard[], lang: Ref<UiLang>):
   fill: () => Promise<void>
 } {
   const { push } = useToast()
+  // 当前 harness：PI Agent（omp）只暴露 text/image 输入与 tool_call 三个位
+  const isOmp = () => (agent ? agent() : '') === 'omp'
   /** 已选能力位（空数组 = 补全全部可补项）。覆盖方向下不适用（彻底忽略，见 `chosen`）。 */
   const picked = ref<string[]>([])
   /** 动作方向：`false` = 并入（默认，只增不减），`true` = 覆盖（替换模态集合、会删值）。 */
@@ -166,7 +193,7 @@ export function useCapabilityFill(source: () => ModelCard[], lang: Ref<UiLang>):
   const options = computed(() => {
     const counts = new Map<string, number>()
     for (const card of source()) {
-      for (const id of bitIds(card)) counts.set(id, (counts.get(id) || 0) + 1)
+      for (const id of bitIds(card, isOmp())) counts.set(id, (counts.get(id) || 0) + 1)
     }
     return [...counts.keys()]
       .sort((a, b) => bitOrder(a) - bitOrder(b))
@@ -184,8 +211,8 @@ export function useCapabilityFill(source: () => ModelCard[], lang: Ref<UiLang>):
   const chosen = computed<Set<string>>(() => new Set(overwrite.value ? [] : picked.value))
   const fillAll = computed(() => chosen.value.size === 0)
 
-  const fillableCount = computed(() => source().filter((c) => mergePlan(c, chosen.value, fillAll.value) !== null).length)
-  const overwriteCount = computed(() => source().filter((c) => overwritePlan(c) !== null).length)
+  const fillableCount = computed(() => source().filter((c) => mergePlan(c, chosen.value, fillAll.value, isOmp()) !== null).length)
+  const overwriteCount = computed(() => source().filter((c) => overwritePlan(c, isOmp()) !== null).length)
 
   /** 现成文案：可处理时给计数，一个都处理不了时直接说出原因（与当前方向同口径）。 */
   const summary = computed(() => {
@@ -199,7 +226,7 @@ export function useCapabilityFill(source: () => ModelCard[], lang: Ref<UiLang>):
     if (list.length === 0) return
 
     if (overwrite.value) {
-      const plans = list.map((card) => ({ card, plan: overwritePlan(card) }))
+      const plans = list.map((card) => ({ card, plan: overwritePlan(card, isOmp()) }))
         .filter((x): x is { card: ModelCard; plan: { next: ModelCapabilities; removed: string[] } } => x.plan !== null)
       if (plans.length === 0) {
         push('info', t('cap.batchLabel', lang.value), t('cap.batchNoneOverwrite', lang.value))
@@ -239,7 +266,7 @@ export function useCapabilityFill(source: () => ModelCard[], lang: Ref<UiLang>):
     let models = 0
     let bits = 0
     for (const card of list) {
-      const plan = mergePlan(card, chosen.value, fillAll.value)
+      const plan = mergePlan(card, chosen.value, fillAll.value, isOmp())
       if (!plan) continue
       card.capabilities = plan.next
       models += 1

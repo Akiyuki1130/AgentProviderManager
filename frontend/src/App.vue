@@ -110,15 +110,22 @@ function toast(type: string, title: string, msg?: string) {
   if (fn) fn(type, title, msg)
 }
 
-// OpenCode 已从入口隐藏：历史/异常值 "opencode" 一律按 ZCode 处理。
+// 后端 core.AllAgents() 的 id 白名单（omp = PI Agent (oh-my-pi)）。
+// OpenCode 仍从入口隐藏：历史/异常值 "opencode" 一律按 ZCode 处理。
+const KNOWN_AGENT_IDS = ['zcode', 'opencode', 'deepseek', 'omp'] as const
 function normalizeAgentID(v: string): AgentID {
-  if (v === 'deepseek') return 'deepseek'
+  const id = (v || '').trim().toLowerCase()
+  // omp 必须原样保留：它有自己的配置路径与只读边界，不能回落成 zcode
+  if (id === 'deepseek') return 'deepseek'
+  if (id === 'omp') return 'omp'
   return 'zcode'
 }
 
 function agentLabel(agent: string): string {
-  if (agent === 'zcode' || agent === 'opencode') return 'ZCode'
-  if (agent === 'deepseek') return 'DeepSeek Harness'
+  const l = settingStore.resolvedLang
+  if (agent === 'zcode' || agent === 'opencode') return t('agent.zcode', l)
+  if (agent === 'deepseek') return t('agent.deepseek', l)
+  if (agent === 'omp') return t('agent.omp', l)
   return agent
 }
 
@@ -245,7 +252,7 @@ onMounted(async () => {
   try {
     const ag = await api.GetCurrentAgent() as Record<string, unknown>
     const cur = ag['agent'] as string
-    if (cur === 'zcode' || cur === 'opencode' || cur === 'deepseek') {
+    if ((KNOWN_AGENT_IDS as readonly string[]).includes(cur)) {
       settingStore.setAgent(normalizeAgentID(cur))
     }
   } catch { /* ignore */ }
@@ -254,7 +261,7 @@ onMounted(async () => {
     targetPath.value = (info['path'] as string) || ''
     if (info['agent'] && typeof info['agent'] === 'string') {
       const ag = info['agent'] as string
-      if (ag === 'zcode' || ag === 'opencode' || ag === 'deepseek') settingStore.setAgent(normalizeAgentID(ag))
+      if ((KNOWN_AGENT_IDS as readonly string[]).includes(ag)) settingStore.setAgent(normalizeAgentID(ag))
     }
     await refreshBackup()
   } catch { /* ignore */ }

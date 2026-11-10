@@ -115,11 +115,29 @@ func sortVariantsCanonical(v []string) []string {
 	return v
 }
 
+// variantAllowed 是「档位名能否进入卡片」的唯一门控（读端与 NormalizeVariants 共用）：
+//   - 白名单内的档位永远允许；
+//   - 「允许自填推理档位」关闭（默认）时，白名单外的名字一律丢弃，行为与阶段 A 一致；
+//   - 打开时，白名单外的名字只要非空、不超长、不含控制字符就保留。
+//
+// 白名单外的档位不受 ZCode/DSH 的 schema 校验，限长与禁控制字符必须在这里挡住——
+// 它们会原样落进用户配置（DSH 还会把它当作 YAML 键）。
+func variantAllowed(s string) bool {
+	if ZCodeVariantSet[s] {
+		return true
+	}
+	if !CustomVariantsAllowed() {
+		return false
+	}
+	return s != "" && len(s) <= MaxVariantLen && !hasControlChar(s)
+}
+
 // NormalizeVariants normalizes reasoning variants to deduplicated lowercase list.
 //
-// 白名单受「允许自定义档位」策略（CustomVariantsAllowed）控制：
+// 门控委托给 variantAllowed（读端与写端、读卡与规范化共用同一处判定）：
 //   - 关闭（默认）：只保留 ZCodeVariantSet 白名单内的档位，行为与阶段 A 完全一致；
-//   - 打开：跳过白名单过滤，但仍是「去重 + canonicalVariant 归一别名 + 丢弃空串」。
+//   - 打开：跳过白名单过滤，但仍是「去重 + canonicalVariant 归一别名 + 丢弃空串 +
+//     限长/禁控制字符」。
 //
 // 注意顺序保持：两条路径都不排序——排序是 sortVariantsCanonical 的职责，只用于能力表。
 func NormalizeVariants(value interface{}) []string {
@@ -141,7 +159,6 @@ func NormalizeVariants(value interface{}) []string {
 	default:
 		return nil
 	}
-	allowCustom := CustomVariantsAllowed()
 	seen := map[string]bool{}
 	var out []string
 	for _, raw := range items {
@@ -149,14 +166,9 @@ func NormalizeVariants(value interface{}) []string {
 		if s == "" || seen[s] {
 			continue
 		}
-		// 放宽路径下只需非空 + 未重复；收紧路径下还须落在白名单内。
-		if !allowCustom && !ZCodeVariantSet[s] {
-			continue
-		}
-		// 自定义档位（不在白名单内）额外限长与禁控制字符：ZCode/DSH 对档位名无
-		// schema 校验，高级开关打开时必须在这里挡住超长/含控制字符的值——它们会
-		// 原样落进用户配置（DSH 还会把它当 YAML 键）。
-		if !ZCodeVariantSet[s] && (len(s) > MaxVariantLen || hasControlChar(s)) {
+		// 唯一门控见 variantAllowed：开关关闭时白名单外的名字整条丢弃，打开时
+		// 仍要做限长与禁控制字符校验。
+		if !variantAllowed(s) {
 			continue
 		}
 		seen[s] = true
