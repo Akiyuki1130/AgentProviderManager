@@ -1,5 +1,20 @@
 # Changelog
 
+## 未发布
+
+### 新增
+
+- **第三个 harness：PI Agent（oh-my-pi，CLI `omp`）。** 支持读写 `~/.omp/agent/models.yml`（`models.yaml` 同义；`PI_CONFIG_DIR` 改配置根、`PI_CODING_AGENT_DIR` 改默认 profile 的 agent 目录、`OMP_PROFILE` / `PI_PROFILE` 选活跃 profile，命名 profile 走 `profiles/<name>/agent`），并在 `config.yml` 的 `modelRoles.default` 上设置默认模型。写入走新增的纯文档层 `internal/ompprovider`：`yaml.Node` 节点级操作，未改动的 provider 子树、注释、键序与 `!command` 标签原样保留；`apiKey` 的明文、`${ENV}`、`!command` 三种写法都原样保留，命令永不执行。写前按 omp 真 schema 校验（provider 无 `api` 时每个模型必须自带 `api`；`models` 非空时必须有 `apiKey`，`auth: none` / `oauth` 例外；13 种 `api` 枚举、六档 thinking、成本与模态字段等），因为 omp 解析失败仍会以 0 退出。安全边界：不读 `agent.db`、不接管 OAuth、无 `os/exec`。两道保护性拒绝：只有 `models.json`（无 `.yml` / `.yaml`）时只读并提示先运行一次 `omp`（G1：自动新建 `.yml` 会让旧 `.json` 永久失效）；`settings.json` 存在而 `config.yml` 不存在时拒绝新建（G18：会让 omp 永久跳过旧版设置迁移）。删除 provider 前检查 `modelRoles` / `modelPresets` 等引用（含 glob 保守匹配），删除最后一个模型若会让 provider 不满足 omp 空 provider 要求则要求整体删除。UI 增加顶部栏第三个 Agent、只读与 needsMigration 横幅、默认模型卡片、六档 effort 与 `text` / `image` 能力位门控。
+- **模型目录表按 ZCode revision 43 重建。** `modelRules` 84 → 83 条、`providerSiteRules` 54 → 58 条；新增 `glm-5.3` 的三条 anthropic 站点规则与 opencode zen 的 completions 兜底。上游真实变化（`deepseek` 家族规则不再带 `contextWindow`、`gpt-5.4` 家族不再带输出上限、`grok-4.6` 的 500000 输出由 `opencode.ai/zen/go/v1` 站点规则提供）不修改生成器，测试期望按资源证据更新。
+
+### 修复
+
+- **恢复 DSH YAML 备份必然失败。** `isYAMLPath` 只认 `.yaml` / `.yml` 结尾，`settings.yaml.bak_<ts>` 被判成 JSON，`RestoreBackup` → `LoadConfigForRestore` 一路解析失败；现在先按固定词表（`.bak_<ts>`、`.snapshot_<ts>`、`.restore_*`、`.removed_<ts>`、`.tmp_*`、`.apm-update-*`、`.apm-backup-*`）循环剥离后缀再判定，`validateRestoreContent` 复用同一判定；解析收敛到唯一入口 `parseDeepSeekConfigBytes`（YAML / JSON + JSON 失败回退 YAML + 根必须为对象），新增表驱动与端到端还原测试。
+- **TODO #27 读侧白名单把自填档位词静默滤光。** 读侧不再固定白名单，改为与写侧同一门控 `variantAllowed`（开关关 = 白名单；开 = 非空、限长、无控制字符），ZCode / DSH / opencode 三条路径对称；写端行为不变。
+- **TODO #28 只有 `off` 的源档位集合被写成 `reasoningEfforts: false`。** 现在退化为「不写任何档位键」——只写真值、未知省略是硬不变量；用户显式关闭仍写 `false`。
+- **TODO #30 DSH 写端两条残留。** ① `modelOverrides[*].compat` 现按协议过滤（复用 `dshCompatForWrite`，过滤后为空则删键），不再透传错位键；② 自填档位名不再写入 DSH（只写固定 7 档，否则整份 `llm-pi-ai` 解析失败），读侧开关打开时仍保留自填名。
+- **TODO #21 app 层两条兜底写入会把 APM 内部键落盘。** 新增 `core.StripAPMInternalModelKeys` 并在 `SaveProvider` / `ImportProvider` 的兜底分支调用。
+
 ## 2.1.2 — 2026-10-18
 
 **第一个稳定版。** `2.1.0-pre` / `2.1.1-pre` 是未发布的中间检查点，本次把 **`v2.0.8`（2026-10-13）之后的全部改动**作为稳定版发布；**面向用户的变化清单就是下面「2.1.1-pre」这一节**（DSH 0.2 配置后端、模型能力表五层重构、能力维度与档位批量补全、模型匹配与思考档位自适应、连接探测、钥匙串联动、可移植备份导出/导入、UI 打磨、安全审计修复）。内置更新器只接受稳定 SemVer 发布，因此从 2.1.2 起可以被 2.0.7 / 2.0.8 的安装直接升级到。

@@ -9,7 +9,7 @@
 
 - 本项目是仅支持 Windows 的 Wails 桌面应用。
 - 构建依赖 Go 1.25+、Node.js/npm、Wails CLI v2.16.0，以及 Microsoft WebView2 运行时/SDK。
-- 绝不读取、修改、打印或提交真实用户配置与凭据，尤其是 `C:\Users\<user>\.dsh`、provider 文件、备份、API Key、DPAPI 钥匙串文件或 GitHub token。
+- 绝不读取、修改、打印或提交真实用户配置与凭据，尤其是 `C:\Users\<user>\.dsh`、`C:\Users\<user>\.omp`、provider 文件、备份、API Key、DPAPI 钥匙串文件或 GitHub token。
 - 测试一律使用占位值。不要将 `node_modules`、前端生成物、临时可执行文件、`*.exe~` 或本地发布目录加入 Git。
 
 ## 版本变更
@@ -63,16 +63,18 @@ GOOS=windows GOARCH=amd64 go test -c ./internal/update
 
 ## 后端约定
 
-- 依赖方向严格单向：`main.go` → `internal/app` → `internal/core` → `internal/dshprovider` / `internal/zcodeprovider`。只有 `main.go` 与 `internal/app` 可以 import Wails；`internal/update` 不得依赖 Wails 层。
+- 依赖方向严格单向：`main.go` → `internal/app` → `internal/core` → `internal/dshprovider` / `internal/zcodeprovider` / `internal/ompprovider`。只有 `main.go` 与 `internal/app` 可以 import Wails；`internal/update` 不得依赖 Wails 层；`internal/ompprovider` 是纯文档层，不得 import `internal/core`。
+- **PI Agent（omp）写入必须经过 `internal/ompprovider` 的写前校验**：`ModelsFile.Validate()` / `ConfigFile` 解析失败即拒绝落盘——omp 解析失败时仍会以 0 退出，不能依赖下游发现坏配置。写入只走 `yaml.Node` 节点级操作，未被改动的 provider、注释、键序与 `!command` 标签必须原样保留。
+- **omp 的三条硬边界**：绝不读取 `agent.db`；绝不执行配置里的 `!command`（只原样保留）；不接管 OAuth 凭据（已有的非明文引用保留但不可编辑）。只有 `models.json` 而没有 `models.yml` / `models.yaml` 时只读、拒绝写入（G1：自动新建 `.yml` 会让旧 `.json` 永久失效）；`config.yml` / `modelRoles.default` 仅在 `settings.json` 不存在（或 `config.yml` 已存在）时写入，否则先提示运行一次 `omp` 完成旧版迁移（G18），且只管理 `modelRoles.default` 一个角色，拒绝 glob 选择器。
 - 每次写配置都必须先走 `core.PrepareChange`（同级备份 + 还原点）。ZCode v2 的写入还要经过唯一收口 `WriteConfigBytes` → `guardZCodeV2Doc`；任何写入路径都不得绕过这两道门。
 - 写入是原子的：同目录临时文件 + `Sync` + `Rename`。备份与临时文件后缀是固定词表：`.bak_<ts>`、`.snapshot_<ts>`、`.restore_*`、`.removed_<ts>`、`.tmp_*`、`.apm-update-*`、`.apm-backup-*`。
 - 并发修改用内容指纹（`mtime:size:sha256`）在 `a.mu` 下检测；不匹配即中止并提示重试。`internal/core/lock.go` 当前没有调用方。
 - Wails 绑定方法绝不返回 `error`，一律返回 `{success, error, error_code}`；面向用户的字符串用 `core.ShortText`（300）截断。前端必须把 binding reject 与 `success: false` 两种情况都归一化为 rejection。
 - 没有日志框架，也不用 `panic`。唯一的诊断输出是 `main.go` 里的 stderr 打印；用户可见的错误文案是中文。
 - `context.Context` 不贯穿 `internal/core`：core 函数接收 `time.Duration`，由 app 层用 `context.WithTimeout` 包裹调用。
-- 后端在 `init()` 里通过 `core.RegisterBackendFor` / `RegisterBackendForFormat` 自注册。包初始化阶段不得读取真实用户文件，格式探测函数必须无副作用（`internal/core/backend.go`）。
+- 后端在 `init()` 里通过 `core.RegisterBackendFor` / `RegisterBackendForFormat` 自注册，三个 harness 都在这里接入（omp 的 `models.yml` / `models.yaml` / `models.json` / `config.yml` 各有独立格式名与还原点操作类型）。包初始化阶段不得读取真实用户文件，格式探测函数必须无副作用（`internal/core/backend.go`）。
 - 面向前端的 DTO 集中在 `internal/core/models.go`，使用显式 `snake_case` 标签。内部 meta 字段以下划线前缀（`_operation`、`_raw_*`）。空切片绝不序列化为 `null`。
-- **模型能力是 harness 中立的一层**：`internal/core/model_features.go` 的 `ModelFeatures`（输入/输出模态、工具调用、结构化输出、原生联网搜索、中段 system、附件、温度）**全部三态——`nil` = 未知，不是「不支持」**。写盘**只写真**：未知与「假」一律省略键，绝不写 `false` / `null` / `enabled` / `requiresMfjsToolSchema` / `optionSpecs.*.map`（ZCode 的 overlay 里省略 = 不覆盖，`null` 才是显式清空）。卡片与写入端之间只经内部通道 `_apm_capabilities`，**任何写盘出口都必须剥离它**（`stripAPMInternalModelKeys`）。**写端还必须遵守目标 harness 自己的键域与协议门**：DSH 的 `input` 只收 `text`/`image`，`compat` 的每个键只在其 `COMPAT_GATES` 里 disposition 为 `offer` 的 wire protocol 上可写（`supportsTemperature` 仅 anthropic、`supportsStrictMode` 仅 completions/responses），`reasoningEfforts` 的字典键限死固定 7 档——写错一档的后果不是「这个键被忽略」，而是**该模型被判不可服务、甚至整份 llm-pi-ai 配置解析失败**（见 `MODEL-MANAGEMENT-PLAN.md` 10.1.3 / 10.15）。两张生成的能力表彼此独立、解析契约不得互改：`capability_catalog_gen.go` 的 `ctx|out|levels` 与 `capability_features_gen.go` 的 `<输入模态>|<输出模态>|<flags>`（解析 fail-closed，只收录已知为真的位）；两张表分别由 `scripts/sync-model-catalog.mjs` 与 `scripts/sync-ability-catalog.mjs` 在**构建期**生成（见「验证命令」的 `--check`），运行时不发任何网络请求。
+- **模型能力是 harness 中立的一层**：`internal/core/model_features.go` 的 `ModelFeatures`（输入/输出模态、工具调用、结构化输出、原生联网搜索、中段 system、附件、温度）**全部三态——`nil` = 未知，不是「不支持」**。写盘**只写真**：未知与「假」一律省略键，绝不写 `false` / `null` / `enabled` / `requiresMfjsToolSchema` / `optionSpecs.*.map`（ZCode 的 overlay 里省略 = 不覆盖，`null` 才是显式清空）。卡片与写入端之间只经内部通道 `_apm_capabilities`，**任何写盘出口都必须剥离它**（`stripAPMInternalModelKeys`）。**写端还必须遵守目标 harness 自己的键域与协议门**：PI Agent 的 `models.yml` 只接受 `openai-completions` / `openai-responses` / `anthropic-messages` 三种 `api`，provider 无 `api` 时每个 model 必须自带 `api`（与 `auth` 无关），`apiKey` 的空串表示「不覆盖」而清空必须传 `nil`，输入模态只认 `text` / `image`；DSH 的 `input` 只收 `text`/`image`，`compat` 的每个键只在其 `COMPAT_GATES` 里 disposition 为 `offer` 的 wire protocol 上可写（`supportsTemperature` 仅 anthropic、`supportsStrictMode` 仅 completions/responses），`reasoningEfforts` 的字典键限死固定 7 档——写错一档的后果不是「这个键被忽略」，而是**该模型被判不可服务、甚至整份 llm-pi-ai 配置解析失败**（见 `MODEL-MANAGEMENT-PLAN.md` 10.1.3 / 10.15）。两张生成的能力表彼此独立、解析契约不得互改：`capability_catalog_gen.go` 的 `ctx|out|levels` 与 `capability_features_gen.go` 的 `<输入模态>|<输出模态>|<flags>`（解析 fail-closed，只收录已知为真的位）；两张表分别由 `scripts/sync-model-catalog.mjs` 与 `scripts/sync-ability-catalog.mjs` 在**构建期**生成（见「验证命令」的 `--check`），运行时不发任何网络请求。
 - 不得移除的安全不变量：URL/SSRF 校验（默认拒绝 HTTP 与私网地址）、重定向逐跳复检并在跨主机跳转时剥离 `Authorization`、对每个对外错误做 `RedactSensitive`、以及更新器的主机白名单与防 DNS rebinding 复检。全仓库没有任何 `os/exec`。
 
 ## 测试

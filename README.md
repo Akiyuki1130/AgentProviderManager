@@ -1,8 +1,8 @@
 # Agent Provider Manager 2.1.2
 
-> 一个面向 Windows 的多 Agent 模型提供商管理器：用一个原生桌面界面管理 ZCode 与 DeepSeek Harness 的 provider、模型、API Key、备份和迁移。（OpenCode 入口已在应用内隐藏，暂不适配。）
+> 一个面向 Windows 的多 Agent 模型提供商管理器：用一个原生桌面界面管理 ZCode、DeepSeek Harness 与 PI Agent 的 provider、模型、API Key、备份和迁移。（OpenCode 入口已在应用内隐藏，暂不适配。）
 >
-> **关键词 / Keywords:** Agent Provider Manager, ZCode, DeepSeek Harness, CCSwitch alternative, Claude Code provider manager, AI provider manager, OpenAI compatible, Anthropic, model catalog, API key keychain, Wails, Vue 3, Windows desktop.
+> **关键词 / Keywords:** Agent Provider Manager, ZCode, DeepSeek Harness, PI Agent, oh-my-pi, CCSwitch alternative, Claude Code provider manager, AI provider manager, OpenAI compatible, Anthropic, model catalog, API key keychain, Wails, Vue 3, Windows desktop.
 
 [English version](#english-version)
 
@@ -20,10 +20,13 @@ Agent Provider Manager（简称 **APM**）是一个 Windows 桌面工具，用�
 |---|---|---|
 | **ZCode** | `%USERPROFILE%\.zcode\v2\provider_config.json`（新版，优先）/ `%USERPROFILE%\.zcode\v2\config.json`（旧版） | 读取、编辑、保存、还原点、provider/model 管理、旧版供应商一次性导入、ZCode 3.14 兼容性检查与一键修复、跨 Agent 迁移（源 / 目标） |
 | **DeepSeek Harness** | 0.2：`%USERPROFILE%\.dsh\profiles\desktop\cordis.patch.yml`（桌面端，优先）/ `profiles\web\cordis.patch.yml`（`dsh web`、CLI）/ `cordis.patch.yml`（home 级，优先级最高）。0.1：`settings.yaml`（`.yml` / `.json`，只作为旧格式保留） | 读取、编辑、保存、还原点、provider/model 管理、跨 Agent 迁移（源 / 目标）；provider 写入 `llm-pi-ai` 条目的 `config.providers`，API Key 以 `apiKeyEnv` 引用写入 `.credentials.yaml`（`version: 1` + `refs`） |
+| **PI Agent**（oh-my-pi，`omp`） | `%USERPROFILE%\.omp\agent\models.yml`（优先，其次 `models.yaml`）/ `models.json`（只有它时只读，需先运行一次 `omp` 完成迁移）；命名 profile 用 `.omp\profiles\<name>\agent\models.yml`；默认模型在 `agent\config.yml` 的 `modelRoles.default` | 读取、编辑、保存、还原点、provider/model 管理、设置默认模型、跨 Agent 迁移（源 / 目标）；按 `yaml.Node` 节点级写入，注释与键序保留；`apiKey` 三种写法原样保留且永不执行 `!command` |
 
 > **OpenCode**：入口已在应用内完全隐藏（暂不适配，后续再说）。相关代码与历史还原点数据保留，但顶部栏、迁移页与编辑器里都不会再出现 OpenCode。
 
 DeepSeek Harness 0.2（当前桌面端与 CLI 的 web profile）把用户配置从单个 `settings.yaml` 改成 profile patch 层：桌面端是 `~/.dsh/profiles/desktop/cordis.patch.yml`，web（`dsh web`，等价于 `dsh --profile web`）是 `~/.dsh/profiles/web/cordis.patch.yml`，自定义 profile 是 `profiles/<name>/cordis.patch.yml`；`~/.dsh/cordis.patch.yml` 是 home 级 patch，优先级最高，若它定义了 `llm-pi-ai`，程序会拒绝写被它覆盖的 profile 层并说明原因。provider 写在 patch 里 `id: llm-pi-ai` 条目的 `config.providers` 上，API Key 只写引用（`apiKeyEnv`），密钥落到 `~/.dsh/.credentials.yaml` 的 `version: 1` + `refs` 布局（0.1 的扁平布局会在写入时升级，`records` 与注释保留）。未改动的 patch 行（含 `!!js` 表达式与注释）在保存时原样保留；0.1 的 `settings.yaml` / `settings.yml` / `settings.json` 仍可读写，但 DSH 0.2 只会导入它一次。ZCode 新版文件的位置可用 `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` 覆盖，程序会按文件内容判定当前目标是旧版（`config.json`）还是新版（`provider_config.json`）。顶部栏也可以选择已探测路径或通过文件选择器指定配置文件。保存时会重新序列化 JSON/YAML，因此不保证保留原文件的注释、缩进和键顺序。ZCode 新版（`provider_config.json`，`schemaVersion` 1）的读写规则已与 ZCode 3.14 对齐：只写 ZCode 接受的键与取值，并按 ZCode 的键序输出，避免它读到后又把文件重写一遍；如果文件里存在 ZCode 会拒绝的内容（例如个人规则里的 `builtinModelIds`、家族 `group`、旧式 `logo`），程序会把它列出来并提供一键修复（修复前照例建立还原点）。
+
+PI Agent（oh-my-pi，命令行 `omp`）把 provider 放在 agent 目录的 `models.yml`（`models.yaml` 同义）：默认 `%USERPROFILE%\.omp\agent`，配置根目录可用 `PI_CONFIG_DIR` 改名，默认 profile 的 agent 目录可用 `PI_CODING_AGENT_DIR` 覆盖，命名 profile 在 `.omp\profiles\<name>\agent`，活跃 profile 由 `OMP_PROFILE`（其次 `PI_PROFILE`）决定。程序只管理 `providers` 子树并按 `yaml.Node` 节点级写入，未改动的行、注释与键序原样保留；`apiKey` 的明文、`${ENV}` 与 `!command` 三种写法都原样保留，其中 `!command` 永不执行。默认模型写在 `config.yml` 的 `modelRoles.default`：程序只管理这一个角色，写入空选择器表示删除该键；如果 `settings.json` 存在而 `config.yml` / `config.yaml` 都不存在，程序拒绝新建 `config.yml`，以免 omp 永久跳过旧版设置的迁移。只有 `models.json` 而没有 `models.yml` / `models.yaml` 时，程序只读展示并拒绝写入，请先运行一次 `omp` 完成迁移——自动新建 `.yml` 会让旧 `.json` 永久失效。
 
 > 当前程序定位为 **Windows-only**：使用 Wails + WebView2，Windows 钥匙串使用 Windows DPAPI。非 Windows 平台没有完整的产品支持承诺。
 
@@ -43,7 +46,7 @@ DeepSeek Harness 0.2（当前桌面端与 CLI 的 web profile）把用户配置�
 - 备份导出 / 导入：把当前 Agent 的提供商（全部或指定）导出为 `apm-backup v1` JSON 包，是否含密钥与加密方式独立可选：默认不含密钥（安全分享）；加密方式有明文（勾选密钥时弹窗二次确认）、默认加密（内置密钥，任意设备上的本软件均可解密，防止被直接明文读取，但不防有意破解）或密码加密（PBKDF2-SHA256 + AES-256-GCM，跨设备需同一密码）；导入前可预览包内容与冲突策略（跳过/覆盖），用不含密钥的备份覆盖已有提供商时保留本地 Key，导入自动创建还原点。
 - 还原点：每次修改配置前自动保存改动前的文件原文（逐字节保留注释与键序），并记录 Agent、绝对路径、格式、文件当时是否存在、大小、SHA-256、操作类型等元数据；“还原点”页可任选时间点回滚，回滚前会先给当前状态再建一个还原点，因此回滚本身也能再回滚；单个目标保留最近 50 个、合计不超过 64 MB。
 - 同级 `.bak_<时间戳>` 备份、指纹检查与“恢复最近备份”；默认每个文件最多保留 2 份同级备份。
-- 在 ZCode（新版 / 旧版）与 DeepSeek Harness（0.2 profile patch / 0.1 `settings.yaml`）之间选择性迁移 provider（追加/合并或覆盖），或从 `/v1/models` 获取模型后导入当前 Agent。
+- 在 ZCode（新版 / 旧版）、DeepSeek Harness（0.2 profile patch / 0.1 `settings.yaml`）与 PI Agent（`models.yml`）之间选择性迁移 provider（追加/合并或覆盖），或从 `/v1/models` 获取模型后导入当前 Agent；PI Agent 侧的默认模型不随迁移或备份包一起搬运。
 - 输入框提供只含“剪切 / 复制 / 粘贴”的自定义右键菜单。
 - 外观：浅色 / 深色 / 跟随系统三选，强调色提供 8 个预设色板 + 自定义取色；`Ctrl+S` 保存当前提供商（仅在编辑区有未保存修改时触发），提供商搜索框按 `Esc` 清空。
 - 不包含模型代理、计费、遥测或自动上传；可选的自动更新只从本项目 GitHub Release 检查并下载正式版本。
@@ -53,7 +56,7 @@ DeepSeek Harness 0.2（当前桌面端与 CLI 的 web profile）把用户配置�
 1. 模型请求只允许 `http` / `https`。默认仅允许 HTTPS；用户显式开启“允许 HTTP”后，外部 HTTP 地址才会被允许。HTTP 会以明文传输 API Key 和请求内容，不建议在生产环境开启。
 2. 发请求前及重定向过程中会校验 host，默认拒绝 localhost、环回、私有、链路本地、未指定和其他保留地址；用户显式开启“允许本地与内网地址”后才会放行（例如访问本机模型服务）。此校验是 SSRF 防护，不等同于完整的网络隔离。
 3. 点击获取模型时，API Key 会通过 `Authorization: Bearer ...` 发送到用户输入的 Base URL；服务商可能记录请求、来源 IP、模型列表和认证信息。项目本身不会把模型配置或凭据上传到项目方，也没有遥测；可选自动更新只访问固定的 GitHub Release 地址。
-4. DeepSeek 的 `.credentials.yaml`、provider 配置、同级 `.bak_` 备份、恢复快照与还原点内容都可能包含 API Key。还原点只写在本机 `%LOCALAPPDATA%\AgentProviderManager\restorepoints`（文件权限 0600），不上传、不写日志，但仍是明文副本：不要把这些文件提交 Git、上传工单或发送给他人，并可在“还原点”页按需删除或清理。
+4. DeepSeek 的 `.credentials.yaml`、PI Agent 的 `models.yml`、provider 配置、同级 `.bak_` 备份、恢复快照与还原点内容都可能包含 API Key。还原点只写在本机 `%LOCALAPPDATA%\AgentProviderManager\restorepoints`（文件权限 0600），不上传、不写日志，但仍是明文副本：不要把这些文件提交 Git、上传工单或发送给他人，并可在“还原点”页按需删除或清理。
 5. 导入页的临时流程可能使用前端 `sessionStorage` 传递 API Key；钥匙串页面的复制功能会把密钥放入系统剪贴板。使用后请清理剪贴板，避免剪贴板管理器、录屏和共享用户配置泄露密钥。
 6. Windows DPAPI 绑定当前 Windows 用户环境。更换用户、迁移到另一台电脑或重装系统前，请先按业务需要迁移凭据；不要把 DPAPI 文件当作跨设备备份。
 7. 备份的“默认加密”（sealed）使用随程序发布的内置密钥，只防止备份被当作明文直接读取；能从程序中提取密钥的人即可解密。需要强保密时请使用“密码加密”。
@@ -90,7 +93,7 @@ wails build
 
 #### 1. 选择 Agent 和配置文件
 
-启动后在顶部栏选择 ZCode 或 DeepSeek Harness。程序会显示探测到的路径、provider 数量和备份状态。若默认路径不正确，使用“选择配置”选择实际文件；DeepSeek 也可通过 `DSH_HOME` 指定目录。
+启动后在顶部栏选择 ZCode、DeepSeek Harness 或 PI Agent。程序会显示探测到的路径、provider 数量和备份状态。若默认路径不正确，使用“选择配置”选择实际文件；DeepSeek 也可通过 `DSH_HOME` 指定目录，PI Agent 可用 `PI_CONFIG_DIR` / `PI_CODING_AGENT_DIR` / `OMP_PROFILE` 定位。
 
 在修改前建议先复制一份配置文件到离线位置。保存成功后程序会创建备份并报告备份路径；恢复操作会列出可用备份，选择正确时间点后再确认。
 
@@ -124,9 +127,10 @@ wails build
 
 #### 6. 导入与迁移
 
-- 在“迁移”页选择源 / 目标 Agent（ZCode 与 DeepSeek Harness 可互为源与目标）和各自的配置文件，预览两侧的 provider 列表后选择要迁移的条目：
+- 在“迁移”页选择源 / 目标 Agent（ZCode、DeepSeek Harness 与 PI Agent 可互为源与目标）和各自的配置文件，预览两侧的 provider 列表后选择要迁移的条目：
   - ZCode 新版（`provider_config.json`）与旧版（`config.json`）、DeepSeek Harness 0.2 profile patch 与 0.1 `settings.yaml` 都通过各自的 config backend 读写，不再依赖旧版顶层 `provider` 映射，因此两个方向都可用。
   - 写入 DSH 0.2 profile patch 时 provider 落在 `llm-pi-ai` 条目，API Key 以 `apiKeyEnv` 引用写入 `.credentials.yaml`；被 home 级 patch 覆盖时会明确拒绝并提示直接编辑该文件。
+  - 写入 PI Agent 的 `models.yml` 时只合并 `providers` 子树（按 provider id 与 model id），其余节点、注释与键序保持原样；`modelRoles.default` 等默认设置不随迁移变化。
   - “追加/合并”保留目标已有 provider 与模型，同 ID 模型以源为准；“覆盖”先清空目标 provider 列表，再写入所选条目。
 - 在“导入”页输入 Base URL 与 API Key 后点击“获取模型列表”，勾选模型再导入当前 Agent；已存在的 provider 可选择合并模型或整体覆盖。
 - 所有写入都会先建立同级备份与还原点，执行前请阅读预览并保留离线备份。
@@ -145,6 +149,8 @@ wails build
 - OpenCode 入口已在应用内完全隐藏（暂不适配）：`internal/core/opencode.go` 等代码与历史还原点数据保留，但顶部栏、迁移页、编辑器里都没有 OpenCode 入口。
 - 跨 Agent 迁移不再被拒绝，但它会重写目标配置：ZCode 新版按严格 schema 重新编码，DSH 0.2 的 `llm-pi-ai` 条目会重新序列化（该条目内的注释可能变化），其余行、注释与 `!!js` 表达式原样保留。
 - 被 home 级 patch（`~/.dsh/cordis.patch.yml`）覆盖的 `llm-pi-ai` 配置无法从 profile 层修改：程序会拒绝写入并提示，请直接编辑 home 级文件。
+- 只有 `models.json` 而没有 `models.yml` / `models.yaml` 时，PI Agent 配置只读：程序不会自动新建 `.yml`（那会让 omp 忽略旧 `.json`），请先运行一次 `omp` 完成迁移。
+- PI Agent 侧不读取 `agent.db`、不接管 OAuth 登录，也永不执行配置里的 `!command` 命令；已有的 OAuth 或其他非明文凭据引用会原样保留，但无法在此编辑。
 - 写入 profile patch 时只重写真正变化的节点：未被改动的 provider 子树连同其中的注释与 `!!js` 表达式原样保留；被修改的那个 provider 会重新序列化，其内部注释可能变化。
 - 程序不会替用户判断第三方服务商是否可信；HTTP、API Key、备份和剪贴板风险由使用者承担。
 
@@ -155,6 +161,7 @@ main.go                         Wails 入口和版本
 internal/core/                  配置、模型、URL 安全、迁移、备份、DPAPI
 internal/dshprovider/         DeepSeek Harness 0.2 profile patch / 凭据文档
 internal/zcodeprovider/       ZCode 新版 provider_config.json 的编解码与校验
+internal/ompprovider/         PI Agent（oh-my-pi）models.yml / config.yml 的节点级读写与校验
 internal/update/              内置更新器（下载、校验、替换与回滚）
 internal/app/                   Wails 绑定和应用状态
 frontend/src/                   Vue 3 页面、组件、Pinia 状态和样式
@@ -184,7 +191,7 @@ git diff --check
 
 ### What it is
 
-Agent Provider Manager (**APM**) is a Windows desktop application for maintaining third-party model providers used by ZCode and DeepSeek Harness (the OpenCode entry point is hidden for now). It edits user-selected configuration files locally and offers provider/model editing, bulk model operations, model-limit presets, imports, migrations, backups, restore, a Windows DPAPI-backed API-key keychain, and a minimal edit context menu.
+Agent Provider Manager (**APM**) is a Windows desktop application for maintaining third-party model providers used by ZCode, DeepSeek Harness, and PI Agent (the OpenCode entry point is hidden for now). It edits user-selected configuration files locally and offers provider/model editing, bulk model operations, model-limit presets, imports, migrations, backups, restore, a Windows DPAPI-backed API-key keychain, and a minimal edit context menu.
 
 APM is a local configuration manager. It is not a proxy, model gateway, hosted secret vault, billing service, telemetry client, or mandatory updater. Optional updates use only this project's fixed GitHub Release source.
 
@@ -194,10 +201,13 @@ APM is a local configuration manager. It is not a proxy, model gateway, hosted s
 |---|---|---|
 | **ZCode** | `%USERPROFILE%\.zcode\v2\provider_config.json` (new format, preferred) / `%USERPROFILE%\.zcode\v2\config.json` (legacy) | Read/edit/save, restore points, provider/model management, one-time legacy provider import, ZCode 3.14 compatibility check and one-click repair, cross-agent migration (source / target) |
 | **DeepSeek Harness** | 0.2: `%USERPROFILE%\.dsh\profiles\desktop\cordis.patch.yml` (desktop, preferred) / `profiles\web\cordis.patch.yml` (`dsh web`, CLI) / `cordis.patch.yml` (home level, highest precedence). 0.1: `settings.yaml` (`.yml` / `.json`, legacy only) | Read/edit/save, restore points, provider/model management, cross-agent migration (source / target); providers live in the `llm-pi-ai` entry's `config.providers`, API keys are stored as `apiKeyEnv` references in `.credentials.yaml` (`version: 1` + `refs`) |
+| **PI Agent** (oh-my-pi, `omp`) | `%USERPROFILE%\.omp\agent\models.yml` (preferred, else `models.yaml`) / `models.json` (read-only when it is the only file; run `omp` once to migrate); named profiles use `.omp\profiles\<name>\agent\models.yml`; the default model lives in `agent\config.yml` under `modelRoles.default` | Read/edit/save, restore points, provider/model management, default-model selection, cross-agent migration (source / target); written at `yaml.Node` level so comments and key order survive; all three `apiKey` forms are preserved verbatim and `!command` is never executed |
 
 > **OpenCode** is hidden from the application for now. Its code and historical restore-point data are kept, but it no longer appears in the top bar, the migration page, or the editor.
 
 DeepSeek Harness 0.2 (today's desktop app and the CLI web profile) moved user configuration from a single `settings.yaml` to per-profile patch layers: the desktop app uses `~/.dsh/profiles/desktop/cordis.patch.yml`, `dsh web` (equivalent to `dsh --profile web`) uses `~/.dsh/profiles/web/cordis.patch.yml`, and a custom profile uses `profiles/<name>/cordis.patch.yml`; `~/.dsh/cordis.patch.yml` is the home-level patch and wins over every profile layer, so when it defines `llm-pi-ai` the app refuses to write the overridden profile patch and explains why. Providers live in the patch's `id: llm-pi-ai` entry under `config.providers`; API keys are written as `apiKeyEnv` references and the secret goes to `~/.dsh/.credentials.yaml` in the `version: 1` + `refs` layout (a 0.1 flat layout is upgraded on write, keeping `records` and comments). Untouched patch rows keep their `!!js` expressions and comments; 0.1 `settings.yaml` / `settings.yml` / `settings.json` remain readable and writable, but DSH 0.2 imports such a file only once. The harness home can be overridden with `DSH_HOME`. ZCode's new-format location can be overridden with `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE`; the application decides from the file contents whether the target is the legacy (`config.json`) or the new (`provider_config.json`) format. You can also choose a configuration file from the application. Saving re-serializes JSON/YAML; comments, indentation, and original key order are not guaranteed to survive. The new ZCode format (`provider_config.json`, `schemaVersion` 1) is read and written according to the rules of ZCode 3.14: only keys and values ZCode accepts are written, in ZCode's own key order, so it does not rewrite the file after a save. If the file contains something ZCode rejects (for example `builtinModelIds` in a personal rule, a family `group`, or an old-style `logo`), the application lists it and offers a one-click repair that creates a restore point first.
+
+PI Agent (oh-my-pi, CLI `omp`) keeps providers in the agent directory's `models.yml` (`models.yaml` is an alias): by default `%USERPROFILE%\.omp\agent`, with the config root renamed by `PI_CONFIG_DIR`, the default profile's agent directory overridden by `PI_CODING_AGENT_DIR`, named profiles at `.omp\profiles\<name>\agent`, and the active profile chosen by `OMP_PROFILE` (then `PI_PROFILE`). The application manages only the `providers` subtree and writes at `yaml.Node` level, so untouched rows, comments, and key order are preserved. All three `apiKey` forms — plain text, `${ENV}`, and `!command` — are preserved verbatim, and `!command` is never executed. The default model is written to `config.yml`'s `modelRoles.default`: only that one role is managed, and an empty selector deletes the key; if `settings.json` exists while neither `config.yml` nor `config.yaml` does, the application refuses to create `config.yml`, because doing so would make omp skip its legacy settings migration forever. When only `models.json` exists (no `models.yml` / `models.yaml`), the application shows the configuration read-only and refuses to write: run `omp` once to migrate, since creating a new `.yml` yourself would make the old `.json` permanently ignored.
 
 The product is currently **Windows-only**. It uses Wails and WebView2, and the Windows keychain uses Windows DPAPI.
 
@@ -217,7 +227,7 @@ The product is currently **Windows-only**. It uses Wails and WebView2, and the W
 - Export / import portable backups: pack all or selected providers of the current agent into an `apm-backup v1` JSON file, with key inclusion and encryption mode chosen independently — without keys by default (safe to share); plain (exporting keys this way requires an explicit confirmation), sealed (encrypted with an app-embedded key, decryptable by this app on any device: it stops casual plain-text reading but is not a strong secret), or password-encrypted (PBKDF2-SHA256 + AES-256-GCM, same password required everywhere). Import previews the package and its conflict policy (skip / overwrite); overwriting with a keyless backup keeps the existing local key, and each imported provider gets a restore point automatically.
 - Restore points: every change first stores the previous file byte-for-byte (comments and key order included) together with metadata (agent, absolute path, format, whether the file existed, size, SHA-256, operation, provider/model) under `%LOCALAPPDATA%\AgentProviderManager\restorepoints`. The **Restore Points** page can roll back to any of them; a rollback first snapshots the current state, so the rollback itself can be undone. 50 points per target path and 64 MB in total are kept.
 - Sibling `.bak_<timestamp>` backups with fingerprint checks and "restore recent backup"; two sibling backups are kept per file.
-- Migrate providers between ZCode (new / legacy) and DeepSeek Harness (0.2 profile patch / 0.1 `settings.yaml`), in merge or overwrite mode, or discover models through `/v1/models` and import them into the current agent.
+- Migrate providers between ZCode (new / legacy), DeepSeek Harness (0.2 profile patch / 0.1 `settings.yaml`), and PI Agent (`models.yml`), in merge or overwrite mode, or discover models through `/v1/models` and import them into the current agent. PI Agent's default model is not carried by migration or backup packages.
 - Show only Cut, Copy, and Paste in the custom context menu for text inputs.
 - Appearance: light / dark / follow-system, with an accent picker (eight preset swatches plus a custom color); `Ctrl+S` saves the current provider (only when the editor has unsaved changes) and `Esc` clears the provider search box.
 - No proxying, telemetry, or background upload is included. Optional updates use the fixed GitHub Release source and always require explicit restart confirmation.
@@ -227,7 +237,7 @@ The product is currently **Windows-only**. It uses Wails and WebView2, and the W
 - Only `http` and `https` URLs are accepted. HTTPS is the default. External HTTP is allowed only after the user explicitly enables the HTTP option, and it exposes API keys and request data in plaintext.
 - Hosts are checked before requests and again across redirects. Localhost, loopback, private, link-local, unspecified, and other reserved addresses are rejected by default; they are only allowed after the user explicitly enables the "Allow local & private addresses" option (for example, to reach a local model server). This is SSRF protection, not a complete network isolation boundary.
 - When the user requests model discovery, the API key is sent as `Authorization: Bearer ...` to the user-provided Base URL. The provider may log requests, source IPs, model information, and authentication data. APM does not upload data to the project owner and contains no telemetry.
-- DeepSeek credentials, provider files, sibling `.bak_` backups, restore snapshots and restore-point content may contain API keys. Restore points are written only locally under `%LOCALAPPDATA%\AgentProviderManager\restorepoints` (mode 0600) and are never uploaded or logged, but they are plaintext copies: never commit, upload, or share them, and delete or prune them from the Restore Points page when no longer needed.
+- DeepSeek credentials and PI Agent `models.yml` files, provider files, sibling `.bak_` backups, restore snapshots and restore-point content may contain API keys. Restore points are written only locally under `%LOCALAPPDATA%\AgentProviderManager\restorepoints` (mode 0600) and are never uploaded or logged, but they are plaintext copies: never commit, upload, or share them, and delete or prune them from the Restore Points page when no longer needed.
 - Optional updates use only HTTPS GitHub API/release hosts for this repository. Stable Windows amd64 assets are size-limited and SHA-256 checked before staging; installation waits for the current process to exit and requires an explicit restart confirmation. The updater does not accept arbitrary URLs or shell commands.
 - The import flow may temporarily use browser `sessionStorage`, and copying a key places it in the system clipboard. Clear the clipboard and avoid screen sharing or shared browser profiles when handling secrets.
 - DPAPI is tied to the current Windows user. Plan credential migration before moving to another account or machine.
@@ -262,12 +272,12 @@ wails build
 
 ### User guide
 
-1. Select an agent and verify its configuration path. For DeepSeek, use `DSH_HOME` or the file picker when needed.
+1. Select an agent and verify its configuration path. For DeepSeek, use `DSH_HOME` or the file picker when needed; for PI Agent, `PI_CONFIG_DIR` / `PI_CODING_AGENT_DIR` / `OMP_PROFILE` locate the file.
 2. Back up important files before the first edit. The application creates a backup on successful write and reports its path.
 3. Edit providers and model cards in **Manage**. Review auto-filled model limits and capability bits before saving: only positively supported capabilities are written, and a cleared bit means “unknown” (the target agent's own default applies).
 4. Use **Import** to call a compatible JSON `/v1/models` endpoint. This is not a universal discovery API for every vendor.
 5. Use **Keychain** for local key organization, but protect configuration files and backups as well. Clipboard and `sessionStorage` are sensitive surfaces.
-6. Use **Migrate** only after reviewing the preview. ZCode (new / legacy) and DeepSeek Harness (0.2 profile patch / 0.1 `settings.yaml`) can be migrated into each other in both directions: providers are read through each side's config backend, written through the target's backend, and API keys land in the right place (`.credentials.yaml` for DSH 0.2). A profile patch shadowed by the home-level patch is still refused.
+6. Use **Migrate** only after reviewing the preview. ZCode (new / legacy), DeepSeek Harness (0.2 profile patch / 0.1 `settings.yaml`), and PI Agent (`models.yml`) can be migrated into each other in both directions: providers are read through each side's config backend, written through the target's backend, and API keys land in the right place (`.credentials.yaml` for DSH 0.2). A profile patch shadowed by the home-level patch is still refused, and PI Agent's `modelRoles.default` is left untouched.
 7. Restore from a listed backup only after checking its timestamp and target path.
 
 ### Known limitations
@@ -280,6 +290,9 @@ wails build
 - OpenCode is hidden from the application for now: `internal/core/opencode.go` and the historical restore-point data are kept, but no UI entry point offers it.
 - Cross-agent migration is no longer refused, but it rewrites the target: ZCode new-format files are re-encoded under the strict schema, and a DSH 0.2 `llm-pi-ai` entry is re-serialized (comments inside that entry may change) while every other row, comment, and `!!js` expression is preserved.
 - An `llm-pi-ai` configuration in the home-level patch (`~/.dsh/cordis.patch.yml`) overrides the profile layer, so the profile patch cannot be edited from the app: the write is refused with an explanation, and the home file has to be edited directly.
+- When only `models.json` exists (no `models.yml` / `models.yaml`), the PI Agent configuration is read-only: the application will not create a new `.yml` (that would make omp ignore the old `.json`), so run `omp` once to migrate first.
+- On the PI Agent side the application never reads `agent.db`, never handles OAuth sign-in, and never executes `!command` entries; existing OAuth or other non-plaintext credential references are preserved verbatim but cannot be edited here.
+- Migrating into PI Agent's `models.yml` merges only the `providers` subtree (by provider and model id): every other node, comment, and key order stays as it was; default settings such as `modelRoles.default` are not altered.
 - Writing a profile patch only rewrites the nodes that actually changed: untouched provider subtrees keep their comments and `!!js` expressions verbatim, while the provider that changed is re-serialized (comments inside it may change).
 - Users remain responsible for provider trust, HTTP exposure, API-key handling, backup security, and clipboard hygiene.
 

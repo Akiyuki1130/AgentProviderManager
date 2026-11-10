@@ -173,23 +173,26 @@
   证据：asar 实证 + 探针 `internal/core/zz_dsh_reasoning_probe_test.go`（可重跑，`-run TestDshReasoningProbeFromZCodeCards -v`）。
   待人工（本轮未做）：开关打开 → 保存 → DSH 模型选择器出现「推理等级」行且档位与能力表一致；迁移场景端到端同上（需真实窗口与真实网关）。用户的源配置里究竟有没有 `reasoningLevel.values` 仍未实证（不读用户配置是硬约束）。
 
-- [ ] **27. 自填档位词被白名单静默滤光，连带迁移丢掉整个档位集合（2026-10-16 记录，待独立评估）**
-  「允许自填推理档位」关闭（默认）时，读卡会把不在 `ZCodeVariantSet` 白名单里的档位名整条丢掉（`internal/core/cards.go:509`/`:524`）；若一个模型的档位**全是**自填名，卡片就退化成「无推理信息」，迁移到 DSH 后思考与档位一起消失（探针实测：源 `values: ["thinking","ultra"]` → DSH 侧无任何推理键）。
-  需要裁定的问题：**读侧**该不该与写侧一样尊重该开关（写侧已由 `dshEffortForWrite` 放开）。改动面：`cards.go` 两处门控 + `tokens.go` 的 `NormalizeVariants`，会同时影响 ZCode / DSH / opencode 三条写盘路径，因此单列一轮。
+- [x] **27. 自填档位词被白名单静默滤光，连带迁移丢掉整个档位集合（2026-10-16 记录，2026-11-10 按 lead 裁定修复）**
+  「允许自填推理档位」关闭（默认）时，读卡会把不在 `ZCodeVariantSet` 白名单里的档位名整条丢掉（`internal/core/cards.go` 的 legacy variants 与 reasoningEfforts 两处门控）；若一个模型的档位**全是**自填名，卡片就退化成「无推理信息」，迁移到 DSH 后思考与档位一起消失。
+  裁定与修法（最小对称修法）：读侧不再与写侧分叉，两处门控改为复用 `internal/core/tokens.go` 的 `variantAllowed`（与 `NormalizeVariants`、opencode `ConvertOpencodeModel` 同一实现）。开关关闭时维持现状；打开时只做别名归一 / 去重 / 限长 / 禁控制字符，不丢弃自填名。刻意不改成「读侧永远保留」——那会让 ZCode 写端可能写入 ZCode 不认的档位名，风险面更大；默认关闭使行为逐字节不变。
+  验证：`internal/core/variant_policy_readsync_test.go`（ZCode legacy variants / DSH reasoningEfforts / reasoning.variants 数组 / opencode 四条读卡路径：关→丢、开→留，且 CfgToCard→CardToCfg→CfgToCard 两趟幂等）。
 
-- [ ] **28. 只有 off 的源档位集合被写成 `reasoningEfforts: false`（2026-10-16 记录，待独立评估）**
-  源档位集合只有 `disabled`/`none`（即该模型唯一可表达的状态就是「不思考」）时，DSH 侧落地为 `reasoningEfforts: false`，而 `false` 在 DSH 里是「**显式声明非推理模型**」（`deepseek.go` 的 `dshHasNonOffEffort` 退化分支：DSH 的 zod 不允许只含 off 的字典，必须至少一个非 off 档）。
-  需要裁定的问题：这种源语义在 DSH 侧该落成 `false`（非推理模型，语义上接近「只有关闭档」）还是**一个键都不写**（= 未知）。涉及 `deepseek.go:836-843` 的退化分支与「兜底不得冒充用户声明」这条原则，需单列评估。
+- [x] **28. 只有 off 的源档位集合被写成 `reasoningEfforts: false`（2026-10-16 记录，2026-11-10 按 lead 裁定修复）**
+  源档位集合只有 `disabled`/`none`（即该模型唯一可表达的状态就是「不思考」）时，DSH 侧原落地为 `reasoningEfforts: false`，而 `false` 在 DSH 里是「**显式声明非推理模型**」（`deepseek.go` 的 `dshHasNonOffEffort` 退化分支：DSH 的 zod 不允许只含 off 的字典，必须至少一个非 off 档）。
+  裁定与修法：DSH 写端改为**一个推理键都不写**（删掉 `reasoningEfforts` 与 `reasoningEffort`）。理由：`AGENTS.md` 的「只写真值，未知与假一律省略键」是硬不变量，`false` 在 DSH 里是「显式声明该模型不是推理模型」，而源语义只是「只有关闭档可表达」，两者不等价，宁可留未知。用户显式关闭（`RawReasoningEnabled=false`）仍照旧写 `false`，不受影响。
+  验证：`deepseek_reasoning_test.go` 的 `TestDshOffOnlyWritesNoReasoningKey`、`dsh_write_constraints_test.go` 的 `TestDshExplicitReasoningFalsePreserved`。
 
 - [ ] **29. 导入页「手动添加模型」不参与自动勾选（阶段 H 残留，2026-10-17）**
   阶段 H 让拉取模型与「自动匹配」按能力表自动勾选支持的推理档位与能力位，但导入页的「手动添加模型」（`ImportPage.vue` 的 `onAddModel`）走的是**本地拼卡片 + 只补 `_vendor` / `_supported_levels`** 的轻量路径（`fetchVendorMeta`），因此手工敲进去的 ID 卡片上档位与能力位仍全为空。改成走 `BuildSingleCard`（`api.BuildSingleCard` 已存在，返回完整卡片）即可与拉取路径一致；不过它同时会把 ctx/out 与 `capabilities` 一并带上，需先确认「手动添加」是否希望自动补全长度（当日志意识上它与拉取同属「新增模型」，倾向一致）。
   与第 23 项残留③同源（站点上下文缺口：`BuildSingleCard` 不传 baseURL/apiType，站点层档位拿不到），建议同轮处理。
 
-- [ ] **30. DSH 写端两条残留：`modelOverrides` 里的 compat 未过滤；自填档位名让整份配置解析失败（2026-10-17 记录，待裁定）**
+- [x] **30. DSH 写端两条残留：`modelOverrides` 里的 compat 未过滤；自填档位名让整份配置解析失败（2026-10-17 记录，2026-11-10 按 lead 裁定修复）**
   第 10.15 项修复把「模型级 + 路由级 compat 按 wire protocol 过滤」做掉了，另有两处同族缺口留在门外：
   ① **`modelOverrides` 透传**：`deepSeekRouteExtras` 会把 ZCode 侧 `options.modelOverrides`（受控模型覆盖字典）原样透传到路由上，里面每个模型的 `compat` 会被 DSH 用**同一套按协议的判定**校验——一个协议错位的键就会让那些模型被判不可服务。目前只过滤了模型节点与路由级两处，`modelOverrides` 未过滤（来源多为早先 DSH 往返或手写，触发面小但同型）。
   ② **自填档位名写进 `reasoningEfforts` 会让整份配置在 schema 解析期失败**：DSH 的 `reasoningEfforts` 是 `z.dict(z.union([z.string(), z.const(null)]), z.union(THINKING_LEVELS))`，**字典键被限死在固定 7 档**。本机用 DSH 自带 schemastery 复刻该 schema 实测：写入 `very-high` ⇒ `expected false | {...7 档}: string but got {...}`，即 `Config()` 直接抛错——比「模型被丢掉」更严重（llm-pi-ai 整条不可用）。而「允许自填推理档位」打开时 `dshEffortForWrite` 会保留自填名并写进去（阶段 C 的既定行为，`variant_policy_test.go` 的两条用例锁着）。
-  需要裁定：② 是「DSH 侧永远只写 7 档（自填档位在 DSH 无法表达，卡片保留、写盘丢弃）」还是「保持现状并在开关打开时给 DSH 目标加显式警告」。倾向前者——它把「写端绝不产生 schema 拒收的配置」这条不变量补齐，代价是撤销阶段 C 在 DSH 分支上的放宽；改动面 `deepseek.go` 的档位写端 + 两条既有用例 + 10.1.3/10.12 的文档口径。
+  裁定与修法：② 取「DSH 侧永远只写 7 档」，① 一并修掉。① `deepSeekRouteExtras` 增加 api 参数，逐模型过滤 `modelOverrides[*].compat`（新增 `dshFilterModelOverrides`，复用 `dshCompatForWrite`，不复制第三份协议表；过滤后为空则整键删除），`DeepSeekProviderToEdit` 以 `apiForDeepSeekKind(kind)` 传参。② `dshEffortForWrite` 只返回 `dshCanonicalEffort` 的结果（固定 7 档），自填名不落盘；丢弃发生时没有可用的 warnings 槽位（DTO 无此契约，也不新增前端契约），因此只以代码注释 + 测试记录。读端 `dshEffortForRead` 单独实现，开关打开时仍保留自填名，卡片数据不丢——读/写刻意不对称属 DSH schema 边界。
+  验证：`dsh_write_constraints_test.go`（`TestDshEffortForWriteOnlySevenLevels`、`TestDshModelOverridesCompatFilteredByProtocol`）、`variant_policy_test.go`（`TestDshWriteKeepsSevenEffortsDropsCustom`、`TestDshCustomEffortReadPreservedWhenOn`、`TestDshModelToRawCustomSwitch`）。
 
 - [ ] **6. 还原点页筛选与分组**
   按 Agent/操作类型/日期过滤；加「清理孤立条目」按钮（顺带解决 1 的存量污染）；回滚前给差异预览（改了哪个文件、几个提供商）。
@@ -222,13 +225,25 @@
   修法：新增根目录 `VERSION` 作为唯一真源 + `scripts/sync-version.mjs` 一次分发（含 `--check`）；Go 侧改为生成文件 `internal/core/version_gen.go`（`main.go` 引用 `core.AppVersion`，不再写字面量）；前端侧栏改为运行时读 `GetAppInfo`，不再硬编码；`go test ./...` 加 `TestVersionSourcesInSync` 兜底，任何派生文件漂移即失败并打印修法。
   说明：`frontend/package.json.md5` 由 Wails 用来判断是否重装依赖，必须与 `package.json` 字节一致，脚本同步生成。改版本现在只需改 `VERSION` + 跑一次脚本（+ 手工更新 CHANGELOG）。
 
+## 已完成 — OMP（PI Agent）第三 harness（2026-11-10）
+
+方案、缺口清单（G1–G23）、决策（D1–D18）与 P0/P1 验收见 `PI-AGENT-COMPAT-PLAN.md`（已提交，作为设计记录保留）。下列七项同日全部落地，`go build` / `go vet` / `go test ./...` / `npm run build` 与三条 `--check` 全绿。
+
+- [x] **31. P0 地基：YAML 备份后缀判定 + 测试**：`isYAMLPath` 现在先按固定词表（`.bak_<ts>`/`.snapshot_<ts>`/`.restore_*`/`.removed_<ts>`/`.tmp_*`/`.apm-update-*`/`.apm-backup-*`）循环剥离后缀再判定，`RestoreBackup`/`validateRestoreContent` 复用同一判定；解析收敛到唯一入口 `parseDeepSeekConfigBytes`；`internal/core/config_restore_format_test.go` 覆盖 27 条后缀表与 DSH YAML 还原端到端；`AllAgents()` 断言 2 → 3。
+- [x] **32. P1 文档层包** `internal/ompprovider`：`yaml.Node` 节点级写入（注释/键序/`!command` 标签保留）、apiKey 三形态原样保留且永不执行、写前 `ModelsFile.Validate`（omp 解析失败仍退 0）、`.json`-only 只读（G1）、引用保护（G6/G14）、`config.yml` modelRoles（G18）。约 2100 行，只依赖 `gopkg.in/yaml.v3`，不 import `internal/core`。
+- [x] **33. P1 core 读侧**：`backend_omp.go` + `omp_store.go` + `omp_models.go`；只读判定集中到 `OMPReadOnlyReason`（协议不可建模/别名合并/auth 校验失败）、selectors 排除 glob、Upsert/Delete/DeleteModel 三处引用保护、`_api_key_touched` 语义。
+- [x] **34. P1 core 横切**：`FormatOMP`/`FormatOMPConfig` 与 `set_default_model` 还原点、恢复 omp-config 不切目标路径、`DetectConfigLocationsForAgent("omp")`（`PI_CONFIG_DIR`/`PI_CODING_AGENT_DIR`/`OMP_PROFILE`/`PI_PROFILE`）、`ConfigProviderSummaryForAgent` 的 §9.1 嗅探、`ProbeProviderRequest`/`FetchModelsWithOptions`（不执行 `!command`、跨主机剥认证头）、迁移与备份的 OMP 规范化投影。
+- [x] **35. P1 app 绑定**：`internal/app/app_omp.go`（路径适配、G18 嗅探、opts 解析、`GetOMPModelRoles`/`SetOMPModelRole`、`guardedTargetPath`）；`FetchModels` 三参带 headers/kind/auth_header；只读保存前置拦截（`READ_ONLY`）；ZCode 专属绑定 omp guard；导出/迁移的 skipped 与 warnings 透出；第 21 项兜底写入改走 `core.StripAPMInternalModelKeys`。
+- [x] **36. P1 前端**：harness 切换、管理/导入/迁移/还原点页、默认模型卡片、只读与 needsMigration 横幅、六档 effort、omp 能力位门控（只 text/image、隐藏自填档位与 output）、`_api_key_touched` 与明文 Key 确认、skipped/warnings 渲染；zh/en/ja 文案齐备，`npm run build` 通过。
+- [x] **37. 文档收口**：README 中英双语（支持表、PI Agent 段、已知限制、安全、仓库结构）、AGENTS.md（隐私路径 `.omp`、依赖方向、omp 写前校验与三条硬边界）、CHANGELOG「未发布」章节；`PI-AGENT-COMPAT-PLAN.md` 提交。
+
 ## P3 — 长期方向
 
 - [ ] **12. OpenCode 决断**
   后端绑定（`ImportOpencode` 等）仍暴露给前端但 UI 已雪藏——要么恢复入口，要么删死代码。
 
-- [ ] **13. 新增一个 harness（Claude Code）**
-  `core.GetBackend` 注册表就是扩展点；Claude Code 用户群大，是下一个最自然的目标。
+- [x] **13. 新增第三个 harness（2026-11-10 决策：PI Agent / oh-my-pi，取代原 Claude Code 提案）**
+  `core.GetBackend` 注册表就是扩展点。原记录倾向 Claude Code；2026-11-10 与用户对齐后改为 **PI Agent（`omp` CLI，配置 `~/.omp/agent/models.yml`）**，方案见 `PI-AGENT-COMPAT-PLAN.md`；P1 已于同日按上一节 31–37 全部交付。
 
 - [ ] **14. 模型区虚拟滚动**
   README 自认接近 2000 模型上限性能下降；实测 13 模型的提供商 a11y 树已 400+ 元素，几百模型时列表页会卡。
