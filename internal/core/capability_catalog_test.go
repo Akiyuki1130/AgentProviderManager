@@ -267,7 +267,7 @@ func TestMatchSiteRulesAPITypeGateBlocks(t *testing.T) {
 }
 
 // TestMatchSiteRulesRealTable 用实测值锁定真实站点规则表（ZCode 内建 providerSiteRules，
-// revision 31）的匹配结果。期望值来自对 ZCode 内部分配器 resolve 的逐条仿真。
+// revision 43）的匹配结果。期望值来自对 ZCode 内部分配器 resolve 的逐条仿真。
 func TestMatchSiteRulesRealTable(t *testing.T) {
 	cases := []struct {
 		name       string

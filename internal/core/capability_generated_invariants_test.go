@@ -9,7 +9,7 @@ import (
 // 两张生成表上。
 //
 // ZCode 内建资源的**输入**模态语义是「text 是默认项，其余模态都是在 text 之上追加的增量」：
-// 它只把非默认项写出来（84 条 modelRules 里只有兜底规则 `.*` 写了 inputFormat.supportsText），
+// 它只把非默认项写出来（83 条 modelRules 里只有兜底规则 `.*` 写了 inputFormat.supportsText），
 // 因此生成脚本 scripts/sync-model-catalog.mjs 必须把 text 按「缺键即真、只有显式 false 才算否」
 // 抽取。谁把这条规则退回严格的 === true，本测试就会立刻失败：抽出的集合会丢掉 text（例如只剩
 // image），而中立层对模态是「前层胜出」的整字段合并，这个残缺集合会把离线目录（models.dev）

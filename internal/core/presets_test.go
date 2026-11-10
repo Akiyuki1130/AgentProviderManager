@@ -105,19 +105,29 @@ func TestLookupModelLimitsContextOnly(t *testing.T) {
 			t.Errorf("%s: context should be set", id)
 		}
 	}
-	// Output side may be zero for these families (not documented).
+	// presets 表刻意把 grok 家族的 output 留空（未知）；输出上限由离线目录/站点层给出，不在此硬编码。
 	if p, _ := LookupModelLimits("grok-4.6"); p.Output != 0 {
-		t.Errorf("grok-4.6 output should be 0 (not documented), got %d", p.Output)
+		t.Errorf("grok-4.6 output should stay 0 in presets (unknown), got %d", p.Output)
 	}
 }
 
 func TestApplyModelPresets(t *testing.T) {
-	// 期望值来源（不取运行结果）：1/4/6 由内建规则给出，2/3 落在 presets 兜底，5 无任何来源。
+	// 期望值来源（不取运行结果）：1 的 ctx 与 2/3 落在 presets 兜底、1 的 output 来自内建规则，
+	// 4 的 ctx 来自内建规则、output 由离线目录补空，6 由能力表（覆盖层）补全，5 无任何来源。
+	// 源 revision 43 起内建规则不再给 deepseek 家族 contextWindow、也不再给 grok-4.6
+	// maxOutputTokens，因此这些格子改由 presets / 离线目录兜底——这正是能力表逐字段补空语义。
+	//
+	// grok-4.6 的 500000 输出不是目录随手挑的值：models.dev 的 xai 原厂条目就是 500000/500000
+	//（grok-4.5/4.7 同值），ZCode 自己的 providerSiteRules 也给了 maxOutputTokens.max=500000
+	//（baseUrlMatch https://opencode\.ai/zen/go/v1/? + apiTypeMatch openai-responses，生成表
+	// model_site_rules_gen.go:53 即为 500000/500000）；128000 只出现在网关自报（azure /
+	// github-copilot）与 rev31 的家族规则里。故此处锁定 500000，网关级下调交给站点层，
+	// 不在覆盖层硬编码一个与模型自身能力相悖的值。
 	cards := []ModelCard{
-		{ModelID: "deepseek-v4-flash", Context: "", Output: ""},      // 内建规则 1000000/384000
+		{ModelID: "deepseek-v4-flash", Context: "", Output: ""},      // ctx 由 presets 兜底，output 来自内建规则
 		{ModelID: "gpt-5.6-luna", Context: nil, Output: nil},         // 无内建规则，presets 兜底
 		{ModelID: "claude-opus-4-6", Context: 900000, Output: "64k"}, // 覆盖已填值（无内建规则，presets 兜底）
-		{ModelID: "grok-4.6", Context: "", Output: ""},               // 内建规则同时给出 ctx 与 output
+		{ModelID: "grok-4.6", Context: "", Output: ""},               // ctx 来自内建规则，output 由离线目录补空（500000，依据见上）
 		{ModelID: "mystery-model", Context: "64k", Output: "8k"},     // 无规则命中（`.*` 兜底规则被有意跳过），必须原样不动
 		{ModelID: "deepseek-v4.1-flash", Context: "", Output: ""},    // 不在 presets 表内，只能由能力表（覆盖层/内建规则）补全
 	}
@@ -134,7 +144,7 @@ func TestApplyModelPresets(t *testing.T) {
 	if updated[2].Context != 1000000 || updated[2].Output != 128000 {
 		t.Errorf("existing values not overwritten: %v %v", updated[2].Context, updated[2].Output)
 	}
-	if updated[3].Context != 500000 || updated[3].Output != 128000 {
+	if updated[3].Context != 500000 || updated[3].Output != 500000 {
 		t.Errorf("grok-4.6 wrong: %v %v", updated[3].Context, updated[3].Output)
 	}
 	if updated[4].Context != "64k" || updated[4].Output != "8k" {

@@ -254,6 +254,15 @@ func TestLookupCapabilityForSiteOverrideBeatsCatalog(t *testing.T) {
 // TestLookupCapabilityForSiteBuiltinBeatsCommunityCatalog 锁住本次顺序调整的核心动机：
 // 社区离线目录**不得**改写 ZCode 内建正则已经给出的值。用例取审计实测到的离群证据
 // （目录值与内建值差异很大，若顺序反了会立刻暴露）。
+//
+// 源 revision 43 起 gpt-5.4 家族的内建规则只写 contextWindow、不再写 maxOutputTokens，
+// 因此该用例的 output 由离线目录补空（能力表逐字段补空语义），ctx 仍是「内建 1050000
+// 胜目录 272000」的直接证据；另两个用例的内建规则仍同时给出 ctx/out。
+//
+// 目录里 gpt-5.4 的 output 128000 来自**同 id** 条目，不是族外误读：models.dev 快照里 21 家
+// provider 的 gpt-5.4 output 全为 128000（ctx 则有 1050000/400000 两说）；目录表取到的 272000
+// 是 pi-ai 聚合商 radius 的 contextWindow，只影响 ctx 列且必被内建 1050000 覆盖；rev31 的内建
+// 规则对 gpt-5.4 同样是 128000。
 func TestLookupCapabilityForSiteBuiltinBeatsCommunityCatalog(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -262,6 +271,7 @@ func TestLookupCapabilityForSiteBuiltinBeatsCommunityCatalog(t *testing.T) {
 		wantOut    int
 		wantLevels []string
 		catCtx     int // 目录里的值，必须与内建值不同（否则用例没有区分力）
+		zcodeOut   int // 内建正则单独给出的 output（rev43 起 gpt-5.4 家族为 0，由目录补空）
 	}{
 		{
 			// 内建 1050000 vs 目录 272000（gpt-5.4 / gpt-5.6 / gpt-6 家族都是这个离群值）。
@@ -269,6 +279,7 @@ func TestLookupCapabilityForSiteBuiltinBeatsCommunityCatalog(t *testing.T) {
 			wantCtx: 1050000, wantOut: 128000,
 			wantLevels: []string{"off", "low", "medium", "high", "xhigh"},
 			catCtx:     272000,
+			zcodeOut:   0,
 		},
 		{
 			// 内建 1000000 vs 目录 1048576（zai-org 命名空间条目）。
@@ -276,6 +287,7 @@ func TestLookupCapabilityForSiteBuiltinBeatsCommunityCatalog(t *testing.T) {
 			wantCtx: 1000000, wantOut: 128000,
 			wantLevels: []string{"low", "high", "max"},
 			catCtx:     1048576,
+			zcodeOut:   128000,
 		},
 		{
 			// 内建 262144/98304 vs 目录 262000/262000（moonshotai 命名空间条目）。
@@ -283,6 +295,7 @@ func TestLookupCapabilityForSiteBuiltinBeatsCommunityCatalog(t *testing.T) {
 			wantCtx: 262144, wantOut: 98304,
 			wantLevels: []string{"off", "enabled"},
 			catCtx:     262000,
+			zcodeOut:   98304,
 		},
 	}
 	for _, c := range cases {
@@ -290,9 +303,10 @@ func TestLookupCapabilityForSiteBuiltinBeatsCommunityCatalog(t *testing.T) {
 		if cat := lookupCatalogTolerant(c.modelID); cat.Context != c.catCtx {
 			t.Fatalf("%s：前提破坏，目录 ctx=%d，期望 %d（%+v）", c.name, cat.Context, c.catCtx, cat)
 		}
-		// 前提二：内建正则单独求值就是期望值（目录不允许参与）。
-		if raw := mergeCatalog(c.modelID, modelCatalogRules); raw.Context != c.wantCtx || raw.Output != c.wantOut {
-			t.Fatalf("%s：前提破坏，内建正则 ctx/out=%d/%d，期望 %d/%d", c.name, raw.Context, raw.Output, c.wantCtx, c.wantOut)
+		// 前提二：内建正则单独求值给出期望的 ctx，且 output 与 zcodeOut 一致（目录不允许参与）；
+		// rev43 起 gpt-5.4 家族的内建规则没有 maxOutputTokens，此时 output 由目录层补空。
+		if raw := mergeCatalog(c.modelID, modelCatalogRules); raw.Context != c.wantCtx || raw.Output != c.zcodeOut {
+			t.Fatalf("%s：前提破坏，内建正则 ctx/out=%d/%d，期望 %d/%d", c.name, raw.Context, raw.Output, c.wantCtx, c.zcodeOut)
 		}
 		want := ModelCapability{
 			Context:         c.wantCtx,
@@ -392,9 +406,11 @@ func TestLookupCapabilityForSiteRealSiteRuleBeatsFamilyRule(t *testing.T) {
 		apiType     string
 		siteInputs  []string // 站点规则给出的输入模态（必须胜出）
 		siteTool    bool     // 站点规则是否给出 tool_call=true
-		familyCtx   int      // 家族层给出的 ctx/out/档位（站点规则一概没给，必须保留）
+		familyCtx   int      // 家族层给出的 ctx/out（站点规则一概没给；rev43 起 deepseek 家族不再给 ctx）
 		familyOut   int
 		familyInput []string // 家族层给出的输入模态（必须被站点值替换）
+		wantCtx     int      // 最终期望：家族层缺 ctx 时由 presets 兜底（源 revision 43 实测）
+		wantOut     int
 		why         string
 	}{
 		{
@@ -404,9 +420,11 @@ func TestLookupCapabilityForSiteRealSiteRuleBeatsFamilyRule(t *testing.T) {
 			apiType:     "openai-responses",
 			siteInputs:  []string{"text", "image"},
 			siteTool:    true,
-			familyCtx:   1000000,
+			familyCtx:   0, // rev43 的 deepseek 家族规则只有 maxOutputTokens，没有 contextWindow
 			familyOut:   384000,
 			familyInput: []string{"text"},
+			wantCtx:     1000000, // 由 presets 表兜底（internal/core/presets.go 的 deepseek-v4-flash）
+			wantOut:     384000,
 			why: "站点规则 deepseek-v4-flash(?:-vision-exp)? @ api.deepseek.com 给出 " +
 				"text,image（后一条覆盖前一条的 text），家族正则只给 text",
 		},
@@ -419,6 +437,8 @@ func TestLookupCapabilityForSiteRealSiteRuleBeatsFamilyRule(t *testing.T) {
 			familyCtx:   1000000,
 			familyOut:   128000,
 			familyInput: []string{"text"},
+			wantCtx:     1000000,
+			wantOut:     128000,
 			why:         "站点规则 `.*` @ zcode.z.ai/api/v1/highspeed/anthropic（不限定 apiType）给出 text,image,video",
 		},
 	}
@@ -462,10 +482,11 @@ func TestLookupCapabilityForSiteRealSiteRuleBeatsFamilyRule(t *testing.T) {
 				t.Errorf("%s：站点规则给的 tool_call 未生效：%s", c.name, describeFeatures(got.Features))
 			}
 		}
-		// 站点规则没给出的字段由家族层补空（逐字段语义不因层序调整而变）。
-		if got.Context != c.familyCtx || got.Output != c.familyOut {
-			t.Errorf("%s：ctx/out=%d/%d，期望家族层的 %d/%d（站点规则未给出这两列）",
-				c.name, got.Context, got.Output, c.familyCtx, c.familyOut)
+		// 站点规则没给出的字段由家族层补空，家族层也没有的值（rev43 的 deepseek ctx）继续由
+		// presets/离线目录兜底；逐字段语义不因层序调整而变。
+		if got.Context != c.wantCtx || got.Output != c.wantOut {
+			t.Errorf("%s：ctx/out=%d/%d，期望 %d/%d（站点规则未给出这两列，家族层给出 %d/%d）",
+				c.name, got.Context, got.Output, c.wantCtx, c.wantOut, c.familyCtx, c.familyOut)
 		}
 		if len(got.ReasoningLevels) == 0 {
 			t.Errorf("%s：站点规则未给档位，应由家族层补空，实际为空", c.name)
@@ -475,14 +496,15 @@ func TestLookupCapabilityForSiteRealSiteRuleBeatsFamilyRule(t *testing.T) {
 			t.Errorf("%s：Source=%q，期望 %q", c.name, got.Source, siteSource)
 		}
 
-		// 对照：换一个不命中任何站点规则的 baseURL，站点层整体不参与 ⇒ 回到家族值
-		// （输入模态回到 familyInput，且与无站点入口逐字段一致）。
+		// 对照：换一个不命中任何站点规则的 baseURL，站点层整体不参与 ⇒ 回到无站点层的逐字段
+		// 合并结果（输入模态回到 familyInput；家族层缺的 ctx 仍由 presets 兜底）。
 		plain := LookupModelCapabilityForSite(c.modelID, "https://example.invalid/v1", c.apiType)
 		if !reflect.DeepEqual(plain.Features.InputModalities, c.familyInput) {
 			t.Errorf("%s：站点未命中时输入模态=%v，期望家族层的 %v", c.name, plain.Features.InputModalities, c.familyInput)
 		}
-		if plain.Context != c.familyCtx || plain.Output != c.familyOut {
-			t.Errorf("%s：站点未命中时 ctx/out=%d/%d，期望 %d/%d", c.name, plain.Context, plain.Output, c.familyCtx, c.familyOut)
+		if plain.Context != c.wantCtx || plain.Output != c.wantOut {
+			t.Errorf("%s：站点未命中时 ctx/out=%d/%d，期望 %d/%d（家族层给出 %d/%d）",
+				c.name, plain.Context, plain.Output, c.wantCtx, c.wantOut, c.familyCtx, c.familyOut)
 		}
 	}
 }

@@ -6,7 +6,7 @@ import "regexp"
 
 // 由 scripts/sync-model-catalog.mjs 抽取 providerSiteRules，源文件：
 //   C:\AppData\Zcode\resources\config\provider\zcode-builtin.json
-// 源 revision: 31，规则条数: 54
+// 源 revision: 43，规则条数: 58
 //
 // 字段语义：
 //   Model / BaseURL / APIType 三个正则必须同时命中才算命中；APIType 为 nil 表示不限定 apiType。
@@ -56,6 +56,9 @@ var modelSiteRules = []siteRule{
 	{Model: regexp.MustCompile(`(?i)^(?:.*)$`), BaseURL: regexp.MustCompile(`^(?:https://open\.bigmodel\.cn/api/anthropic/?)$`), APIType: nil, Context: 0, Output: 0, Levels: nil, Features: "text,image,video||------"},
 	{Model: regexp.MustCompile(`(?i)^(?:.*)$`), BaseURL: regexp.MustCompile(`^(?:https://zcode\.z\.ai/api/v1/zcode-plan/anthropic/?)$`), APIType: nil, Context: 0, Output: 0, Levels: nil, Features: "text,image,video||------"},
 	{Model: regexp.MustCompile(`(?i)^(?:.*)$`), BaseURL: regexp.MustCompile(`^(?:https://zcode\.z\.ai/api/v1/highspeed/anthropic/?)$`), APIType: nil, Context: 0, Output: 0, Levels: nil, Features: "text,image,video||------"},
+	{Model: regexp.MustCompile(`(?i)^(?:glm-5\.3)$`), BaseURL: regexp.MustCompile(`^(?:https://api\.z\.ai/api/anthropic/?)$`), APIType: regexp.MustCompile(`^(?:anthropic-messages)$`), Context: 0, Output: 0, Levels: nil, Features: "text||------"},
+	{Model: regexp.MustCompile(`(?i)^(?:glm-5\.3)$`), BaseURL: regexp.MustCompile(`^(?:https://open\.bigmodel\.cn/api/anthropic/?)$`), APIType: regexp.MustCompile(`^(?:anthropic-messages)$`), Context: 0, Output: 0, Levels: nil, Features: "text||------"},
+	{Model: regexp.MustCompile(`(?i)^(?:glm-5\.3)$`), BaseURL: regexp.MustCompile(`^(?:https://zcode\.z\.ai/api/v1/highspeed/anthropic/?)$`), APIType: regexp.MustCompile(`^(?:anthropic-messages)$`), Context: 0, Output: 0, Levels: nil, Features: "text||------"},
 	{Model: regexp.MustCompile(`(?i)^(?:.*claude-.*)$`), BaseURL: regexp.MustCompile(`^(?:(?:https://api\.anthropic\.com/v1))$`), APIType: regexp.MustCompile(`^(?:anthropic-messages)$`), Context: 0, Output: 0, Levels: nil, Features: "||--1---"},
 	{Model: regexp.MustCompile(`(?i)^(?:.*(?:kimi-k3|k3|k3-256k)(?:[.\-:/\[].*)?)$`), BaseURL: regexp.MustCompile(`^(?:(?:https://api\.moonshot\.cn/anthropic))$`), APIType: regexp.MustCompile(`^(?:anthropic-messages)$`), Context: 0, Output: 0, Levels: nil},
 	{Model: regexp.MustCompile(`(?i)^(?:.*)$`), BaseURL: regexp.MustCompile(`^(?:(?:https://api\.deepseek\.com/anthropic))$`), APIType: regexp.MustCompile(`^(?:anthropic-messages)$`), Context: 0, Output: 0, Levels: nil, Features: "||--11--"},
@@ -80,4 +83,5 @@ var modelSiteRules = []siteRule{
 	{Model: regexp.MustCompile(`(?i)^(?:.*qwen3\.7-(?:max|plus|flash)(?:-20\d{2}(?:-?\d{2}){2})?(?:[:/\[].*)?)$`), BaseURL: regexp.MustCompile(`^(?:https://dashscope-intl\.aliyuncs\.com/apps/anthropic/?)$`), APIType: regexp.MustCompile(`^(?:anthropic-messages)$`), Context: 0, Output: 0, Levels: nil, Features: "||-1----"},
 	{Model: regexp.MustCompile(`(?i)^(?:qwen/qwen3\.8-max-0902)$`), BaseURL: regexp.MustCompile(`^(?:https://openrouter\.ai/api(?:/v1)?/?)$`), APIType: regexp.MustCompile(`^(?:.*)$`), Context: 0, Output: 0, Levels: []string{"minimal", "low", "medium", "high", "xhigh"}},
 	{Model: regexp.MustCompile(`(?i)^(?:qwen/qwen3\.6-(?:plus|flash))$`), BaseURL: regexp.MustCompile(`^(?:https://openrouter\.ai/api(?:/v1)?/?)$`), APIType: regexp.MustCompile(`^(?:.*)$`), Context: 0, Output: 0, Levels: nil, Features: "||-1----"},
+	{Model: regexp.MustCompile(`(?i)^(?:.*)$`), BaseURL: regexp.MustCompile(`^(?:https://opencode\.ai/zen/go/v1/?)$`), APIType: regexp.MustCompile(`^(?:openai-chat-completions)$`), Context: 0, Output: 0, Levels: nil},
 }

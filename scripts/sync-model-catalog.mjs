@@ -87,8 +87,8 @@ const OUTPUT_MODALITY_FIELDS = [['text', 'supportsText']]
 // IMPLIED_TRUE_KEYS 是「**缺键即默认支持**」的能力键，且**只在输入方向、且只在输入段存在时生效**。
 //
 // 输入侧用它的依据是内建资源自身的写法：ZCode 的输入面能表达全部 5 种模态，语义是「text 是
-// 默认项，其余模态都是在 text 之上追加的增量」——modelRules 84 条里唯一写了
-// inputFormat.supportsText 的正是兜底规则 `modelMatch: ".*"`，而且它写的是 true；其余 83 条
+// 默认项，其余模态都是在 text 之上追加的增量」——modelRules 83 条里唯一写了
+// inputFormat.supportsText 的正是兜底规则 `modelMatch: ".*"`，而且它写的是 true；其余 82 条
 // 只写 supportsImage/Video/Audio/Pdf。也就是说 ZCode 只把**非默认项**写出来，缺键表示「沿用
 // 默认」，不是「未知、更不是不支持」。providerSiteRules 是同一套写法。若照搬严格的 === true，
 // 抽出来的输入模态会丢掉 text（例如只有 supportsImage: true 的规则会得到 `image`），而下游
@@ -105,8 +105,8 @@ const OUTPUT_MODALITY_FIELDS = [['text', 'supportsText']]
 // 收窄整条输入面（实测 `api.z.ai/api/anthropic` + anthropic-messages 这类协议变体条目会把
 // 目录里上千个 id 的输入收窄成 text）。这个口径与 v2 读端完全一致：zcodeprovider 的
 // InputFormatModalities 在 `format == nil` 时返回 nil，只有段存在时才按 implied 读 text。
-// 实测 providerSiteRules 54 条里 23 条整段没有 inputFormat（都是后置的协议变体条目，只带
-// 标志位），modelRules 里 2 条（`.*\[1m\]`、`.*(?:ox-alpha|glm-x-preview-f|x-preview-f-free).*`）。
+// 实测 revision 43 的 providerSiteRules 58 条里 24 条整段没有 inputFormat（16 条只剩标志位、
+// 8 条连 properties 都没有），modelRules 83 条里 0 条（每条家族规则都写了 inputFormat）。
 //
 // **输出侧刻意不对称，必须保持严格 `=== true`**：ZCode 的输出面只有
 // `outputFormat.supportsText` 这一位，它**根本无法表达 audio / image / video / pdf 输出**。

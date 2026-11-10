@@ -18,7 +18,7 @@ func mustRe(t *testing.T, pattern string) *regexp.Regexp {
 }
 
 // TestLookupModelCapabilityCatalog 用实测值锁定「全表顺序扫描 + 逐字段覆盖」的最终结果。
-// 期望值来自对 ZCode 内建 modelRules（revision 31）的逐条仿真，跳过纯兜底 `.*` 后的产物。
+// 期望值来自对 ZCode 内建 modelRules（revision 43）的逐条仿真，跳过纯兜底 `.*` 后的产物。
 func TestLookupModelCapabilityCatalog(t *testing.T) {
 	cases := []struct {
 		id         string
