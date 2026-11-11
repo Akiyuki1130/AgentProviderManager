@@ -6,7 +6,7 @@ import "regexp"
 
 // 由 scripts/sync-model-catalog.mjs 抽取 providerSiteRules，源文件：
 //   C:\AppData\Zcode\resources\config\provider\zcode-builtin.json
-// 源 revision: 43，规则条数: 58
+// 源 revision: 44，规则条数: 58
 //
 // 字段语义：
 //   Model / BaseURL / APIType 三个正则必须同时命中才算命中；APIType 为 nil 表示不限定 apiType。

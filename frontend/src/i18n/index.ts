@@ -919,9 +919,21 @@ const dict: Record<string, Record<UiLang, string>> = {
   },
   'omp.defaultModelPath': { zh: '配置文件', en: 'Config file', ja: '設定ファイル' },
   'omp.defaultModelMissing': {
-    zh: '还没有 config.yml，设置默认模型时会自动创建。',
-    en: 'config.yml does not exist yet; it is created when you set a default model.',
-    ja: 'config.yml はまだありません。既定モデルを設定すると作成されます。',
+    zh: '还没有 config.yml，请先运行一次 omp 生成配置，之后再设置默认模型。',
+    en: 'config.yml does not exist yet; run omp once to create it before setting a default model.',
+    ja: 'config.yml はまだありません。既定モデルを設定する前に omp を一度実行して作成してください。',
+  },
+  // config.yml 存在但 models.yml 里没有可用模型（空文件、或 provider 都没声明受支持的 api）。
+  'omp.defaultModelNoUsable': {
+    zh: 'models.yml 里还没有可用的模型，请先保存一个提供商。',
+    en: 'models.yml has no usable models yet; save a provider first.',
+    ja: 'models.yml に利用可能なモデルがまだありません。まずプロバイダーを保存してください。',
+  },
+  // 当前默认值不在 models.yml 里：只用于下拉选项的后缀，不能与「config.yml 不存在」的整句文案共用。
+  'omp.defaultModelStale': {
+    zh: '不在当前 models.yml 中',
+    en: 'not in the current models.yml',
+    ja: '現在の models.yml にありません',
   },
   'omp.defaultModelNoModels': {
     zh: '还没有 models.yml，保存第一个提供商时会自动创建。',

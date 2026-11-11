@@ -662,9 +662,28 @@ func ompDesiredModel(card ModelCard, old map[string]interface{}, providerWire st
 	return node, nil
 }
 
+// ompNormalizeThinking 归一化节点里已有的 thinking：合法的映射深拷贝返回，
+// 其余（标量、空 map、缺 mode）一律返回 nil 表示应当删键。
+// 这些坏数据来自手工编辑或旧版本写出，omp 的校验必然拒收；不在这里清掉，
+// 整次保存会失败，连「删除 provider / 删除模型」这种自救操作也会被一起拒掉。
+func ompNormalizeThinking(value interface{}) map[string]interface{} {
+	raw := ompMap(value)
+	if raw == nil {
+		return nil
+	}
+	if strings.TrimSpace(stringOr(raw["mode"], "")) == "" {
+		return nil
+	}
+	return deepCopyMap(raw)
+}
+
 // ompApplyCardReasoning 实现计划 §4.6 的写侧档位口径。
 func ompApplyCardReasoning(node map[string]interface{}, card ModelCard, providerWire string) error {
 	levels := ompFilterEfforts(card.Variants)
+	thinking := ompNormalizeThinking(node["thinking"])
+	if thinking == nil {
+		node["thinking"] = nil
+	}
 	if !card.Reasoning || len(levels) == 0 {
 		if card.Reasoning {
 			// 打开了推理但没给出具体档位：只写 reasoning，由 omp 自己推导。
@@ -676,26 +695,24 @@ func ompApplyCardReasoning(node map[string]interface{}, card ModelCard, provider
 		return nil
 	}
 	node["reasoning"] = true
-	// 注意：这里的判空必须看 node 里的原值，不能看 deepCopyMap 的结果——
-	// deepCopyMap(nil) 返回空 map 而不是 nil，直接用它会让「新建的推理模型」
-	// 写出一份没有 mode 的 thinking（omp 校验：mode 不能为空，整次保存失败）。
-	rawThinking := ompMap(node["thinking"])
-	if rawThinking == nil {
-		if providerWire == OMPWireAnthropicMessages {
-			// anthropic 的档位由 omp 推导，P1 不写 thinking（计划 §4.6）。
-			return nil
-		}
-		rawThinking = map[string]interface{}{"mode": "effort"}
+	if providerWire == OMPWireAnthropicMessages {
+		// anthropic 的档位由 omp 推导：P1 只写 reasoning，不写 thinking（计划 §4.6）。
+		// 上面的坏 thinking 清理仍然生效，其余既有内容原样保留。
+		return nil
 	}
-	thinking := deepCopyMap(rawThinking)
-	if strings.TrimSpace(stringOr(thinking["mode"], "")) == "" {
-		// 手工编辑或旧版本写出的 thinking 可能缺 mode：档位语义只有 effort 一种，
-		// 这里补上再写，避免把一份 omp 必然拒收的文档落盘。
-		if providerWire == OMPWireAnthropicMessages {
-			return nil
-		}
-		thinking["mode"] = "effort"
+	if thinking == nil {
+		thinking = map[string]interface{}{"mode": "effort"}
 	}
+	// 计划 §4.6：已有 mode 原样保留。只有 effort 语义才写 efforts/defaultLevel，
+	// 否则会把 levels/minLevel+maxLevel 与 efforts 混成一份自相矛盾的配置。
+	if mode := strings.TrimSpace(stringOr(thinking["mode"], "")); mode != "effort" {
+		node["thinking"] = thinking
+		return nil
+	}
+	// effort 语义只看 efforts/defaultLevel，清掉可能残留在同一节点里的另一套键。
+	delete(thinking, "levels")
+	delete(thinking, "minLevel")
+	delete(thinking, "maxLevel")
 	thinking["efforts"] = levels
 	if def := ompDefaultVariant(levels, strings.TrimSpace(card.DefaultVariant)); def != "" && def != ompOffVariant {
 		thinking["defaultLevel"] = def

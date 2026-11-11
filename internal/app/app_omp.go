@@ -295,22 +295,29 @@ func (a *App) GetOMPModelRoles() map[string]interface{} {
 	resp["needs_migration"] = needsMigration
 	if selErr != nil {
 		return map[string]interface{}{
-			"success":    false,
-			"path":       configPath,
-			"exists":     configExists,
-			"error":      core.ShortText("读取 omp models.yml 失败："+selErr.Error(), 300),
-			"error_code": "READ_FAILED",
+			"success":         false,
+			"path":            configPath,
+			"exists":          configExists,
+			"models_path":     modelsPath,
+			"models_exists":   modelsExists,
+			"needs_migration": needsMigration,
+			"error":           core.ShortText("读取 omp models.yml 失败："+selErr.Error(), 300),
+			"error_code":      "READ_FAILED",
 		}
 	}
 	resp["selectors"] = selectors
 	roles, rerr := ompModelRoles(configPath, configExists)
 	if rerr != nil {
 		return map[string]interface{}{
-			"success":    false,
-			"path":       configPath,
-			"exists":     configExists,
-			"error":      core.ShortText("读取 omp config.yml 失败："+rerr.Error(), 300),
-			"error_code": "READ_FAILED",
+			"success":         false,
+			"path":            configPath,
+			"exists":          configExists,
+			"models_path":     modelsPath,
+			"models_exists":   modelsExists,
+			"needs_migration": needsMigration,
+			"selectors":       selectors,
+			"error":           core.ShortText("读取 omp config.yml 失败："+rerr.Error(), 300),
+			"error_code":      "READ_FAILED",
 		}
 	}
 	resp["roles"] = roles

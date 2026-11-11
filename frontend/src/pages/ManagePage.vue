@@ -1,7 +1,7 @@
 <template>
   <div class="manage-page">
     <!-- PI Agent：只有 models.json 时 APM 一律拒绝读写，必须先跑一次 omp 完成迁移 -->
-    <div v-if="isOmp && needsMigration" class="fluent-card card-pad omp-banner" role="status">
+    <div v-if="isOmp && (needsMigration || !!ompRoles?.needs_migration)" class="fluent-card card-pad omp-banner" role="status">
       <n-icon class="omp-banner-icon" :component="AlertCircleOutline" :size="16" />
       <div class="omp-banner-body">
         <div class="omp-banner-title">{{ t('omp.needsMigrationTitle', lang) }}</div>
@@ -25,7 +25,6 @@
           :loading="ompRoleLoading"
           :placeholder="t('omp.defaultModelPlaceholder', lang)"
           :aria-label="t('omp.defaultModelTitle', lang)"
-          clearable
           size="small"
           style="width: 280px"
           @update:value="onDefaultModelChange"
@@ -34,7 +33,9 @@
         <span class="batch-hint">{{ t('omp.defaultModelHint', lang) }}</span>
       </div>
       <div v-if="ompRolesError" class="omp-roles-error" role="alert">{{ ompRolesError }}</div>
-      <div v-else-if="ompRoles && ompRoles.models_exists === false && !ompRoles.needs_migration" class="omp-roles-hint" role="status">{{ t('omp.defaultModelNoModels', lang) }}</div>
+      <div v-else-if="ompRoles && ompRoles.needs_migration" class="omp-roles-hint" role="status">{{ t('omp.needsMigrationBody', lang) }}</div>
+      <div v-else-if="ompRoles && ompRoles.models_exists === false" class="omp-roles-hint" role="status">{{ t('omp.defaultModelNoModels', lang) }}</div>
+      <div v-else-if="ompRoles && !(ompRoles.selectors && ompRoles.selectors.length)" class="omp-roles-hint" role="status">{{ t('omp.defaultModelNoUsable', lang) }}</div>
       <div v-else-if="ompRoles && ompRoles.exists === false" class="omp-roles-hint" role="status">{{ t('omp.defaultModelMissing', lang) }}</div>
     </div>
 
@@ -597,27 +598,49 @@ async function loadProviders() {
 
 // ---- PI Agent 默认模型（config.yml 的 modelRoles.default） ----
 // 选项由后端扫描 models.yml 生成，前端不自行拼装 selector；当前值不在选项里时仍要显示当前值。
+// 保存、删除、切 Agent 都可能并发触发刷新；只接受最后一次请求的响应，避免旧结果覆盖新状态。
+let ompRolesSeq = 0
 async function loadOmpRoles() {
-  if (!isOmp.value) { ompRoles.value = null; ompRolesError.value = ''; defaultModel.value = ''; return }
+  if (!isOmp.value) {
+    ompRolesSeq++
+    ompRoles.value = null
+    ompRolesError.value = ''
+    defaultModel.value = ''
+    ompRoleLoading.value = false
+    return
+  }
+  const seq = ++ompRolesSeq
   ompRoleLoading.value = true
   ompRolesError.value = ''
   try {
     const res = await api.GetOMPModelRoles()
+    if (seq !== ompRolesSeq) return
+    // 失败时不能留着上一次的 selectors/默认值，否则界面会呈现一份已经不成立的半态。
+    if (!res.success) {
+      ompRoles.value = null
+      defaultModel.value = ''
+      ompRolesError.value = res.error || t('omp.defaultModelLoadFailed', lang.value)
+      return
+    }
     ompRoles.value = res
-    if (!res.success) { ompRolesError.value = res.error || t('omp.defaultModelLoadFailed', lang.value); return }
     defaultModel.value = (res.roles && res.roles['default']) || ''
   } catch (e) {
+    if (seq !== ompRolesSeq) return
+    ompRoles.value = null
+    defaultModel.value = ''
     ompRolesError.value = String(e)
   } finally {
-    ompRoleLoading.value = false
+    if (seq === ompRolesSeq) ompRoleLoading.value = false
   }
 }
 
 const roleSelectOptions = computed(() => {
   const list = ompRoles.value?.selectors || []
-  const opts = list.map((s) => ({ label: s, value: s }))
+  const opts: Array<{ label: string; value: string; disabled?: boolean }> = list.map((s) => ({ label: s, value: s }))
   const cur = defaultModel.value
-  if (cur && !list.includes(cur)) opts.unshift({ label: cur + ' — ' + t('omp.defaultModelMissing', lang.value), value: cur })
+  // 当前值不在 models.yml 里：保留展示（否则下拉看起来像没设置），但标成不可选——
+  // 重新选中它必然被后端以 BAD_SELECTOR 拒绝，清除请用右侧按钮。
+  if (cur && !list.includes(cur)) opts.unshift({ label: cur + ' — ' + t('omp.defaultModelStale', lang.value), value: cur, disabled: true })
   return opts
 })
 
@@ -626,11 +649,17 @@ async function saveDefaultModel(selector: string, okTitle: string): Promise<bool
   ompRoleSaving.value = true
   try {
     const res = await api.SetOMPModelRole('default', selector)
-    if (!res.success) { toast('error', t('omp.defaultModelTitle', lang.value), res.error || ''); return false }
+    if (!res.success) {
+      // 写入失败时把下拉回滚到磁盘上的真实值，不能留下「看起来已改」的假象。
+      defaultModel.value = (ompRoles.value?.roles?.['default']) || ''
+      toast('error', t('omp.defaultModelTitle', lang.value), res.error || '')
+      return false
+    }
     defaultModel.value = (res.roles && res.roles['default']) || ''
     toast('success', okTitle, selector || '')
     return true
   } catch (e) {
+    defaultModel.value = (ompRoles.value?.roles?.['default']) || ''
     toast('error', t('omp.defaultModelTitle', lang.value), String(e))
     return false
   } finally {
@@ -837,14 +866,16 @@ async function saveProvider(auto = false): Promise<boolean> {
       // 先刷新再提示成功，避免用户同时看到成功与失败提示；刷新失败也只报错、不影响保存结果
       try {
         await loadProviders()
-        // 首次保存会创建 models.yml：默认模型卡片的选择器必须跟着刷新，否则新模型选不到。
-        if (isOmp.value) void loadOmpRoles()
         if (auto) await adoptSavedBaseline(written)
         else if (currentId.value) await loadProvider(currentId.value)
         lastSaveError.value = ''
         if (!auto) toast('success', '保存成功', `已保存 ${res['count']} 个模型到提供商 ${res['provider_id']}`)
       } catch (e) {
         if (!auto) toast('error', '加载失败', String(e))
+      } finally {
+        // 首次保存会创建 models.yml：默认模型卡片的选择器必须跟着刷新，否则新模型选不到；
+        // 这一步不能放在上面 try 里，否则 loadProviders 一失败就被短路。
+        if (isOmp.value) void loadOmpRoles()
       }
       return true
     } else {
@@ -901,9 +932,21 @@ async function deleteProvider() {
     return
   }
   const id = currentId.value!
-  const res = await api.DeleteProvider(id) as Record<string, unknown>
-  if (res['success']) { toast('success', '已删除', `提供商「${id}」已删除`); resetEditor(); await loadProviders(); if (isOmp.value) void loadOmpRoles() }
-  else toast('error', '删除失败', res['error'] as string)
+  try {
+    const res = await api.DeleteProvider(id) as Record<string, unknown>
+    if (!res['success']) { toast('error', '删除失败', res['error'] as string); return }
+    toast('success', '已删除', `提供商「${id}」已删除`)
+    resetEditor()
+    try {
+      await loadProviders()
+    } finally {
+      // 删掉最后一个模型后 models.yml 可能整份失效：选择器必须跟着刷新，且不受列表刷新失败影响。
+      if (isOmp.value) void loadOmpRoles()
+    }
+  } catch (e) {
+    // binding reject 与 success:false 都要归一化成用户可见的失败，不能变成 unhandled rejection。
+    toast('error', '删除失败', String(e))
+  }
 }
 
 // 清空编辑区（删除、切换 Agent 后共用），并复位与「已落盘」相关的状态。

@@ -249,6 +249,27 @@ func TestSetOMPModelRoleG18NeedsMigration(t *testing.T) {
 	}
 }
 
+// 无 settings.json 且无 config.yml：必须明确报 NO_CONFIG，且不得替 omp 新建 config.yml。
+// 这条与 G18 一起锁定「config.yml 缺失时写默认模型必然失败」的后端口径——前端文案不能承诺自动创建。
+func TestSetOMPModelRoleNoConfig(t *testing.T) {
+	a := sandboxApp(t)
+	_, dir := ompTestEnv(t)
+	writeText(t, filepath.Join(dir, "models.yml"), ompModelsFixture)
+	configPath := filepath.Join(dir, "config.yml")
+	a.currentAgent = string(core.AgentOMP)
+
+	resp := a.SetOMPModelRole("default", "acme/m1")
+	if ok, _ := resp["success"].(bool); ok {
+		t.Fatalf("config.yml 不存在时不应成功：%v", resp)
+	}
+	if code, _ := resp["error_code"].(string); code != "NO_CONFIG" {
+		t.Fatalf("error_code = %q，期望 NO_CONFIG", code)
+	}
+	if _, err := os.Stat(configPath); !os.IsNotExist(err) {
+		t.Fatal("APM 不得替 omp 新建 config.yml")
+	}
+}
+
 // G7 双保险：config.yml 被错误地存成 provider 目标时必须拒绝。
 func TestSetOMPModelRoleRejectsConfigAsTarget(t *testing.T) {
 	a := sandboxApp(t)

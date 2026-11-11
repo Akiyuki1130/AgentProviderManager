@@ -6,7 +6,7 @@ import "regexp"
 
 // 由 scripts/sync-model-catalog.mjs 抽取，源文件：
 //   C:\AppData\Zcode\resources\config\provider\zcode-builtin.json
-// 源 revision: 43，规则条数: 83
+// 源 revision: 44，规则条数: 83
 // 每条规则的 Context/Output 为 0 表示该规则未给出该字段；Levels 为 nil 表示未给出。
 // 匹配语义是「全表顺序扫描、逐字段覆盖」：后命中规则里出现过的字段覆盖先前的值，未出现的字段保持不变。
 // 文件头故意不写抽取日期，以保证 --check 跨天幂等（见脚本内注释）。
