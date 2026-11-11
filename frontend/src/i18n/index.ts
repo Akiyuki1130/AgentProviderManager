@@ -918,7 +918,16 @@ const dict: Record<string, Record<UiLang, string>> = {
     ja: 'config.yml の modelRoles.default に書き込みます。プロジェクト直下の .omp/config.yml がこのグローバル設定を上書きする場合があります。',
   },
   'omp.defaultModelPath': { zh: '配置文件', en: 'Config file', ja: '設定ファイル' },
-  'omp.defaultModelMissing': { zh: 'config.yml 不存在', en: 'config.yml does not exist', ja: 'config.yml がありません' },
+  'omp.defaultModelMissing': {
+    zh: '还没有 config.yml，设置默认模型时会自动创建。',
+    en: 'config.yml does not exist yet; it is created when you set a default model.',
+    ja: 'config.yml はまだありません。既定モデルを設定すると作成されます。',
+  },
+  'omp.defaultModelNoModels': {
+    zh: '还没有 models.yml，保存第一个提供商时会自动创建。',
+    en: 'models.yml does not exist yet; it is created when you save your first provider.',
+    ja: 'models.yml はまだありません。最初のプロバイダーを保存すると作成されます。',
+  },
   'omp.defaultModelPlaceholder': { zh: '未设置默认模型', en: 'No default model', ja: '既定モデル未設定' },
   'omp.defaultModelClear': { zh: '清除默认模型', en: 'Clear default model', ja: '既定モデルを解除' },
   'omp.defaultModelClearTitle': { zh: '清除默认模型', en: 'Clear default model', ja: '既定モデルを解除' },

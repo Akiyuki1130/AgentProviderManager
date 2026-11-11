@@ -34,7 +34,8 @@
         <span class="batch-hint">{{ t('omp.defaultModelHint', lang) }}</span>
       </div>
       <div v-if="ompRolesError" class="omp-roles-error" role="alert">{{ ompRolesError }}</div>
-      <div v-else-if="ompRoles && ompRoles.exists === false" class="omp-roles-error" role="status">{{ t('omp.defaultModelMissing', lang) }}</div>
+      <div v-else-if="ompRoles && ompRoles.models_exists === false && !ompRoles.needs_migration" class="omp-roles-hint" role="status">{{ t('omp.defaultModelNoModels', lang) }}</div>
+      <div v-else-if="ompRoles && ompRoles.exists === false" class="omp-roles-hint" role="status">{{ t('omp.defaultModelMissing', lang) }}</div>
     </div>
 
     <div class="manage-layout">
@@ -836,6 +837,8 @@ async function saveProvider(auto = false): Promise<boolean> {
       // 先刷新再提示成功，避免用户同时看到成功与失败提示；刷新失败也只报错、不影响保存结果
       try {
         await loadProviders()
+        // 首次保存会创建 models.yml：默认模型卡片的选择器必须跟着刷新，否则新模型选不到。
+        if (isOmp.value) void loadOmpRoles()
         if (auto) await adoptSavedBaseline(written)
         else if (currentId.value) await loadProvider(currentId.value)
         lastSaveError.value = ''
@@ -899,7 +902,7 @@ async function deleteProvider() {
   }
   const id = currentId.value!
   const res = await api.DeleteProvider(id) as Record<string, unknown>
-  if (res['success']) { toast('success', '已删除', `提供商「${id}」已删除`); resetEditor(); await loadProviders() }
+  if (res['success']) { toast('success', '已删除', `提供商「${id}」已删除`); resetEditor(); await loadProviders(); if (isOmp.value) void loadOmpRoles() }
   else toast('error', '删除失败', res['error'] as string)
 }
 
@@ -1508,6 +1511,7 @@ onUnmounted(() => {
 .omp-path { font-size: 10px; color: var(--fluent-text-soft); max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .omp-roles-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .omp-roles-error { font-size: 11px; color: var(--err); }
+.omp-roles-hint { font-size: 11px; color: var(--fluent-text-soft); }
 /* 只读横幅 */
 .omp-readonly-banner { display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px; margin-bottom: 10px; border: 1px solid color-mix(in srgb, var(--warn) 35%, var(--fluent-border)); border-radius: 8px; background: var(--warn-soft); }
 .omp-readonly-body { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 2px; }

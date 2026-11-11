@@ -128,10 +128,18 @@ export async function SetCurrentAgent(agent: string): Promise<Record<string, unk
 // 空 selector 表示删除该角色键；config.yml/config.yaml 都不存在而 settings.json 存在时后端拒绝（G18）。
 export type OMPModelRoles = {
   success?: boolean
+  /** config.yml 路径（默认模型的写入口）。 */
   path?: string
+  /** config.yml 是否已存在。 */
   exists?: boolean
+  /** models.yml / models.json 路径；首次使用前该文件可能还不存在。 */
+  models_path?: string
+  /** 模型文件是否存在；false 表示 omp 还没写过配置，不是错误。 */
+  models_exists?: boolean
   roles?: Record<string, string>
   selectors?: string[]
+  /** 只存在旧版 models.json 时为 true，界面提示先运行一次 omp 完成迁移。 */
+  needs_migration?: boolean
   error?: string
   error_code?: string
 }

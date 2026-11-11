@@ -79,6 +79,37 @@ func TestGetOMPModelRoles(t *testing.T) {
 	if nm, _ := resp["needs_migration"].(bool); nm {
 		t.Fatal("已有 models.yml 时不应提示迁移")
 	}
+	if me, _ := resp["models_exists"].(bool); !me {
+		t.Fatal("models.yml 存在时 models_exists 应为 true")
+	}
+}
+
+// 全新环境（USERPROFILE 下连 .omp/agent 都没有）不是错误：默认模型卡片应显示空
+// 选择器，由前端提示「保存第一个提供商时会创建 models.yml」。之前这里直接把
+// os.ReadFile 的 ENOENT 当成 READ_FAILED 抛给界面，首启用户会看到红色报错。
+func TestGetOMPModelRolesNoModelsFile(t *testing.T) {
+	a := sandboxApp(t)
+	_, dir := ompTestEnv(t)
+	a.currentAgent = string(core.AgentOMP)
+
+	resp := a.GetOMPModelRoles()
+	requireSuccess(t, resp, "GetOMPModelRoles(no models file)")
+	if got, _ := resp["models_path"].(string); got != filepath.Join(dir, "models.yml") {
+		t.Fatalf("models_path = %q，期望 models.yml", got)
+	}
+	if me, _ := resp["models_exists"].(bool); me {
+		t.Fatal("模型文件不存在时 models_exists 应为 false")
+	}
+	if nm, _ := resp["needs_migration"].(bool); nm {
+		t.Fatal("两个文件都不存在时不应提示迁移")
+	}
+	selectors, _ := resp["selectors"].([]string)
+	if len(selectors) != 0 {
+		t.Fatalf("没有 models.yml 时不应给出选择器：%#v", selectors)
+	}
+	if roles, _ := resp["roles"].(map[string]string); len(roles) != 0 {
+		t.Fatalf("没有 config.yml 时 roles 应为空：%#v", roles)
+	}
 }
 
 func TestGetOMPModelRolesNeedsMigration(t *testing.T) {
@@ -473,6 +504,41 @@ func TestSaveProviderOMPWritesModels(t *testing.T) {
 	}
 	if got := readText(t, target); !strings.Contains(got, "acme-updated.example.invalid") {
 		t.Fatalf("models.yml 未写入新 BaseURL：%s", got)
+	}
+}
+
+// 首启场景：~/.omp/agent 还不存在时，保存第一个提供商必须能创建 models.yml，
+// 之后默认模型卡片立刻能读到新的选择器（对应界面上的「还没有 models.yml」空状态）。
+func TestSaveProviderOMPCreatesModelsFile(t *testing.T) {
+	a := sandboxApp(t)
+	_, dir := ompTestEnv(t)
+	a.currentAgent = string(core.AgentOMP)
+	// NewApp 在构造时按当时的 USERPROFILE 解析过默认目标；测试中途换了沙箱目录，
+	// 这里把目标对齐到 ompTestEnv 的目录（真实使用中两者本来就是同一条路径）。
+	a.targetConfigPath = filepath.Join(dir, "models.yml")
+
+	resp := a.SaveProvider("fresh", map[string]interface{}{
+		"id":               "fresh",
+		"name":             "Fresh",
+		"kind":             "openai-compatible",
+		"base_url":         "https://fresh.example.invalid/v1",
+		"api_key":          "sk-placeholder",
+		"api_key_required": true,
+		"cards":            []core.ModelCard{{ModelID: "m9"}},
+	})
+	requireSuccess(t, resp, "SaveProvider(omp, first provider)")
+	if _, err := os.Stat(filepath.Join(dir, "models.yml")); err != nil {
+		t.Fatalf("保存后应创建 models.yml：%v", err)
+	}
+
+	roles := a.GetOMPModelRoles()
+	requireSuccess(t, roles, "GetOMPModelRoles(after first save)")
+	selectors, _ := roles["selectors"].([]string)
+	if !reflect.DeepEqual(selectors, []string{"fresh/m9"}) {
+		t.Fatalf("selectors = %#v，期望 fresh/m9", selectors)
+	}
+	if me, _ := roles["models_exists"].(bool); !me {
+		t.Fatal("保存后 models_exists 应为 true")
 	}
 }
 

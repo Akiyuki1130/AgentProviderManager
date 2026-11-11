@@ -1,5 +1,11 @@
 # Changelog
 
+## 未发布
+
+### 修复
+
+- **PI Agent 首次使用（本机还没有 `~/.omp/agent/models.yml`）时默认模型卡片直接报错。** `GetOMPModelRoles` 把 `os.ReadFile` 的 ENOENT 当成 `READ_FAILED` 抛给界面，首启用户看到的是「读取 omp models.yml 失败：open …\models.yml: The system cannot find the file specified」。现在文件不存在按空状态处理：`success` 为真、`selectors` 为空，并新增 `models_path` / `models_exists`，界面改为中性提示「还没有 models.yml，保存第一个提供商时会自动创建」；config.yml 缺失也从红色报错改成中性说明。保存或删除提供商后默认模型选项即时刷新（此前要切换 Agent 或重进页面才能看到新模型）。
+
 ## 2.2.0 — 2026-11-10
 
 ### 新增

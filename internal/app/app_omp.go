@@ -226,13 +226,19 @@ func providerRequestOptions(edit *core.ProviderEdit, agent string) map[string]in
 
 // ompModelSelectors 扫描 models.yml 生成默认模型卡片的选择器列表。
 // 只有显式声明模型、且 api 属于三种主流协议的 provider 才会出现在里面（由 core 决定）。
+//
+// 文件不存在不是错误：omp 首次运行前 ~/.omp/agent 里可能一个模型文件都没有，
+// 此时应显示「还没有 models.yml」的空状态，保存第一个提供商时再由写盘路径创建。
 func ompModelSelectors() ([]string, bool, error) {
 	modelsPath, needsMigration := ompModelsPath()
 	if needsMigration || strings.TrimSpace(modelsPath) == "" {
-		return []string{}, true, nil
+		return []string{}, needsMigration, nil
 	}
 	models, err := loadOMPModelsFile(modelsPath)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return []string{}, false, nil
+		}
 		return []string{}, needsMigration, err
 	}
 	return core.OMPSelectors(models), needsMigration, nil
@@ -269,12 +275,21 @@ func (a *App) GetOMPModelRoles() map[string]interface{} {
 		}
 	}
 	configPath, configExists := ompConfigPath()
+	modelsPath, _ := ompModelsPath()
+	modelsExists := false
+	if strings.TrimSpace(modelsPath) != "" {
+		if _, statErr := os.Stat(modelsPath); statErr == nil {
+			modelsExists = true
+		}
+	}
 	resp := map[string]interface{}{
-		"success":   true,
-		"path":      configPath,
-		"exists":    configExists,
-		"roles":     map[string]string{},
-		"selectors": []string{},
+		"success":       true,
+		"path":          configPath,
+		"exists":        configExists,
+		"models_path":   modelsPath,
+		"models_exists": modelsExists,
+		"roles":         map[string]string{},
+		"selectors":     []string{},
 	}
 	selectors, needsMigration, selErr := ompModelSelectors()
 	resp["needs_migration"] = needsMigration
