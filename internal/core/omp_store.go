@@ -676,13 +676,25 @@ func ompApplyCardReasoning(node map[string]interface{}, card ModelCard, provider
 		return nil
 	}
 	node["reasoning"] = true
-	thinking := deepCopyMap(ompMap(node["thinking"]))
-	if thinking == nil {
+	// 注意：这里的判空必须看 node 里的原值，不能看 deepCopyMap 的结果——
+	// deepCopyMap(nil) 返回空 map 而不是 nil，直接用它会让「新建的推理模型」
+	// 写出一份没有 mode 的 thinking（omp 校验：mode 不能为空，整次保存失败）。
+	rawThinking := ompMap(node["thinking"])
+	if rawThinking == nil {
 		if providerWire == OMPWireAnthropicMessages {
 			// anthropic 的档位由 omp 推导，P1 不写 thinking（计划 §4.6）。
 			return nil
 		}
-		thinking = map[string]interface{}{"mode": "effort"}
+		rawThinking = map[string]interface{}{"mode": "effort"}
+	}
+	thinking := deepCopyMap(rawThinking)
+	if strings.TrimSpace(stringOr(thinking["mode"], "")) == "" {
+		// 手工编辑或旧版本写出的 thinking 可能缺 mode：档位语义只有 effort 一种，
+		// 这里补上再写，避免把一份 omp 必然拒收的文档落盘。
+		if providerWire == OMPWireAnthropicMessages {
+			return nil
+		}
+		thinking["mode"] = "effort"
 	}
 	thinking["efforts"] = levels
 	if def := ompDefaultVariant(levels, strings.TrimSpace(card.DefaultVariant)); def != "" && def != ompOffVariant {
