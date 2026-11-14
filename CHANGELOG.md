@@ -1,9 +1,10 @@
 # Changelog
 
-## 未发布
+## 2.2.1 — 2026-11-14
 
 ### 修复
 
+- **手动添加模型时「模型 ID」不再预填 `gpt-4o-mini`。** 导入页与管理页的添加弹窗都把输入框留空（占位提示仍保留示例），避免用户误按回车把示例值当成真实模型名存进配置。
 - **PI Agent 默认模型与推理档位的一轮审查修复。** `thinking` 的归一化提到协议分支之前：anthropic 模型上的无效 `thinking`（空映射、缺 `mode`、标量）不再原样留到校验阶段把整份 `models.yml` 打成无效（那会让保存、删除、迁移全部失败），`mode: levels` 的既有档位语义也不再被改写；`GetOMPModelRoles` 的失败响应补齐 `models_path` / `models_exists` / `needs_migration`。界面侧：config.yml 缺失文案改为与后端一致的「先运行一次 omp 生成配置」（此前承诺会自动创建，实际后端是硬拒绝），陈旧默认模型选项改成「不在当前 models.yml 中」并禁选，空 `models.yml` 与迁移态各有提示，默认模型下拉去掉清除按钮（本地清空不会落盘），`loadOmpRoles` 加请求序号避免旧响应覆盖新状态、失败时清掉半态，保存/删除后的刷新也不再被 `loadProviders` 失败短路。
 - **PI Agent 新建推理模型（含跨 Agent 迁移）写出缺 `mode` 的 `thinking`，整次保存被 omp 校验打回。** `ompApplyCardReasoning` 用 `deepCopyMap` 的返回值判空，而 `deepCopyMap(nil)` 返回空 map 而不是 `nil`，于是新建模型跳过了 `mode: effort` 初始化，只写出 `thinking: {efforts: …}`；omp 侧报「`thinking.mode` 不能为空」，界面看到的是「写入目标配置失败：providers.xxx.models[0].thinking.mode 不能为空」。现在按节点里的原值判空，并对已有但缺 `mode` 的 `thinking`（手工编辑或旧版本写坏）补写 `mode: effort` 再落盘。
 - **PI Agent 首次使用（本机还没有 `~/.omp/agent/models.yml`）时默认模型卡片直接报错。** `GetOMPModelRoles` 把 `os.ReadFile` 的 ENOENT 当成 `READ_FAILED` 抛给界面，首启用户看到的是「读取 omp models.yml 失败：open …\models.yml: The system cannot find the file specified」。现在文件不存在按空状态处理：`success` 为真、`selectors` 为空，并新增 `models_path` / `models_exists`，界面改为中性提示「还没有 models.yml，保存第一个提供商时会自动创建」；config.yml 缺失也从红色报错改成中性说明。保存或删除提供商后默认模型选项即时刷新（此前要切换 Agent 或重进页面才能看到新模型）。

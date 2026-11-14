@@ -968,7 +968,6 @@ async function onAddModel() {
     title: '手动添加模型',
     label: '模型 ID（即发送给 API 的模型名）',
     placeholder: '例如：gpt-4o-mini',
-    initialValue: 'gpt-4o-mini',
     confirmText: '添加',
     validate: (v) => (editForm.value.cards.some((c) => c.model_id === v.trim()) ? '该模型 ID 已存在' : null),
   })

@@ -400,7 +400,7 @@ function clearManualRefresh() {
   sessionStorage.removeItem('zcode-pm:manualRefresh')
 }
 async function onAddModel() {
-  const mid = ((await uiPrompt({ title: t('import.addModel', lang.value), label: t('import.modelIdLabel', lang.value), placeholder: t('import.modelIdPlaceholder', lang.value), initialValue: 'gpt-4o-mini' })) || '').trim()
+  const mid = ((await uiPrompt({ title: t('import.addModel', lang.value), label: t('import.modelIdLabel', lang.value), placeholder: t('import.modelIdPlaceholder', lang.value) })) || '').trim()
   if (!mid) return
   if (cards.value.some((c) => c.model_id === mid)) { toast('info', t('import.notice', lang.value), t('import.modelExists', lang.value).replace('{id}', mid)); return }
   // 与拉取路径同源：带 Base URL 与协议类型走 BuildSingleCardForSite，手工输入的 ID
